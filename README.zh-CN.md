@@ -71,6 +71,16 @@ npm install          # 安装依赖 + Electron 二进制
 npm run dev          # 启动应用（热重载，electron-vite）
 ```
 
+如果 macOS 把开发环境的 `Electron.app` 误报为恶意软件/已损坏，或把它移到废纸篓，运行：
+
+```bash
+npm run fix:mac
+npm run dev
+```
+
+修复命令只处理当前项目的 `node_modules/electron/dist/Electron.app`，不会关闭 Gatekeeper，
+也不会修改系统级安全设置。
+
 > ⚠️ **请勿运行 `npm audit fix --force`。** 报告的漏洞全部位于构建/打包工具链，不会打包进最终
 > 应用，`--force` 只会把工具链升级到互不兼容的大版本、破坏环境。详见
 > [`docs/使用说明.md`](./docs/使用说明.md) 的 FAQ。

@@ -76,6 +76,17 @@ npm install          # installs deps + Electron binary
 npm run dev          # launch the app with hot reload (electron-vite)
 ```
 
+If macOS reports the development `Electron.app` as malware/damaged or moves it
+to the Trash, repair the project-local runtime and start again:
+
+```bash
+npm run fix:mac
+npm run dev
+```
+
+The repair command only touches `node_modules/electron/dist/Electron.app`; it
+does not disable Gatekeeper or change system-wide security settings.
+
 > ⚠️ **Do NOT run `npm audit fix --force`.** The reported advisories are all in build-time
 > tooling and are never bundled into the app; `--force` upgrades the toolchain to mutually
 > incompatible major versions and breaks the environment. See the FAQ in

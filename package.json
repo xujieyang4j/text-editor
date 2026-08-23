@@ -8,6 +8,7 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
+    "fix:mac": "node scripts/fix-macos-electron.mjs",
     "start": "electron-vite preview",
     "build": "electron-vite build",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
