@@ -1,5 +1,7 @@
 # Lumen Editor
 
+> **English** | [中文](./README.zh-CN.md)
+
 A cross-platform desktop text editor built with **Electron + TypeScript + CodeMirror 6**.
 Runs on **Linux, Windows, and macOS** from a single codebase.
 
@@ -53,9 +55,16 @@ the renderer calls `window.editor.*`, which invokes handlers in `src/main/files.
 ## Development
 
 ```bash
+git clone git@github.com:xujieyang4j/text-editor.git
+cd text-editor
 npm install          # installs deps + Electron binary
 npm run dev          # launch the app with hot reload (electron-vite)
 ```
+
+> ⚠️ **Do NOT run `npm audit fix --force`.** The reported advisories are all in build-time
+> tooling and are never bundled into the app; `--force` upgrades the toolchain to mutually
+> incompatible major versions and breaks the environment. See the FAQ in
+> [`docs/使用说明.md`](./docs/使用说明.md).
 
 > A graphical desktop session is required to run the app. On a headless Linux box you need a
 > virtual display, e.g. `xvfb-run -a npm run dev`, plus GPU/Mesa libraries (`libgbm1`,
