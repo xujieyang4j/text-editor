@@ -192,8 +192,10 @@ body {
   overflow: auto;
 }
 
-/* Floating "open in browser" affordance, top-right of the editor. */
-.browser-btn {
+/* Floating action buttons (top-right of the editor): markdown preview and
+   open-in-browser. Only one is ever visible at a time (a file is either .md or
+   .html), so they share the same slot. */
+.editor-fab {
   position: absolute;
   top: 10px;
   right: 18px;
@@ -214,14 +216,20 @@ body {
   transition: opacity 0.12s ease, color 0.12s ease, transform 0.12s ease;
 }
 
-.browser-btn:hover {
+.editor-fab:hover {
   opacity: 1;
   color: var(--accent-text);
   background: var(--accent);
   transform: translateY(-1px);
 }
 
-.browser-btn.hidden {
+.editor-fab.active {
+  opacity: 1;
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.editor-fab.hidden {
   display: none;
 }
 

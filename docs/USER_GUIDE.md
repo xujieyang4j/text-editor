@@ -200,10 +200,12 @@ input, code folding (fold gutter in the margin), bracket matching, and autocompl
 
 ### Markdown preview & Open in browser
 
-- **Markdown preview** — with a `.md` file active, press `Ctrl/Cmd+Shift+V` (or run *View:
-  Toggle Markdown Preview*) to open a rendered preview beside the editor. It updates live as you
-  type. The rendered HTML is sanitized with DOMPurify, so embedded `<script>` / `onerror=` /
-  `javascript:` payloads in the Markdown can't execute — safe for opening untrusted files.
+- **Markdown preview** — with a Markdown file active, press `Ctrl/Cmd+Shift+V` (or click the
+  floating preview icon at the editor's top-right, or run *View: Toggle Markdown Preview*) to
+  open a rendered preview beside the editor. It updates live as you type. A file counts as
+  Markdown if its name ends in `.md`/`.markdown`/etc. **or** you set the syntax to Markdown from
+  the status bar — so an unsaved buffer can be previewed too. The rendered HTML is sanitized
+  with DOMPurify, so embedded `<script>` / `onerror=` / `javascript:` payloads can't execute.
 - **Open HTML in browser** — with an `.html`/`.htm` file active, a **floating browser icon**
   appears at the top-right of the editor. Click it (or run *View: Open in Browser*) to open the
   file in your system's default browser. Unsaved changes are written first (you'll be prompted
@@ -506,10 +508,11 @@ npm run dist:linux   # Linux：AppImage + .deb
 
 ### Markdown 预览 & 在浏览器打开
 
-- **Markdown 预览** —— 当前是 `.md` 文件时，按 `Ctrl/Cmd+Shift+V`（或执行 *View: Toggle
-  Markdown Preview*）在编辑器旁打开渲染预览，随输入实时更新。渲染出的 HTML 经 DOMPurify 消毒，
-  Markdown 里内嵌的 `<script>` / `onerror=` / `javascript:` 等负载无法执行——打开不受信任的文件
-  也安全。
+- **Markdown 预览** —— 当前是 Markdown 文件时，按 `Ctrl/Cmd+Shift+V`（或点击编辑器右上角的悬浮
+  预览图标，或执行 *View: Toggle Markdown Preview*）在编辑器旁打开渲染预览，随输入实时更新。判定为
+  Markdown 的条件是：文件名以 `.md`/`.markdown` 等结尾，**或**你在状态栏把语法设为 Markdown——因此
+  未保存的缓冲区也能预览。渲染出的 HTML 经 DOMPurify 消毒，内嵌的 `<script>` / `onerror=` /
+  `javascript:` 等负载无法执行。
 - **HTML 在浏览器打开** —— 当前是 `.html`/`.htm` 文件时，编辑器右上角会出现**悬浮浏览器图标**。
   点击它（或执行 *View: Open in Browser*）用系统默认浏览器打开该文件。未保存的改动会先写盘（未命名
   文件会提示选择保存路径），因为浏览器是从磁盘加载文件的。

@@ -53,6 +53,7 @@ class App {
   private host = document.getElementById('editor-host')!
   private editorArea = document.getElementById('editor-area')!
   private browserBtn = document.getElementById('browser-btn') as HTMLButtonElement
+  private previewBtn = document.getElementById('preview-btn') as HTMLButtonElement
 
   constructor() {
     this.tree = new FileTree(document.getElementById('file-tree')!, (path) =>
@@ -64,6 +65,8 @@ class App {
 
     // Floating browser icon (shown only for HTML docs) → open in browser.
     this.browserBtn.addEventListener('click', () => this.run('open-in-browser'))
+    // Floating preview icon (shown only for markdown docs) → toggle preview.
+    this.previewBtn.addEventListener('click', () => this.run('toggle-preview'))
 
     this.bindMenu()
     this.bindShortcuts()
@@ -306,7 +309,7 @@ class App {
     doc.content = this.editor.getContent()
     this.renderTabs()
     // Live-update the markdown preview if it's showing this doc.
-    if (this.preview.isVisible && isMarkdown(doc.name)) {
+    if (this.preview.isVisible && this.isMarkdownDoc(doc)) {
       this.preview.update(doc.content)
     }
     // Persist drafts as the user types (debounced) so an unexpected quit or
@@ -315,15 +318,26 @@ class App {
   }
 
   /**
+   * A document counts as Markdown if its file name is a markdown extension OR
+   * the user manually set the syntax to Markdown. This lets an unsaved/renamed
+   * buffer be previewed once its language is chosen from the status bar.
+   */
+  private isMarkdownDoc(doc: Doc): boolean {
+    return isMarkdown(doc.name) || doc.language === 'Markdown'
+  }
+
+  /**
    * Show/hide the per-document chrome that depends on the active file type:
-   * the floating "open in browser" icon (HTML) and the markdown preview pane.
+   * the floating "open in browser" icon (HTML), the markdown preview icon, and
+   * the markdown preview pane.
    */
   private syncEditorChrome(): void {
     const doc = this.active
-    const html = !!doc && isHtml(doc.name)
-    const md = !!doc && isMarkdown(doc.name)
+    const html = !!doc && (isHtml(doc.name) || doc.language === 'HTML')
+    const md = !!doc && this.isMarkdownDoc(doc)
 
     this.browserBtn.classList.toggle('hidden', !html)
+    this.previewBtn.classList.toggle('hidden', !md)
 
     // If the preview is open but the new doc isn't markdown, hide it; if it is
     // markdown, refresh it with the new content.
@@ -331,20 +345,26 @@ class App {
       if (md) this.preview.update(doc!.content)
       else this.preview.hide()
     }
+    this.previewBtn.classList.toggle('active', this.preview.isVisible && md)
   }
 
   /** Toggle the markdown preview for the active document. */
   private togglePreview(): void {
     const doc = this.active
     if (!doc) return
-    if (!isMarkdown(doc.name)) {
+    if (!this.isMarkdownDoc(doc)) {
       // Only meaningful for markdown; give a hint rather than showing blank.
       if (!this.preview.isVisible) {
-        window.alert('Markdown preview is only available for .md files.')
+        window.alert(
+          'Markdown preview is only available for Markdown files.\n' +
+            'Save the file with a .md extension, or set the syntax to Markdown ' +
+            '(click the language in the status bar).'
+        )
         return
       }
     }
-    this.preview.toggle(doc.content)
+    const visible = this.preview.toggle(doc.content)
+    this.previewBtn.classList.toggle('active', visible)
   }
 
   /** Open the active document in the system browser (saving first if needed). */
@@ -588,6 +608,9 @@ class App {
         doc.language = await this.editor.setLanguageByName(name)
         doc.languageLocked = name !== 'Plain Text'
         this.updateStatus()
+        // Picking "Markdown" (or leaving it) should immediately reveal/hide the
+        // preview icon, so refresh the type-dependent editor chrome.
+        this.syncEditorChrome()
       }
     })
   }
