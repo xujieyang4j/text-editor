@@ -87,7 +87,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 └───────────┴─────────────────────────────────┘
 ```
 
-- **Sidebar** — the workspace file tree. Toggle with `Ctrl/Cmd+B`.
+- **Sidebar** — the workspace file tree. It starts collapsed; toggle with `Ctrl/Cmd+B`.
 - **Tab bar** — one tab per open document. A `●` marks unsaved changes; `×` closes the tab.
 - **Editor** — the CodeMirror text area, with an optional minimap on the right.
 - **Status bar** — cursor position, selection length, and a **clickable language** field
@@ -208,8 +208,10 @@ input, code folding (fold gutter in the margin), bracket matching, and autocompl
   with DOMPurify, so embedded `<script>` / `onerror=` / `javascript:` payloads can't execute.
 - **Open HTML in browser** — with an `.html`/`.htm` file active, a **floating browser icon**
   appears at the top-right of the editor. Click it (or run *View: Open in Browser*) to open the
-  file in your system's default browser. Unsaved changes are written first (you'll be prompted
-  for a path if the file is untitled), since the browser loads the file from disk.
+  current content in your system's default browser. A clean saved file opens at its real path;
+  unsaved changes and untitled HTML open from a temporary snapshot, without a Save dialog and
+  without modifying the source file. For a dirty saved file, the snapshot keeps relative CSS,
+  JavaScript and image paths rooted at the source file's directory.
 
 ### Toggles
 
@@ -411,7 +413,7 @@ npm run dist:linux   # Linux：AppImage + .deb
 └───────────┴─────────────────────────────────┘
 ```
 
-- **侧边栏** —— 工作区文件树，`Ctrl/Cmd+B` 显隐。
+- **侧边栏** —— 工作区文件树，默认收起，按 `Ctrl/Cmd+B` 显隐。
 - **标签栏** —— 每个打开的文档一个标签；`●` 表示未保存，`×` 关闭。
 - **编辑区** —— CodeMirror 文本区，右侧可选 Minimap。
 - **状态栏** —— 光标位置、选中长度，以及**可点击的语言字段**（点它可改语法）。
@@ -518,8 +520,9 @@ npm run dist:linux   # Linux：AppImage + .deb
   未保存的缓冲区也能预览。渲染出的 HTML 经 DOMPurify 消毒，内嵌的 `<script>` / `onerror=` /
   `javascript:` 等负载无法执行。
 - **HTML 在浏览器打开** —— 当前是 `.html`/`.htm` 文件时，编辑器右上角会出现**悬浮浏览器图标**。
-  点击它（或执行 *View: Open in Browser*）用系统默认浏览器打开该文件。未保存的改动会先写盘（未命名
-  文件会提示选择保存路径），因为浏览器是从磁盘加载文件的。
+  点击它（或执行 *View: Open in Browser*）用系统默认浏览器打开当前内容。已保存且没有改动时直接打开
+  原文件；有未保存改动或未命名的 HTML 会使用临时快照，不弹保存窗口，也不修改源文件。对于有路径的
+  脏文件，快照会保持 CSS、JavaScript、图片等相对路径以原文件目录为基准。
 
 ### 开关项
 

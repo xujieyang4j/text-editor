@@ -367,18 +367,21 @@ class App {
     this.previewBtn.classList.toggle('active', visible)
   }
 
-  /** Open the active document in the system browser (saving first if needed). */
+  /**
+   * Open the active document in the system browser. Untitled and dirty buffers
+   * are sent as temporary snapshots, so previewing never opens a Save dialog
+   * and never modifies the user's source file.
+   */
   private async openInBrowser(): Promise<void> {
     const doc = this.active
     if (!doc) return
-    if (!doc.path || isDirty(doc)) {
-      // Must exist on disk (and be current) for the browser to load it.
-      await this.save(false)
-    }
-    const fresh = this.active
-    if (!fresh?.path) return // user cancelled the save dialog
-    const ok = await window.editor.openInBrowser(fresh.path)
-    if (!ok) window.alert('Save the file first to open it in a browser.')
+
+    doc.content = this.editor.getContent()
+    await window.editor.openInBrowser({
+      path: doc.path,
+      content: doc.content,
+      dirty: isDirty(doc)
+    })
   }
 
   /** Open a file chosen from the native dialog. */

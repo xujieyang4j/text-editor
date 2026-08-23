@@ -10,9 +10,27 @@ import {
   type SaveResult,
   type OpenedFolder,
   type DirEntry,
+  type BrowserOpenRequest,
   type Settings,
   type Session
 } from '../shared/ipc.js'
+
+/** Add a base URL so relative assets still work in a temporary HTML snapshot. */
+function withPreviewBase(html: string, sourcePath: string | null): string {
+  if (!sourcePath || /<base(?:\s|>)/i.test(html)) return html
+
+  const dirUrl = pathToFileURL(`${path.dirname(sourcePath)}${path.sep}`).href
+  const safeUrl = dirUrl.replaceAll('&', '&amp;').replaceAll('\"', '&quot;')
+  const base = `<base href=\"${safeUrl}\">`
+
+  if (/<head(?:\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}\n${base}`)
+  }
+  if (/<html(?:\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<html(?:\s[^>]*)?>/i, (tag) => `${tag}\n<head>${base}</head>`)
+  }
+  return `<head>${base}</head>\n${html}`
+}
 
 /** Directory entries that are noisy and rarely useful in a file tree. */
 const IGNORED_ENTRIES = new Set([
@@ -155,11 +173,29 @@ export function registerFileHandlers(): void {
     return listFilesRecursive(root)
   })
 
-  // Open a saved file in the system default browser (e.g. HTML preview).
-  // Returns false when the path is missing/unsaved so the renderer can prompt.
-  ipcMain.handle(IPC.openInBrowser, async (_event, filePath: string | null): Promise<boolean> => {
-    if (!filePath) return false
-    await shell.openExternal(pathToFileURL(filePath).href)
+  // Open an HTML document in the default browser. Clean, saved files open at
+  // their real path. Untitled/dirty buffers use a temporary snapshot, so
+  // previewing never forces a Save dialog or modifies the source file.
+  ipcMain.handle(IPC.openInBrowser, async (_event, request: BrowserOpenRequest): Promise<boolean> => {
+    if (request.path && !request.dirty) {
+      await shell.openExternal(pathToFileURL(request.path).href)
+      return true
+    }
+
+    const previewDir = path.join(app.getPath('temp'), 'lumen-editor-preview')
+    const previewPath = path.join(previewDir, `preview-${process.pid}.html`)
+    await fs.mkdir(previewDir, { recursive: true })
+    await fs.writeFile(
+      previewPath,
+      withPreviewBase(request.content, request.path),
+      'utf-8'
+    )
+
+    // Cache-bust so a browser tab opened for an earlier snapshot reloads the
+    // latest contents even though the temp file name is stable.
+    const previewUrl = pathToFileURL(previewPath)
+    previewUrl.searchParams.set('t', Date.now().toString())
+    await shell.openExternal(previewUrl.href)
     return true
   })
 

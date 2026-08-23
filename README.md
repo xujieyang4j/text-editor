@@ -12,7 +12,8 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **Markdown live preview** — side-by-side rendered preview (`Ctrl/Cmd+Shift+V`), sanitized
   with DOMPurify, updates as you type
 - **Open HTML in browser** — a floating browser icon appears for `.html` files; click it (or
-  *View: Open in Browser*) to open the saved file in your system browser
+  *View: Open in Browser*) to preview in your system browser; unsaved/untitled content opens
+  from a temporary snapshot without prompting you to save
 - **Command Palette** (`Ctrl/Cmd+Shift+P`) — fuzzy-search every command, Sublime-style
 - **Goto Anything** (`Ctrl/Cmd+P`) — fuzzy file finder with `:line` and `@symbol` sub-modes
 - **Goto Symbol** (`Ctrl/Cmd+R`) and **Goto Line** (`Ctrl/Cmd+G`)
@@ -21,7 +22,8 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   the status-bar language button or **Set Syntax…**
 - **Minimap** and **indentation guides**, **vertical rulers**, trailing-whitespace highlight
 - **Line operations**: move/copy/delete line, duplicate, toggle comment (`Ctrl/Cmd+/`), sort lines
-- **File tree sidebar** — open a folder as a workspace, lazily expand directories
+- **File tree sidebar** — starts collapsed (`Ctrl/Cmd+B` to show), opens a folder as a
+  workspace, and lazily expands directories
 - **Find & replace**, **undo/redo**, **multi-cursor**, rectangular selection, bracket matching
 - **Autocompletion**, code folding, active-line highlight, selection-match highlight
 - **Hot exit / session restore** — reopens your tabs + folder on next launch and **preserves

@@ -38,6 +38,16 @@ export interface SaveResult {
   path?: string
 }
 
+/** Request to preview an HTML buffer in the system browser. */
+export interface BrowserOpenRequest {
+  /** Absolute source path, or null for an untitled buffer. */
+  path: string | null
+  /** Current editor text, including unsaved changes. */
+  content: string
+  /** True when content differs from the version on disk. */
+  dirty: boolean
+}
+
 /** A single entry inside a directory listing. */
 export interface DirEntry {
   name: string

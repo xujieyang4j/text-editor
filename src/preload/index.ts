@@ -5,6 +5,7 @@ import {
   type SaveResult,
   type OpenedFolder,
   type DirEntry,
+  type BrowserOpenRequest,
   type Settings,
   type Session,
   type MenuEvent
@@ -31,9 +32,9 @@ const api = {
   /** Recursively list every file under a root (for Goto Anything). */
   listFiles: (root: string): Promise<string[]> => ipcRenderer.invoke(IPC.dirListFiles, root),
 
-  /** Open a saved file in the system default browser. False if unsaved. */
-  openInBrowser: (filePath: string | null): Promise<boolean> =>
-    ipcRenderer.invoke(IPC.openInBrowser, filePath),
+  /** Preview current HTML in the system browser without forcing a save. */
+  openInBrowser: (request: BrowserOpenRequest): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.openInBrowser, request),
 
   /** Save content to a path; passing null triggers a save-as dialog. */
   save: (filePath: string | null, content: string): Promise<SaveResult> =>
