@@ -181,6 +181,7 @@ body {
   overflow: hidden;
   position: relative;
   min-width: 0;
+  isolation: isolate;
 }
 
 .editor-host .cm-editor {
@@ -199,7 +200,7 @@ body {
   position: absolute;
   top: 10px;
   right: 18px;
-  z-index: 20;
+  z-index: 100;
   width: 32px;
   height: 32px;
   display: flex;
@@ -211,9 +212,43 @@ body {
   background: var(--bg-elevated);
   color: var(--text-dim);
   cursor: pointer;
-  opacity: 0.55;
+  opacity: 0.92;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   transition: opacity 0.12s ease, color 0.12s ease, transform 0.12s ease;
+}
+
+/* The minimap occupies up to 120px on the right. Keep the action visible just
+   to its left instead of letting it blend into the minimap canvas. */
+.editor-host.has-minimap .editor-fab {
+  right: 136px;
+}
+
+.editor-fab::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: 38px;
+  right: 0;
+  width: max-content;
+  max-width: 220px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-bar);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.editor-fab:hover::after,
+.editor-fab:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .editor-fab:hover {

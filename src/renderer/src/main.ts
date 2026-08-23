@@ -191,6 +191,7 @@ class App {
       case 'toggle-minimap':
         this.settings.showMinimap = this.editor.toggleMinimap()
         this.persistSettings()
+        this.syncEditorChrome()
         break
       case 'command-palette':
         this.openCommandPalette()
@@ -336,6 +337,7 @@ class App {
     const html = !!doc && (isHtml(doc.name) || doc.language === 'HTML')
     const md = !!doc && this.isMarkdownDoc(doc)
 
+    this.host.classList.toggle('has-minimap', this.settings.showMinimap)
     this.browserBtn.classList.toggle('hidden', !html)
     this.previewBtn.classList.toggle('hidden', !md)
 
