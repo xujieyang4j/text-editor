@@ -291,15 +291,27 @@ class App {
     if (!doc) return
     this.activeId = id
     this.editor.setDocument(doc.content)
-    if (!doc.languageLocked) {
-      doc.language = await this.editor.setLanguageForFile(doc.name)
-    } else {
-      await this.editor.setLanguageByName(doc.language)
+
+    // File-name based actions (HTML browser / Markdown preview) must appear
+    // immediately. Language support is lazy-loaded and must not delay or block
+    // the toolbar when a language chunk is slow or fails to load.
+    this.syncEditorChrome()
+
+    try {
+      if (!doc.languageLocked) {
+        doc.language = await this.editor.setLanguageForFile(doc.name)
+      } else {
+        await this.editor.setLanguageByName(doc.language)
+      }
+    } catch (error) {
+      console.error(`Failed to load syntax support for ${doc.name}:`, error)
     }
     this.renderTabs()
     this.updateStatus()
     this.editor.focus()
     this.scheduleSessionSave()
+    // Run again because a manually-selected HTML/Markdown language can reveal
+    // an action even when the filename has no recognised extension.
     this.syncEditorChrome()
   }
 
@@ -327,6 +339,12 @@ class App {
     return isMarkdown(doc.name) || doc.language === 'Markdown'
   }
 
+  /** Keep native and CSS visibility state in lockstep. */
+  private setActionVisible(button: HTMLButtonElement, visible: boolean): void {
+    button.hidden = !visible
+    button.classList.toggle('hidden', !visible)
+  }
+
   /**
    * Show/hide the per-document chrome that depends on the active file type:
    * the floating "open in browser" icon (HTML), the markdown preview icon, and
@@ -338,8 +356,8 @@ class App {
     const md = !!doc && this.isMarkdownDoc(doc)
 
     this.host.classList.toggle('has-minimap', this.settings.showMinimap)
-    this.browserBtn.classList.toggle('hidden', !html)
-    this.previewBtn.classList.toggle('hidden', !md)
+    this.setActionVisible(this.browserBtn, html)
+    this.setActionVisible(this.previewBtn, md)
 
     // If the preview is open but the new doc isn't markdown, hide it; if it is
     // markdown, refresh it with the new content.

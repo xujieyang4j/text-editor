@@ -264,7 +264,8 @@ body {
   background: var(--accent);
 }
 
-.editor-fab.hidden {
+.editor-fab.hidden,
+.editor-fab[hidden] {
   display: none;
 }
 
