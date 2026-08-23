@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lumen Editor</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="sidebar">
+        <div class="sidebar-header">
+          <span id="workspace-name">No Folder Opened</span>
+        </div>
+        <div id="file-tree" class="file-tree"></div>
+      </div>
+      <div id="main">
+        <div id="tab-bar" class="tab-bar"></div>
+        <div id="editor-host" class="editor-host"></div>
+        <div id="status-bar" class="status-bar">
+          <span id="status-position" class="status-item">Ln 1, Col 1</span>
+          <span class="status-spacer"></span>
+          <span id="status-selection" class="status-item"></span>
+          <span id="status-eol" class="status-item">LF</span>
+          <span id="status-encoding" class="status-item">UTF-8</span>
+          <span id="status-language" class="status-item">Plain Text</span>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
