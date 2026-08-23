@@ -1,6 +1,7 @@
-import { dialog, ipcMain, BrowserWindow, app } from 'electron'
+import { dialog, ipcMain, BrowserWindow, app, shell } from 'electron'
 import { promises as fs } from 'fs'
 import path from 'path'
+import { pathToFileURL } from 'url'
 import {
   IPC,
   DEFAULT_SETTINGS,
@@ -152,6 +153,14 @@ export function registerFileHandlers(): void {
   // Recursively list files under a root — used by Goto Anything.
   ipcMain.handle(IPC.dirListFiles, async (_event, root: string): Promise<string[]> => {
     return listFilesRecursive(root)
+  })
+
+  // Open a saved file in the system default browser (e.g. HTML preview).
+  // Returns false when the path is missing/unsaved so the renderer can prompt.
+  ipcMain.handle(IPC.openInBrowser, async (_event, filePath: string | null): Promise<boolean> => {
+    if (!filePath) return false
+    await shell.openExternal(pathToFileURL(filePath).href)
+    return true
   })
 
   // Save content to a known path. If no path is provided, fall through to save-as.

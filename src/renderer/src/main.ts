@@ -1,6 +1,7 @@
 import { Editor, allLanguageNames } from './editor.js'
 import { FileTree } from './fileTree.js'
 import { Palette, type PaletteItem } from './palette.js'
+import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS } from './commands.js'
 import { extractSymbols } from './symbols.js'
 import { fuzzyFilter } from './fuzzy.js'
@@ -32,6 +33,7 @@ class App {
   private editor!: Editor
   private tree: FileTree
   private palette = new Palette()
+  private preview!: MarkdownPreview
   private docs: Doc[] = []
   private activeId: string | null = null
   private settings: Settings = { ...DEFAULT_SETTINGS }
@@ -49,6 +51,8 @@ class App {
   private statusLanguage = document.getElementById('status-language')!
   private sidebar = document.getElementById('sidebar')!
   private host = document.getElementById('editor-host')!
+  private editorArea = document.getElementById('editor-area')!
+  private browserBtn = document.getElementById('browser-btn') as HTMLButtonElement
 
   constructor() {
     this.tree = new FileTree(document.getElementById('file-tree')!, (path) =>
@@ -57,6 +61,9 @@ class App {
     // The status-bar language field opens the syntax picker (like Sublime).
     this.statusLanguage.addEventListener('click', () => this.pickLanguage())
     this.statusLanguage.classList.add('clickable')
+
+    // Floating browser icon (shown only for HTML docs) → open in browser.
+    this.browserBtn.addEventListener('click', () => this.run('open-in-browser'))
 
     this.bindMenu()
     this.bindShortcuts()
@@ -75,6 +82,8 @@ class App {
       },
       this.settings
     )
+
+    this.preview = new MarkdownPreview(this.editorArea)
 
     await this.restoreSession()
   }
@@ -228,6 +237,12 @@ class App {
         this.settings.fontSize = this.editor.setFontSize(DEFAULT_SETTINGS.fontSize)
         this.persistSettings()
         break
+      case 'toggle-preview':
+        this.togglePreview()
+        break
+      case 'open-in-browser':
+        void this.openInBrowser()
+        break
       case 'persist-session':
         this.persistSessionNow()
         break
@@ -281,6 +296,7 @@ class App {
     this.updateStatus()
     this.editor.focus()
     this.scheduleSessionSave()
+    this.syncEditorChrome()
   }
 
   /** Update the active doc's cached content and refresh the dirty indicator. */
@@ -289,9 +305,60 @@ class App {
     if (!doc) return
     doc.content = this.editor.getContent()
     this.renderTabs()
+    // Live-update the markdown preview if it's showing this doc.
+    if (this.preview.isVisible && isMarkdown(doc.name)) {
+      this.preview.update(doc.content)
+    }
     // Persist drafts as the user types (debounced) so an unexpected quit or
     // machine crash never loses unsaved work — this is the core of hot exit.
     this.scheduleSessionSave()
+  }
+
+  /**
+   * Show/hide the per-document chrome that depends on the active file type:
+   * the floating "open in browser" icon (HTML) and the markdown preview pane.
+   */
+  private syncEditorChrome(): void {
+    const doc = this.active
+    const html = !!doc && isHtml(doc.name)
+    const md = !!doc && isMarkdown(doc.name)
+
+    this.browserBtn.classList.toggle('hidden', !html)
+
+    // If the preview is open but the new doc isn't markdown, hide it; if it is
+    // markdown, refresh it with the new content.
+    if (this.preview.isVisible) {
+      if (md) this.preview.update(doc!.content)
+      else this.preview.hide()
+    }
+  }
+
+  /** Toggle the markdown preview for the active document. */
+  private togglePreview(): void {
+    const doc = this.active
+    if (!doc) return
+    if (!isMarkdown(doc.name)) {
+      // Only meaningful for markdown; give a hint rather than showing blank.
+      if (!this.preview.isVisible) {
+        window.alert('Markdown preview is only available for .md files.')
+        return
+      }
+    }
+    this.preview.toggle(doc.content)
+  }
+
+  /** Open the active document in the system browser (saving first if needed). */
+  private async openInBrowser(): Promise<void> {
+    const doc = this.active
+    if (!doc) return
+    if (!doc.path || isDirty(doc)) {
+      // Must exist on disk (and be current) for the browser to load it.
+      await this.save(false)
+    }
+    const fresh = this.active
+    if (!fresh?.path) return // user cancelled the save dialog
+    const ok = await window.editor.openInBrowser(fresh.path)
+    if (!ok) window.alert('Save the file first to open it in a browser.')
   }
 
   /** Open a file chosen from the native dialog. */
@@ -367,6 +434,7 @@ class App {
     this.renderTabs()
     this.updateStatus()
     this.scheduleSessionSave()
+    this.syncEditorChrome()
   }
 
   /** Close the active tab, guarding against losing unsaved changes. */

@@ -43,6 +43,8 @@ export const COMMANDS: Command[] = [
   { id: 'sort-lines', title: 'Edit: Sort Lines' },
 
   { id: 'select-language', title: 'View: Set Syntax…' },
+  { id: 'toggle-preview', title: 'View: Toggle Markdown Preview', hint: 'Ctrl/Cmd+Shift+V' },
+  { id: 'open-in-browser', title: 'View: Open in Browser' },
   { id: 'toggle-sidebar', title: 'View: Toggle Sidebar', hint: 'Ctrl/Cmd+B' },
   { id: 'toggle-minimap', title: 'View: Toggle Minimap' },
   { id: 'toggle-word-wrap', title: 'View: Toggle Word Wrap', hint: 'Alt+Z' },

@@ -13,6 +13,7 @@ export const IPC = {
   fileSaveAs: 'file:save-as',
   dirRead: 'dir:read',
   dirListFiles: 'dir:list-files',
+  openInBrowser: 'shell:open-in-browser',
   settingsRead: 'settings:read',
   settingsWrite: 'settings:write',
   sessionRead: 'session:read',
@@ -159,4 +160,6 @@ export type MenuEvent =
   | 'font-zoom-in'
   | 'font-zoom-out'
   | 'font-zoom-reset'
+  | 'toggle-preview'
+  | 'open-in-browser'
   | 'persist-session'

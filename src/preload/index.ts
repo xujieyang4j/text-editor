@@ -31,6 +31,10 @@ const api = {
   /** Recursively list every file under a root (for Goto Anything). */
   listFiles: (root: string): Promise<string[]> => ipcRenderer.invoke(IPC.dirListFiles, root),
 
+  /** Open a saved file in the system default browser. False if unsaved. */
+  openInBrowser: (filePath: string | null): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.openInBrowser, filePath),
+
   /** Save content to a path; passing null triggers a save-as dialog. */
   save: (filePath: string | null, content: string): Promise<SaveResult> =>
     ipcRenderer.invoke(IPC.fileSave, filePath, content),

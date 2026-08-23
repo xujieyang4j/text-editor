@@ -9,6 +9,9 @@
 
 ## 功能特性
 
+- **Markdown 实时预览**：并排渲染预览（`Ctrl/Cmd+Shift+V`），经 DOMPurify 消毒，随输入实时更新
+- **HTML 在浏览器打开**：`.html` 文件会出现悬浮浏览器图标，点击它（或 *View: Open in Browser*）
+  用系统浏览器打开已保存的文件
 - **命令面板**（`Ctrl/Cmd+Shift+P`）：模糊搜索全部命令，Sublime 风格
 - **Goto Anything**（`Ctrl/Cmd+P`）：模糊查找工作区文件，支持 `:行号` 与 `@符号` 子模式
 - **跳转到符号**（`Ctrl/Cmd+R`）与**跳转到行**（`Ctrl/Cmd+G`）
@@ -115,6 +118,7 @@ npm run dist:linux   # Linux：AppImage + .deb
 | 下一个 / 上一个标签 | `Ctrl/Cmd+Alt+→/←`         |
 | 查找                | `Ctrl/Cmd+F`                |
 | 替换                | `Ctrl/Cmd+H`                |
+| 切换 Markdown 预览  | `Ctrl/Cmd+Shift+V`          |
 | 切换注释            | `Ctrl/Cmd+/`                |
 | 上/下移动行         | `Alt+↑/↓`                  |
 | 上/下复制行         | `Shift+Alt+↑/↓`            |

@@ -198,6 +198,19 @@ input, code folding (fold gutter in the margin), bracket matching, and autocompl
 
 ## 8. View: Minimap, Guides, Rulers, Zoom, Theme
 
+### Markdown preview & Open in browser
+
+- **Markdown preview** — with a `.md` file active, press `Ctrl/Cmd+Shift+V` (or run *View:
+  Toggle Markdown Preview*) to open a rendered preview beside the editor. It updates live as you
+  type. The rendered HTML is sanitized with DOMPurify, so embedded `<script>` / `onerror=` /
+  `javascript:` payloads in the Markdown can't execute — safe for opening untrusted files.
+- **Open HTML in browser** — with an `.html`/`.htm` file active, a **floating browser icon**
+  appears at the top-right of the editor. Click it (or run *View: Open in Browser*) to open the
+  file in your system's default browser. Unsaved changes are written first (you'll be prompted
+  for a path if the file is untitled), since the browser loads the file from disk.
+
+### Toggles
+
 | Feature | How | Setting key |
 | --- | --- | --- |
 | Minimap (right-edge overview) | *View: Toggle Minimap* | `showMinimap` |
@@ -277,6 +290,7 @@ settings as `session.json` (see [Settings Reference](#en-settings)).
 | Tab N / Next / Prev | `Ctrl+1..9` / `Ctrl+Alt+←/→` | `Cmd+1..9` / `Cmd+Alt+←/→` |
 | Find / Replace | `Ctrl+F` / `Ctrl+H` | `Cmd+F` / `Cmd+H` |
 | Find next | `F3` | `F3` |
+| Toggle Markdown preview | `Ctrl+Shift+V` | `Cmd+Shift+V` |
 | Add next occurrence | `Ctrl+D` | `Cmd+D` |
 | Add cursor above / below | `Ctrl+Alt+↑/↓` | `Cmd+Alt+↑/↓` |
 | Select all occurrences | `Ctrl+Shift+L` | `Cmd+Shift+L` |
@@ -490,6 +504,18 @@ npm run dist:linux   # Linux：AppImage + .deb
 
 ## 8. 视图：Minimap / 参考线 / 标尺 / 缩放 / 主题
 
+### Markdown 预览 & 在浏览器打开
+
+- **Markdown 预览** —— 当前是 `.md` 文件时，按 `Ctrl/Cmd+Shift+V`（或执行 *View: Toggle
+  Markdown Preview*）在编辑器旁打开渲染预览，随输入实时更新。渲染出的 HTML 经 DOMPurify 消毒，
+  Markdown 里内嵌的 `<script>` / `onerror=` / `javascript:` 等负载无法执行——打开不受信任的文件
+  也安全。
+- **HTML 在浏览器打开** —— 当前是 `.html`/`.htm` 文件时，编辑器右上角会出现**悬浮浏览器图标**。
+  点击它（或执行 *View: Open in Browser*）用系统默认浏览器打开该文件。未保存的改动会先写盘（未命名
+  文件会提示选择保存路径），因为浏览器是从磁盘加载文件的。
+
+### 开关项
+
 | 功能 | 方式 | 设置项 |
 | --- | --- | --- |
 | Minimap（右侧缩略图） | *View: Toggle Minimap* | `showMinimap` |
@@ -565,6 +591,7 @@ Sublime 的 “hot exit”）。
 | 第 N / 下 / 上标签 | `Ctrl+1..9` / `Ctrl+Alt+←→` | `Cmd+1..9` / `Cmd+Alt+←→` |
 | 查找 / 替换 | `Ctrl+F` / `Ctrl+H` | `Cmd+F` / `Cmd+H` |
 | 查找下一个 | `F3` | `F3` |
+| 切换 Markdown 预览 | `Ctrl+Shift+V` | `Cmd+Shift+V` |
 | 加入下一个匹配 | `Ctrl+D` | `Cmd+D` |
 | 上方 / 下方加光标 | `Ctrl+Alt+↑/↓` | `Cmd+Alt+↑/↓` |
 | 选中所有匹配 | `Ctrl+Shift+L` | `Cmd+Shift+L` |

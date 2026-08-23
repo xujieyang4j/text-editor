@@ -9,6 +9,10 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 
 ## Features
 
+- **Markdown live preview** — side-by-side rendered preview (`Ctrl/Cmd+Shift+V`), sanitized
+  with DOMPurify, updates as you type
+- **Open HTML in browser** — a floating browser icon appears for `.html` files; click it (or
+  *View: Open in Browser*) to open the saved file in your system browser
 - **Command Palette** (`Ctrl/Cmd+Shift+P`) — fuzzy-search every command, Sublime-style
 - **Goto Anything** (`Ctrl/Cmd+P`) — fuzzy file finder with `:line` and `@symbol` sub-modes
 - **Goto Symbol** (`Ctrl/Cmd+R`) and **Goto Line** (`Ctrl/Cmd+G`)
@@ -122,6 +126,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Next / prev tab     | `Ctrl/Cmd+Alt+Right/Left`   |
 | Find                | `Ctrl/Cmd+F`                |
 | Replace             | `Ctrl/Cmd+H`                |
+| Toggle Markdown preview | `Ctrl/Cmd+Shift+V`      |
 | Toggle comment      | `Ctrl/Cmd+/`                |
 | Move line up/down   | `Alt+Up/Down`               |
 | Copy line up/down   | `Shift+Alt+Up/Down`         |
