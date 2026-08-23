@@ -49,6 +49,39 @@ export function createFromFile(path: string, content: string): Doc {
   }
 }
 
+/**
+ * Reconstruct a document when restoring a session (hot exit).
+ *
+ * @param diskContent  the text currently on disk (empty string for untitled)
+ * @param sf           the persisted buffer metadata + optional draft
+ *
+ * If a `draft` was saved, it becomes the live content while `savedContent`
+ * tracks the on-disk text — so the buffer restores as *dirty* with the user's
+ * unsaved edits intact. Without a draft the buffer restores clean.
+ */
+export function createFromSession(
+  diskContent: string,
+  sf: {
+    path: string | null
+    name: string
+    language: string
+    languageLocked: boolean
+    draft?: string
+  }
+): Doc {
+  counter += 1
+  const hasDraft = sf.draft !== undefined
+  return {
+    id: `doc-${counter}`,
+    path: sf.path,
+    name: sf.name,
+    content: hasDraft ? sf.draft! : diskContent,
+    savedContent: diskContent,
+    language: sf.language,
+    languageLocked: sf.languageLocked
+  }
+}
+
 /** True when the document has unsaved changes. */
 export function isDirty(doc: Doc): boolean {
   return doc.content !== doc.savedContent

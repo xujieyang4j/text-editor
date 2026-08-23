@@ -4,13 +4,21 @@ import { Palette, type PaletteItem } from './palette.js'
 import { COMMANDS } from './commands.js'
 import { extractSymbols } from './symbols.js'
 import { fuzzyFilter } from './fuzzy.js'
-import { createUntitled, createFromFile, isDirty, baseName, type Doc } from './documents.js'
+import {
+  createUntitled,
+  createFromFile,
+  createFromSession,
+  isDirty,
+  baseName,
+  type Doc
+} from './documents.js'
 import type { EditorState } from '@codemirror/state'
 import {
   DEFAULT_SETTINGS,
   type MenuEvent,
   type Settings,
-  type Session
+  type Session,
+  type SessionFile
 } from '../../shared/ipc.js'
 import './styles.css'
 
@@ -77,19 +85,27 @@ class App {
     try {
       session = await window.editor.readSession()
     } catch {
-      session = { openFiles: [], activePath: null, folder: null }
+      session = { openFiles: [], activeIndex: 0, folder: null }
     }
 
     if (session.folder) {
       await this.openFolderPath(session.folder)
     }
 
-    for (const f of session.openFiles) {
+    for (const sf of session.openFiles) {
       try {
-        const file = await window.editor.openPath(f.path)
-        this.docs.push(createFromFile(file.path, file.content))
+        // For file-backed buffers, re-read the current on-disk text so a clean
+        // buffer reflects external edits; the draft (if any) is layered on top.
+        // Untitled buffers have no path, so disk content is empty.
+        const diskContent = sf.path ? (await window.editor.openPath(sf.path)).content : ''
+        this.docs.push(createFromSession(diskContent, sf))
       } catch {
-        // File was moved/deleted since last run — skip it.
+        // File was moved/deleted since last run. If we still hold the user's
+        // unsaved draft, keep it as an untitled-style buffer rather than lose
+        // their work; otherwise skip.
+        if (sf.draft !== undefined) {
+          this.docs.push(createFromSession('', { ...sf }))
+        }
       }
     }
 
@@ -97,9 +113,11 @@ class App {
       this.docs.push(createUntitled())
     }
 
-    const target =
-      this.docs.find((d) => d.path === session.activePath) ?? this.docs[0]
-    await this.activate(target.id)
+    const idx =
+      session.activeIndex >= 0 && session.activeIndex < this.docs.length
+        ? session.activeIndex
+        : 0
+    await this.activate(this.docs[idx].id)
   }
 
   /** Subscribe to menu / accelerator events from the main process. */
@@ -271,6 +289,9 @@ class App {
     if (!doc) return
     doc.content = this.editor.getContent()
     this.renderTabs()
+    // Persist drafts as the user types (debounced) so an unexpected quit or
+    // machine crash never loses unsaved work — this is the core of hot exit.
+    this.scheduleSessionSave()
   }
 
   /** Open a file chosen from the native dialog. */
@@ -516,13 +537,40 @@ class App {
     this.saveSessionTimer = window.setTimeout(() => this.persistSessionNow(), 400)
   }
 
-  /** Write the current session (open files + active + folder) immediately. */
+  /**
+   * Write the current session immediately. Persists a draft for every buffer
+   * that is dirty or untitled-with-content, so unsaved work survives an
+   * unexpected quit (hot exit). Clean file-backed buffers store only their
+   * path and are re-read from disk on restore.
+   */
   private persistSessionNow(): void {
-    const session: Session = {
-      openFiles: this.docs.filter((d) => d.path).map((d) => ({ path: d.path! })),
-      activePath: this.active?.path ?? null,
-      folder: this.folder
-    }
+    // Keep the active buffer's cached content current before snapshotting.
+    const current = this.active
+    if (current) current.content = this.editor.getContent()
+
+    const openFiles: SessionFile[] = this.docs
+      // Drop pristine untitled buffers (no path, no content) — nothing to keep.
+      .filter((d) => d.path !== null || d.content.length > 0)
+      .map((d) => {
+        const keepDraft = isDirty(d) || (d.path === null && d.content.length > 0)
+        return {
+          path: d.path,
+          name: d.name,
+          language: d.language,
+          languageLocked: d.languageLocked,
+          ...(keepDraft ? { draft: d.content } : {})
+        }
+      })
+
+    const activeDoc = this.active
+    const activeIndex = activeDoc
+      ? Math.max(
+          0,
+          openFiles.findIndex((f) => f.path === activeDoc.path && f.name === activeDoc.name)
+        )
+      : 0
+
+    const session: Session = { openFiles, activeIndex, folder: this.folder }
     void window.editor.writeSession(session)
   }
 

@@ -240,11 +240,25 @@ same folder stores your open tabs + folder and is managed automatically.
 
 <a id="en-session"></a>
 
-## 10. Session Restore
+## 10. Session Restore & Hot Exit
 
-On a clean quit, Lumen records the open files, the active tab and the workspace folder. Next
-launch it reopens them. Files deleted or moved in the meantime are skipped silently. Use
-`Ctrl/Cmd+Shift+T` to reopen the most recently closed tab.
+Lumen remembers your workspace **and your unsaved work** across restarts — including after an
+unexpected quit or a machine crash (Sublime's "hot exit").
+
+- **Open tabs, active tab and workspace folder** are restored on the next launch.
+- **Unsaved edits are preserved.** Modified buffers are restored *dirty* (marked with `●`) with
+  your exact unsaved text — nothing is silently written to disk.
+- **Untitled buffers with content are preserved too**, as untitled drafts.
+- The session is written **as you type** (debounced), not just on quit, so a hard crash or power
+  loss can't lose more than the last fraction of a second.
+- The session file is written **atomically** (temp file + rename), so an interrupted write can
+  never corrupt your recovery data.
+- On restore, clean file-backed buffers are re-read from disk (so external changes show up),
+  while dirty buffers keep your draft layered on top. If a file was deleted/moved but you had
+  unsaved edits, the draft is kept as an untitled buffer rather than lost.
+
+Use `Ctrl/Cmd+Shift+T` to reopen the most recently closed tab. Session data lives next to your
+settings as `session.json` (see [Settings Reference](#en-settings)).
 
 <a id="en-keys"></a>
 
@@ -517,10 +531,22 @@ npm run dist:linux   # Linux：AppImage + .deb
 
 <a id="zh-session"></a>
 
-## 10. 会话恢复
+## 10. 会话恢复与热退出（Hot Exit）
 
-正常退出时，Lumen 记录打开的文件、活动标签与工作区文件夹；下次启动自动重开。期间被删除或移动的
-文件会被静默跳过。`Ctrl/Cmd+Shift+T` 可重开最近关闭的标签。
+Lumen 会跨重启记住你的工作区**以及未保存的编辑**——即使是意外退出或机器崩溃之后（对齐
+Sublime 的 “hot exit”）。
+
+- **打开的标签、活动标签、工作区文件夹**会在下次启动时恢复。
+- **未保存的编辑会被保留。** 有改动的缓冲区恢复为**脏状态**（标签上带 `●`），内容是你当时未保存
+  的原样文本——不会偷偷写回磁盘。
+- **有内容的未命名缓冲区同样保留**，恢复为未命名草稿。
+- 会话**在你打字时就（防抖）写盘**，不只在退出时写，所以硬崩溃/断电最多只丢失最后零点几秒。
+- 会话文件采用**原子写入**（临时文件 + 重命名），写入被中断也不会损坏你的恢复数据。
+- 恢复时，未改动的文件会重新从磁盘读取（因此外部改动会体现出来），有改动的则把你的草稿叠加在
+  磁盘内容之上；若文件被删除/移动但你有未保存编辑，草稿会作为未命名缓冲区保留，而非丢弃。
+
+`Ctrl/Cmd+Shift+T` 可重开最近关闭的标签。会话数据以 `session.json` 存于设置同目录
+（见[设置项参考](#zh-settings)）。
 
 <a id="zh-keys"></a>
 

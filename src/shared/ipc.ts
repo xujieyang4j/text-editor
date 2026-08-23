@@ -83,17 +83,35 @@ export const DEFAULT_SETTINGS: Settings = {
   rulers: []
 }
 
-/** A previously-open document remembered across restarts. */
+/**
+ * A single buffer remembered across restarts. This is what powers "hot exit":
+ * we persist the actual draft text of modified buffers (including untitled
+ * ones), not just their paths, so an unexpected quit never loses work.
+ */
 export interface SessionFile {
-  path: string
+  /** Absolute path on disk, or null for an untitled buffer. */
+  path: string | null
+  /** Display name (meaningful for untitled buffers, e.g. "Untitled-2"). */
+  name: string
+  /** Language display name last shown for this buffer. */
+  language: string
+  /** True when the user manually locked the language (skip auto-detect). */
+  languageLocked: boolean
+  /**
+   * The unsaved draft text. Present ONLY when the buffer had unsaved changes
+   * (or is an untitled buffer with content). Clean file-backed buffers omit
+   * this and are simply re-read from disk on restore, keeping session.json
+   * small in the common case.
+   */
+  draft?: string
 }
 
 /** Editor state persisted across restarts (open tabs + workspace). */
 export interface Session {
-  /** Absolute paths of files that were open, in tab order. */
+  /** Open buffers, in tab order. */
   openFiles: SessionFile[]
-  /** Path of the tab that was active, if any. */
-  activePath: string | null
+  /** Index (into openFiles) of the tab that was active. */
+  activeIndex: number
   /** Root of the workspace folder that was open, if any. */
   folder: string | null
 }
@@ -101,7 +119,7 @@ export interface Session {
 /** Empty session used on first launch. */
 export const EMPTY_SESSION: Session = {
   openFiles: [],
-  activePath: null,
+  activeIndex: 0,
   folder: null
 }
 

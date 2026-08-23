@@ -20,7 +20,8 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **File tree sidebar** — open a folder as a workspace, lazily expand directories
 - **Find & replace**, **undo/redo**, **multi-cursor**, rectangular selection, bracket matching
 - **Autocompletion**, code folding, active-line highlight, selection-match highlight
-- **Session restore** — reopens your tabs + folder on next launch; **Reopen Closed Tab**
+- **Hot exit / session restore** — reopens your tabs + folder on next launch and **preserves
+  unsaved edits** (even untitled buffers) across an unexpected quit; **Reopen Closed Tab**
   (`Ctrl/Cmd+Shift+T`)
 - **Persistent settings** (JSON in userData): font size, tab size, theme, wrap, minimap, rulers
 - **Font zoom** (`Ctrl/Cmd+=` / `-` / `0`), dark/light theme, word-wrap, collapsible sidebar

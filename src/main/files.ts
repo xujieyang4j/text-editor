@@ -97,10 +97,18 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
   }
 }
 
-/** Serialise + write a JSON file, creating the directory if needed. */
+/**
+ * Serialise + write a JSON file atomically.
+ *
+ * Writes to a temp file then renames over the target, so a crash or power loss
+ * mid-write can never leave a truncated/corrupt file — important because this
+ * backs hot-exit session recovery. `rename` is atomic on the same filesystem.
+ */
 async function writeJson(file: string, data: unknown): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf-8')
+  const tmp = `${file}.${process.pid}.tmp`
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8')
+  await fs.rename(tmp, file)
 }
 
 /**
