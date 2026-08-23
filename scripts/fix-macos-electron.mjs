@@ -46,6 +46,23 @@ function run(command, args, options = {}) {
   }
 }
 
+/** Return stdout for a successful read-only command. */
+function capture(command, args) {
+  const result = spawnSync(command, args, {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    shell: false
+  })
+
+  if (result.error) {
+    fail(`${command} could not be started: ${result.error.message}`)
+  }
+  if (result.status !== 0) {
+    fail(`${command} exited with status ${result.status ?? 'unknown'}`)
+  }
+  return result.stdout ?? ''
+}
+
 if (process.platform !== 'darwin') {
   log(`Skipped: this command is only needed on macOS (current platform: ${process.platform}).`)
   process.exit(0)
@@ -76,11 +93,15 @@ if (!existsSync(electronApp)) {
   )
 }
 
-// Clear extended attributes only inside this project-local app bundle. `-c`
-// is idempotent, unlike deleting a single absent attribute, and covers the
-// nested quarantine metadata macOS may attach. Do not use
-// `spctl --master-disable` or otherwise weaken Gatekeeper globally.
-run('/usr/bin/xattr', ['-cr', electronApp])
+// Remove only the quarantine metadata, including attributes attached to nested
+// files in the bundle. Check first so a clean bundle remains an idempotent
+// success. Do not use `spctl --master-disable` or weaken Gatekeeper globally.
+const attributes = capture('/usr/bin/xattr', ['-lr', electronApp])
+if (attributes.includes('com.apple.quarantine')) {
+  run('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', electronApp])
+} else {
+  log('No quarantine attribute found; continuing with signature repair.')
+}
 
 // Ad-hoc sign the local development runtime. This is intentionally not a
 // distribution signature; release builds should use Developer ID + notarization.
