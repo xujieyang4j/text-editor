@@ -1,4 +1,4 @@
-import { EditorState, Compartment, type Extension } from '@codemirror/state'
+import { EditorState, Compartment, EditorSelection, type Extension } from '@codemirror/state'
 import {
   EditorView,
   keymap,
@@ -16,10 +16,17 @@ import {
   defaultKeymap,
   history,
   historyKeymap,
-  indentWithTab
+  indentWithTab,
+  moveLineUp,
+  moveLineDown,
+  copyLineUp,
+  copyLineDown,
+  deleteLine,
+  toggleComment
 } from '@codemirror/commands'
 import {
   indentOnInput,
+  indentUnit,
   bracketMatching,
   foldGutter,
   foldKeymap,
@@ -42,6 +49,11 @@ import {
   closeBracketsKeymap
 } from '@codemirror/autocomplete'
 import { oneDark } from '@codemirror/theme-one-dark'
+import { showMinimap } from '@replit/codemirror-minimap'
+import { indentationMarkers } from '@replit/codemirror-indentation-markers'
+import { rulers } from './extensions/rulers.js'
+import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
+import type { Settings } from '../../shared/ipc.js'
 
 /** Callbacks the editor emits so the shell can update tabs/status bar. */
 export interface EditorCallbacks {
@@ -49,10 +61,35 @@ export interface EditorCallbacks {
   onCursorChange: (state: EditorState) => void
 }
 
-/** Compartments allow us to reconfigure parts of the editor without a full reset. */
+/** Compartments allow reconfiguring parts of the editor without a full reset. */
 const languageConf = new Compartment()
 const themeConf = new Compartment()
 const wrapConf = new Compartment()
+const tabConf = new Compartment()
+const minimapConf = new Compartment()
+const indentGuideConf = new Compartment()
+const trailingWsConf = new Compartment()
+const rulerConf = new Compartment()
+const fontThemeConf = new Compartment()
+
+/** Minimap mounted into a container we create on the right edge of the editor. */
+function minimapExtension(): Extension {
+  return showMinimap.compute([], () => ({
+    create: () => {
+      const dom = document.createElement('div')
+      return { dom }
+    },
+    displayText: 'blocks',
+    showOverlay: 'always'
+  }))
+}
+
+/** Build a theme that only sets the editor font size (px). */
+function fontTheme(fontSize: number): Extension {
+  return EditorView.theme({
+    '&': { fontSize: `${fontSize}px` }
+  })
+}
 
 /** Base set of extensions shared by every document. */
 function baseExtensions(callbacks: EditorCallbacks): Extension {
@@ -92,16 +129,17 @@ function baseExtensions(callbacks: EditorCallbacks): Extension {
 
 /**
  * A thin wrapper around a CodeMirror {@link EditorView} that manages the
- * document swap, language, theme and word-wrap for a single editor pane.
+ * document swap plus every reconfigurable feature (language, theme, wrap,
+ * tab size, minimap, indent guides, rulers, font size) for a single pane.
  */
 export class Editor {
   readonly view: EditorView
   private callbacks: EditorCallbacks
-  private dark = true
-  private wrap = false
+  private settings: Settings
 
-  constructor(parent: HTMLElement, callbacks: EditorCallbacks) {
+  constructor(parent: HTMLElement, callbacks: EditorCallbacks, settings: Settings) {
     this.callbacks = callbacks
+    this.settings = settings
     this.view = new EditorView({
       parent,
       state: this.makeState('')
@@ -110,13 +148,21 @@ export class Editor {
 
   /** Build a fresh EditorState for the given document text. */
   private makeState(doc: string): EditorState {
+    const s = this.settings
+    const indent = s.insertSpaces ? ' '.repeat(s.tabSize) : '\t'
     return EditorState.create({
       doc,
       extensions: [
         baseExtensions(this.callbacks),
         languageConf.of([]),
-        themeConf.of(this.dark ? oneDark : []),
-        wrapConf.of(this.wrap ? EditorView.lineWrapping : [])
+        themeConf.of(s.theme === 'dark' ? oneDark : []),
+        wrapConf.of(s.wordWrap ? EditorView.lineWrapping : []),
+        tabConf.of([indentUnit.of(indent), EditorState.tabSize.of(s.tabSize)]),
+        minimapConf.of(s.showMinimap ? minimapExtension() : []),
+        indentGuideConf.of(s.showIndentGuides ? indentationMarkers() : []),
+        trailingWsConf.of(s.highlightTrailingWhitespace ? highlightTrailingWhitespace() : []),
+        rulerConf.of(rulers(s.rulers)),
+        fontThemeConf.of(fontTheme(s.fontSize))
       ]
     })
   }
@@ -134,6 +180,18 @@ export class Editor {
   /** Reconfigure syntax highlighting for a file name/extension. */
   async setLanguageForFile(fileName: string): Promise<string> {
     const desc = fileName ? matchLanguage(fileName) : null
+    return this.applyLanguage(desc)
+  }
+
+  /** Reconfigure syntax highlighting by language display name (manual pick). */
+  async setLanguageByName(name: string): Promise<string> {
+    if (name === 'Plain Text') return this.applyLanguage(null)
+    const desc = languages.find((l) => l.name === name) ?? null
+    return this.applyLanguage(desc)
+  }
+
+  /** Load + install a language description (or clear it). Returns display name. */
+  private async applyLanguage(desc: LanguageDescription | null): Promise<string> {
     if (!desc) {
       this.view.dispatch({ effects: languageConf.reconfigure([]) })
       return 'Plain Text'
@@ -143,37 +201,142 @@ export class Editor {
     return desc.name
   }
 
-  /** Toggle between the dark and light theme. Returns true when dark. */
-  toggleTheme(): boolean {
-    this.dark = !this.dark
-    this.view.dispatch({ effects: themeConf.reconfigure(this.dark ? oneDark : []) })
-    return this.dark
-  }
-
-  isDark(): boolean {
-    return this.dark
-  }
-
-  /** Toggle soft word-wrap. Returns the new state. */
-  toggleWordWrap(): boolean {
-    this.wrap = !this.wrap
+  /** Apply a full settings object at once (used on boot + settings change). */
+  applySettings(settings: Settings): void {
+    this.settings = settings
+    const indent = settings.insertSpaces ? ' '.repeat(settings.tabSize) : '\t'
     this.view.dispatch({
-      effects: wrapConf.reconfigure(this.wrap ? EditorView.lineWrapping : [])
+      effects: [
+        themeConf.reconfigure(settings.theme === 'dark' ? oneDark : []),
+        wrapConf.reconfigure(settings.wordWrap ? EditorView.lineWrapping : []),
+        tabConf.reconfigure([indentUnit.of(indent), EditorState.tabSize.of(settings.tabSize)]),
+        minimapConf.reconfigure(settings.showMinimap ? minimapExtension() : []),
+        indentGuideConf.reconfigure(settings.showIndentGuides ? indentationMarkers() : []),
+        trailingWsConf.reconfigure(
+          settings.highlightTrailingWhitespace ? highlightTrailingWhitespace() : []
+        ),
+        rulerConf.reconfigure(rulers(settings.rulers)),
+        fontThemeConf.reconfigure(fontTheme(settings.fontSize))
+      ]
     })
-    return this.wrap
   }
 
-  /** Open the built-in search panel. */
+  /** Current settings snapshot the editor is rendering with. */
+  getSettings(): Settings {
+    return this.settings
+  }
+
+  // ---- Individual toggles (also update the cached settings) ----
+
+  toggleTheme(): boolean {
+    this.settings.theme = this.settings.theme === 'dark' ? 'light' : 'dark'
+    this.view.dispatch({
+      effects: themeConf.reconfigure(this.settings.theme === 'dark' ? oneDark : [])
+    })
+    return this.settings.theme === 'dark'
+  }
+
+  toggleWordWrap(): boolean {
+    this.settings.wordWrap = !this.settings.wordWrap
+    this.view.dispatch({
+      effects: wrapConf.reconfigure(this.settings.wordWrap ? EditorView.lineWrapping : [])
+    })
+    return this.settings.wordWrap
+  }
+
+  toggleMinimap(): boolean {
+    this.settings.showMinimap = !this.settings.showMinimap
+    this.view.dispatch({
+      effects: minimapConf.reconfigure(this.settings.showMinimap ? minimapExtension() : [])
+    })
+    return this.settings.showMinimap
+  }
+
+  /** Change the editor font size in px, clamped to a sane range. */
+  setFontSize(px: number): number {
+    this.settings.fontSize = Math.max(8, Math.min(40, px))
+    this.view.dispatch({ effects: fontThemeConf.reconfigure(fontTheme(this.settings.fontSize)) })
+    return this.settings.fontSize
+  }
+
+  zoomFont(delta: number): number {
+    return this.setFontSize(this.settings.fontSize + delta)
+  }
+
+  // ---- Line-manipulation commands (Sublime-style) ----
+
+  moveLineUp(): void {
+    moveLineUp(this.view)
+  }
+  moveLineDown(): void {
+    moveLineDown(this.view)
+  }
+  copyLineUp(): void {
+    copyLineUp(this.view)
+  }
+  copyLineDown(): void {
+    copyLineDown(this.view)
+  }
+  deleteLine(): void {
+    deleteLine(this.view)
+  }
+  toggleComment(): void {
+    toggleComment(this.view)
+  }
+
+  /** Duplicate the current selection (or line if empty) in place. */
+  duplicateSelection(): void {
+    copyLineDown(this.view)
+  }
+
+  /** Sort the selected lines (or the whole document) alphabetically. */
+  sortLines(): void {
+    const { state } = this.view
+    const sel = state.selection.main
+    const fromLine = state.doc.lineAt(sel.from)
+    const toLine = state.doc.lineAt(sel.to)
+    // If nothing meaningful is selected, sort the entire document.
+    const spanFrom = sel.empty ? 0 : fromLine.from
+    const spanTo = sel.empty ? state.doc.length : toLine.to
+    const text = state.doc.sliceString(spanFrom, spanTo)
+    const sorted = text.split('\n').sort((a, b) => a.localeCompare(b)).join('\n')
+    if (sorted === text) return
+    this.view.dispatch({
+      changes: { from: spanFrom, to: spanTo, insert: sorted },
+      selection: EditorSelection.range(spanFrom, spanFrom + sorted.length)
+    })
+  }
+
+  // ---- Search / navigation ----
+
   openSearch(): void {
     openSearchPanel(this.view)
   }
-
-  /** Open the go-to-line prompt. */
   goToLine(): void {
     gotoLine(this.view)
   }
 
-  /** Move keyboard focus into the editor. */
+  /** Move the cursor to a 1-based line number and reveal it. */
+  gotoLineNumber(line: number): void {
+    const clamped = Math.max(1, Math.min(this.view.state.doc.lines, line))
+    const info = this.view.state.doc.line(clamped)
+    this.view.dispatch({
+      selection: EditorSelection.cursor(info.from),
+      scrollIntoView: true
+    })
+    this.view.focus()
+  }
+
+  /** Move the cursor to an absolute document offset and reveal it. */
+  gotoPos(pos: number): void {
+    const clamped = Math.max(0, Math.min(this.view.state.doc.length, pos))
+    this.view.dispatch({
+      selection: EditorSelection.cursor(clamped),
+      scrollIntoView: true
+    })
+    this.view.focus()
+  }
+
   focus(): void {
     this.view.focus()
   }
@@ -187,4 +350,9 @@ export function matchLanguage(fileName: string): LanguageDescription | null {
     if (lang.filename && lang.filename.test(fileName)) return lang
   }
   return null
+}
+
+/** All known language display names, for the manual language picker. */
+export function allLanguageNames(): string[] {
+  return ['Plain Text', ...languages.map((l) => l.name).sort((a, b) => a.localeCompare(b))]
 }

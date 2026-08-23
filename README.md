@@ -7,14 +7,22 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 
 ## Features
 
+- **Command Palette** (`Ctrl/Cmd+Shift+P`) — fuzzy-search every command, Sublime-style
+- **Goto Anything** (`Ctrl/Cmd+P`) — fuzzy file finder with `:line` and `@symbol` sub-modes
+- **Goto Symbol** (`Ctrl/Cmd+R`) and **Goto Line** (`Ctrl/Cmd+G`)
 - **Multi-tab editing** with dirty (unsaved) indicators and close buttons
-- **Syntax highlighting** for 100+ languages, auto-detected by file extension (via `@codemirror/language-data`)
+- **Syntax highlighting** for 100+ languages, auto-detected by extension; manual override via
+  the status-bar language button or **Set Syntax…**
+- **Minimap** and **indentation guides**, **vertical rulers**, trailing-whitespace highlight
+- **Line operations**: move/copy/delete line, duplicate, toggle comment (`Ctrl/Cmd+/`), sort lines
 - **File tree sidebar** — open a folder as a workspace, lazily expand directories
-- **Find & replace** (`Ctrl/Cmd+F`, `Ctrl/Cmd+H`) and **Go to Line** (`Ctrl/Cmd+G`)
-- **Undo/redo**, **multi-cursor**, rectangular selection, bracket matching, auto-close brackets
+- **Find & replace**, **undo/redo**, **multi-cursor**, rectangular selection, bracket matching
 - **Autocompletion**, code folding, active-line highlight, selection-match highlight
+- **Session restore** — reopens your tabs + folder on next launch; **Reopen Closed Tab**
+  (`Ctrl/Cmd+Shift+T`)
+- **Persistent settings** (JSON in userData): font size, tab size, theme, wrap, minimap, rulers
+- **Font zoom** (`Ctrl/Cmd+=` / `-` / `0`), dark/light theme, word-wrap, collapsible sidebar
 - **Status bar**: line/column, selection length, language, encoding, line-ending
-- **Dark / light theme** toggle, soft **word-wrap** toggle, collapsible sidebar
 - **Native application menu** with standard keyboard accelerators on every platform
 - **Secure architecture**: `contextIsolation` on, `nodeIntegration` off; the renderer reaches
   the filesystem only through a typed `contextBridge` API
@@ -94,22 +102,32 @@ npm run dist:linux   # Linux: AppImage + .deb
 
 ## Keyboard shortcuts
 
-| Action            | Shortcut                    |
-| ----------------- | --------------------------- |
-| New file          | `Ctrl/Cmd+N`                |
-| Open file         | `Ctrl/Cmd+O`                |
-| Open folder       | `Ctrl/Cmd+Shift+O`          |
-| Save              | `Ctrl/Cmd+S`                |
-| Save as           | `Ctrl/Cmd+Shift+S`          |
-| Close tab         | `Ctrl/Cmd+W`                |
-| Switch tab        | `Ctrl/Cmd+1..9`             |
-| Next / prev tab   | `Ctrl/Cmd+Alt+Right/Left`   |
-| Find              | `Ctrl/Cmd+F`                |
-| Replace           | `Ctrl/Cmd+H`                |
-| Go to line        | `Ctrl/Cmd+G`                |
-| Toggle sidebar    | `Ctrl/Cmd+B`                |
-| Toggle word wrap  | `Alt+Z`                     |
-| Toggle theme      | `Ctrl/Cmd+K`                |
+| Action              | Shortcut                    |
+| ------------------- | --------------------------- |
+| Command Palette     | `Ctrl/Cmd+Shift+P`          |
+| Goto Anything       | `Ctrl/Cmd+P`                |
+| Goto Symbol         | `Ctrl/Cmd+R`                |
+| Goto Line           | `Ctrl/Cmd+G`                |
+| New file            | `Ctrl/Cmd+N`                |
+| Open file           | `Ctrl/Cmd+O`                |
+| Open folder         | `Ctrl/Cmd+Shift+O`          |
+| Save                | `Ctrl/Cmd+S`                |
+| Save as             | `Ctrl/Cmd+Shift+S`          |
+| Close tab           | `Ctrl/Cmd+W`                |
+| Reopen closed tab   | `Ctrl/Cmd+Shift+T`          |
+| Switch tab          | `Ctrl/Cmd+1..9`             |
+| Next / prev tab     | `Ctrl/Cmd+Alt+Right/Left`   |
+| Find                | `Ctrl/Cmd+F`                |
+| Replace             | `Ctrl/Cmd+H`                |
+| Toggle comment      | `Ctrl/Cmd+/`                |
+| Move line up/down   | `Alt+Up/Down`               |
+| Copy line up/down   | `Shift+Alt+Up/Down`         |
+| Duplicate line/sel  | `Ctrl/Cmd+Shift+D`          |
+| Delete line         | `Ctrl/Cmd+Shift+K`          |
+| Zoom in/out/reset   | `Ctrl/Cmd+=` / `-` / `0`    |
+| Toggle sidebar      | `Ctrl/Cmd+B`                |
+| Toggle word wrap    | `Alt+Z`                     |
+| Toggle theme        | `Ctrl/Cmd+K`                |
 
 ## License
 

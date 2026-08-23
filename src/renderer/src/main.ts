@@ -1,20 +1,37 @@
-import { Editor } from './editor.js'
+import { Editor, allLanguageNames } from './editor.js'
 import { FileTree } from './fileTree.js'
+import { Palette, type PaletteItem } from './palette.js'
+import { COMMANDS } from './commands.js'
+import { extractSymbols } from './symbols.js'
+import { fuzzyFilter } from './fuzzy.js'
 import { createUntitled, createFromFile, isDirty, baseName, type Doc } from './documents.js'
 import type { EditorState } from '@codemirror/state'
-import type { MenuEvent } from '../../shared/ipc.js'
+import {
+  DEFAULT_SETTINGS,
+  type MenuEvent,
+  type Settings,
+  type Session
+} from '../../shared/ipc.js'
 import './styles.css'
 
 /**
  * The renderer application shell. Owns the list of open documents, the single
- * CodeMirror editor instance, the tab bar, file tree and status bar, and wires
- * all of them to the menu/accelerator events forwarded from the main process.
+ * CodeMirror editor instance, the tab bar, file tree, status bar, palette and
+ * settings/session persistence, and wires all of them to the menu/accelerator
+ * events forwarded from the main process.
  */
 class App {
-  private editor: Editor
+  private editor!: Editor
   private tree: FileTree
+  private palette = new Palette()
   private docs: Doc[] = []
   private activeId: string | null = null
+  private settings: Settings = { ...DEFAULT_SETTINGS }
+  private folder: string | null = null
+  /** Recently-closed file paths, for Reopen Closed Tab (LIFO). */
+  private closedStack: string[] = []
+  /** Debounce handle for session persistence. */
+  private saveSessionTimer: number | null = null
 
   // Cached DOM references.
   private tabBar = document.getElementById('tab-bar')!
@@ -23,65 +40,204 @@ class App {
   private statusSelection = document.getElementById('status-selection')!
   private statusLanguage = document.getElementById('status-language')!
   private sidebar = document.getElementById('sidebar')!
+  private host = document.getElementById('editor-host')!
 
   constructor() {
-    const host = document.getElementById('editor-host')!
-    this.editor = new Editor(host, {
-      onDocChange: () => this.handleDocChange(),
-      onCursorChange: (state) => this.updatePositionStatus(state)
-    })
-
     this.tree = new FileTree(document.getElementById('file-tree')!, (path) =>
       this.openPath(path)
     )
+    // The status-bar language field opens the syntax picker (like Sublime).
+    this.statusLanguage.addEventListener('click', () => this.pickLanguage())
+    this.statusLanguage.classList.add('clickable')
 
     this.bindMenu()
     this.bindShortcuts()
+    void this.boot()
+  }
 
-    // Start with a single empty buffer so the editor is never blank/broken.
-    this.addDoc(createUntitled())
+  /** Load settings, construct the editor, then restore the previous session. */
+  private async boot(): Promise<void> {
+    this.settings = await window.editor.readSettings()
+
+    this.editor = new Editor(
+      this.host,
+      {
+        onDocChange: () => this.handleDocChange(),
+        onCursorChange: (state) => this.updatePositionStatus(state)
+      },
+      this.settings
+    )
+
+    await this.restoreSession()
+  }
+
+  /** Reopen files + folder from the persisted session, or a blank buffer. */
+  private async restoreSession(): Promise<void> {
+    let session: Session
+    try {
+      session = await window.editor.readSession()
+    } catch {
+      session = { openFiles: [], activePath: null, folder: null }
+    }
+
+    if (session.folder) {
+      await this.openFolderPath(session.folder)
+    }
+
+    for (const f of session.openFiles) {
+      try {
+        const file = await window.editor.openPath(f.path)
+        this.docs.push(createFromFile(file.path, file.content))
+      } catch {
+        // File was moved/deleted since last run — skip it.
+      }
+    }
+
+    if (this.docs.length === 0) {
+      this.docs.push(createUntitled())
+    }
+
+    const target =
+      this.docs.find((d) => d.path === session.activePath) ?? this.docs[0]
+    await this.activate(target.id)
   }
 
   /** Subscribe to menu / accelerator events from the main process. */
   private bindMenu(): void {
-    const handlers: Record<MenuEvent, () => void> = {
-      'new-file': () => this.addDoc(createUntitled()),
-      'open-file': () => this.openViaDialog(),
-      'open-folder': () => this.openFolder(),
-      save: () => this.save(false),
-      'save-as': () => this.save(true),
-      'close-tab': () => this.closeActive(),
-      'next-tab': () => this.cycleTab(1),
-      'prev-tab': () => this.cycleTab(-1),
-      find: () => this.editor.openSearch(),
-      replace: () => this.editor.openSearch(),
-      'toggle-sidebar': () => this.toggleSidebar(),
-      'toggle-word-wrap': () => this.editor.toggleWordWrap(),
-      'toggle-theme': () => this.editor.toggleTheme(),
-      'command-palette': () => this.editor.openSearch(),
-      'go-to-line': () => this.editor.goToLine()
-    }
-    window.editor.onMenu((event) => handlers[event]?.())
+    window.editor.onMenu((event) => this.run(event))
   }
 
-  /** Keyboard shortcuts handled in the renderer (tab switching by number, etc.). */
+  /**
+   * Central command dispatch. The native menu, keyboard shortcuts and the
+   * command palette all funnel through here so behaviour stays consistent.
+   */
+  run(event: MenuEvent): void {
+    switch (event) {
+      case 'new-file':
+        this.addDoc(createUntitled())
+        break
+      case 'open-file':
+        void this.openViaDialog()
+        break
+      case 'open-folder':
+        void this.openFolder()
+        break
+      case 'save':
+        void this.save(false)
+        break
+      case 'save-as':
+        void this.save(true)
+        break
+      case 'close-tab':
+        this.closeActive()
+        break
+      case 'reopen-tab':
+        void this.reopenClosed()
+        break
+      case 'next-tab':
+        this.cycleTab(1)
+        break
+      case 'prev-tab':
+        this.cycleTab(-1)
+        break
+      case 'find':
+      case 'replace':
+        this.editor.openSearch()
+        break
+      case 'go-to-line':
+        this.editor.goToLine()
+        break
+      case 'toggle-sidebar':
+        this.toggleSidebar()
+        break
+      case 'toggle-word-wrap':
+        this.settings.wordWrap = this.editor.toggleWordWrap()
+        this.persistSettings()
+        break
+      case 'toggle-theme':
+        this.settings.theme = this.editor.toggleTheme() ? 'dark' : 'light'
+        this.persistSettings()
+        break
+      case 'toggle-minimap':
+        this.settings.showMinimap = this.editor.toggleMinimap()
+        this.persistSettings()
+        break
+      case 'command-palette':
+        this.openCommandPalette()
+        break
+      case 'goto-anything':
+        void this.openGotoAnything()
+        break
+      case 'goto-symbol':
+        this.openGotoSymbol()
+        break
+      case 'select-language':
+        void this.pickLanguage()
+        break
+      case 'toggle-comment':
+        this.editor.toggleComment()
+        break
+      case 'move-line-up':
+        this.editor.moveLineUp()
+        break
+      case 'move-line-down':
+        this.editor.moveLineDown()
+        break
+      case 'copy-line-up':
+        this.editor.copyLineUp()
+        break
+      case 'copy-line-down':
+        this.editor.copyLineDown()
+        break
+      case 'delete-line':
+        this.editor.deleteLine()
+        break
+      case 'duplicate-selection':
+        this.editor.duplicateSelection()
+        break
+      case 'sort-lines':
+        this.editor.sortLines()
+        break
+      case 'font-zoom-in':
+        this.settings.fontSize = this.editor.zoomFont(1)
+        this.persistSettings()
+        break
+      case 'font-zoom-out':
+        this.settings.fontSize = this.editor.zoomFont(-1)
+        this.persistSettings()
+        break
+      case 'font-zoom-reset':
+        this.settings.fontSize = this.editor.setFontSize(DEFAULT_SETTINGS.fontSize)
+        this.persistSettings()
+        break
+      case 'persist-session':
+        this.persistSessionNow()
+        break
+    }
+  }
+
+  /** Renderer-owned keyboard shortcuts not expressible as menu accelerators. */
   private bindShortcuts(): void {
     window.addEventListener('keydown', (e) => {
       const mod = e.ctrlKey || e.metaKey
-      if (mod && e.key >= '1' && e.key <= '9') {
+      // Ctrl/Cmd+1..9 → jump to tab N.
+      if (mod && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
         const idx = Number(e.key) - 1
         if (idx < this.docs.length) {
           e.preventDefault()
-          this.activate(this.docs[idx].id)
+          void this.activate(this.docs[idx].id)
         }
       }
     })
+    // Flush the session when the window is going away.
+    window.addEventListener('beforeunload', () => this.persistSessionNow())
   }
 
   /** Add a document, make it active and render the UI. */
   private addDoc(doc: Doc): void {
     this.docs.push(doc)
-    this.activate(doc.id)
+    void this.activate(doc.id)
+    this.scheduleSessionSave()
   }
 
   /** Get the currently active document, if any. */
@@ -91,7 +247,6 @@ class App {
 
   /** Switch the active tab, syncing the editor content and status bar. */
   private async activate(id: string): Promise<void> {
-    // Persist current editor text into the outgoing doc before switching.
     const current = this.active
     if (current) current.content = this.editor.getContent()
 
@@ -99,10 +254,15 @@ class App {
     if (!doc) return
     this.activeId = id
     this.editor.setDocument(doc.content)
-    doc.language = await this.editor.setLanguageForFile(doc.name)
+    if (!doc.languageLocked) {
+      doc.language = await this.editor.setLanguageForFile(doc.name)
+    } else {
+      await this.editor.setLanguageByName(doc.language)
+    }
     this.renderTabs()
     this.updateStatus()
     this.editor.focus()
+    this.scheduleSessionSave()
   }
 
   /** Update the active doc's cached content and refresh the dirty indicator. */
@@ -119,12 +279,11 @@ class App {
     if (file) this.openLoaded(file.path, file.content)
   }
 
-  /** Open a file by path (from the file tree). */
+  /** Open a file by path (from the file tree or Goto Anything). */
   private async openPath(path: string): Promise<void> {
-    // Focus the tab if the file is already open.
     const existing = this.docs.find((d) => d.path === path)
     if (existing) {
-      this.activate(existing.id)
+      void this.activate(existing.id)
       return
     }
     const file = await window.editor.openPath(path)
@@ -135,26 +294,36 @@ class App {
   private openLoaded(path: string, content: string): void {
     const existing = this.docs.find((d) => d.path === path)
     if (existing) {
-      this.activate(existing.id)
+      void this.activate(existing.id)
       return
     }
     // Replace a single pristine untitled buffer instead of stacking tabs.
-    if (
-      this.docs.length === 1 &&
-      this.docs[0].path === null &&
-      !isDirty(this.docs[0])
-    ) {
+    if (this.docs.length === 1 && this.docs[0].path === null && !isDirty(this.docs[0])) {
       this.docs = []
     }
     this.addDoc(createFromFile(path, content))
   }
 
-  /** Open a workspace folder and populate the file tree. */
+  /** Open a workspace folder via dialog and populate the file tree. */
   private async openFolder(): Promise<void> {
     const folder = await window.editor.openFolder()
     if (!folder) return
+    this.folder = folder.root
     this.workspaceName.textContent = baseName(folder.root).toUpperCase()
     this.tree.render(folder.entries)
+    this.scheduleSessionSave()
+  }
+
+  /** Open a workspace folder by a known path (session restore). */
+  private async openFolderPath(root: string): Promise<void> {
+    try {
+      const entries = await window.editor.readDir(root)
+      this.folder = root
+      this.workspaceName.textContent = baseName(root).toUpperCase()
+      this.tree.render(entries)
+    } catch {
+      // Folder gone since last run — ignore.
+    }
   }
 
   /** Save the active document. `forceDialog` forces a save-as. */
@@ -171,9 +340,12 @@ class App {
     doc.path = result.path
     doc.name = baseName(result.path)
     doc.savedContent = doc.content
-    doc.language = await this.editor.setLanguageForFile(doc.name)
+    if (!doc.languageLocked) {
+      doc.language = await this.editor.setLanguageForFile(doc.name)
+    }
     this.renderTabs()
     this.updateStatus()
+    this.scheduleSessionSave()
   }
 
   /** Close the active tab, guarding against losing unsaved changes. */
@@ -184,6 +356,8 @@ class App {
       const ok = confirm(`"${doc.name}" has unsaved changes. Close anyway?`)
       if (!ok) return
     }
+    if (doc.path) this.closedStack.push(doc.path)
+
     const idx = this.docs.findIndex((d) => d.id === doc.id)
     this.docs.splice(idx, 1)
 
@@ -191,9 +365,16 @@ class App {
       this.addDoc(createUntitled())
       return
     }
-    // Activate the neighbour that now occupies this slot.
     const next = this.docs[Math.min(idx, this.docs.length - 1)]
-    this.activate(next.id)
+    void this.activate(next.id)
+    this.scheduleSessionSave()
+  }
+
+  /** Reopen the most recently closed file (Ctrl/Cmd+Shift+T). */
+  private async reopenClosed(): Promise<void> {
+    const path = this.closedStack.pop()
+    if (!path) return
+    await this.openPath(path)
   }
 
   /** Cycle to the next/previous tab, wrapping around. */
@@ -201,13 +382,151 @@ class App {
     if (this.docs.length < 2) return
     const idx = this.docs.findIndex((d) => d.id === this.activeId)
     const next = (idx + delta + this.docs.length) % this.docs.length
-    this.activate(this.docs[next].id)
+    void this.activate(this.docs[next].id)
   }
 
   /** Show or hide the sidebar. */
   private toggleSidebar(): void {
     this.sidebar.classList.toggle('hidden')
   }
+
+  // ---- Command palette & Goto modes ----
+
+  /** Ctrl/Cmd+Shift+P — fuzzy list of all commands. */
+  private openCommandPalette(): void {
+    const items: PaletteItem[] = COMMANDS.map((c) => ({
+      label: c.title,
+      hint: c.hint,
+      value: c.id
+    }))
+    this.palette.open({
+      placeholder: 'Type a command…',
+      items,
+      onAccept: (item) => this.run(item.value as MenuEvent)
+    })
+  }
+
+  /** Ctrl/Cmd+P — fuzzy list of workspace files, with :line and @symbol modes. */
+  private async openGotoAnything(): Promise<void> {
+    let files: string[] = []
+    if (this.folder) {
+      try {
+        files = await window.editor.listFiles(this.folder)
+      } catch {
+        files = []
+      }
+    }
+    const root = this.folder
+    this.palette.open({
+      placeholder: 'Goto Anything — file, :line, @symbol',
+      onQuery: (query) => this.gotoAnythingItems(query, files, root),
+      onAccept: (item) => this.acceptGoto(item)
+    })
+  }
+
+  /** Compute palette rows for a Goto Anything query based on its mode prefix. */
+  private gotoAnythingItems(query: string, files: string[], root: string | null): PaletteItem[] {
+    // ":123" → go to line in the current file.
+    if (query.startsWith(':')) {
+      const line = query.slice(1)
+      return [{ label: `Go to line ${line || '…'}`, value: { kind: 'line', line: Number(line) } }]
+    }
+    // "@sym" → symbols in the current file.
+    if (query.startsWith('@')) {
+      return this.symbolItems(query.slice(1))
+    }
+    // Otherwise fuzzy-match file paths relative to the workspace root.
+    const rel = (p: string): string =>
+      root && p.startsWith(root) ? p.slice(root.length + 1) : p
+    const matched = fuzzyFilter(query, files, rel)
+    return matched.slice(0, 200).map(({ item }) => ({
+      label: baseName(item),
+      detail: rel(item),
+      value: { kind: 'file', path: item }
+    }))
+  }
+
+  /** Ctrl/Cmd+R — symbols in the current document. */
+  private openGotoSymbol(): void {
+    this.palette.open({
+      placeholder: 'Goto Symbol in file',
+      onQuery: (query) => this.symbolItems(query),
+      onAccept: (item) => this.acceptGoto(item)
+    })
+  }
+
+  /** Build palette rows from the current document's symbols. */
+  private symbolItems(query: string): PaletteItem[] {
+    const symbols = extractSymbols(this.editor.getContent())
+    const source = query
+      ? fuzzyFilter(query, symbols, (s) => s.label).map((r) => r.item)
+      : symbols
+    return source.slice(0, 200).map((s) => ({
+      label: s.label,
+      hint: `Ln ${s.line}`,
+      value: { kind: 'pos', pos: s.pos }
+    }))
+  }
+
+  /** Handle a chosen Goto row (file / line / symbol position). */
+  private acceptGoto(item: PaletteItem): void {
+    const v = item.value as
+      | { kind: 'file'; path: string }
+      | { kind: 'line'; line: number }
+      | { kind: 'pos'; pos: number }
+    if (v.kind === 'file') {
+      void this.openPath(v.path)
+    } else if (v.kind === 'line') {
+      if (Number.isFinite(v.line) && v.line > 0) this.editor.gotoLineNumber(v.line)
+    } else {
+      this.editor.gotoPos(v.pos)
+    }
+  }
+
+  /** Open the syntax picker and lock the active doc's language on choice. */
+  private async pickLanguage(): Promise<void> {
+    const items: PaletteItem[] = allLanguageNames().map((name) => ({
+      label: name,
+      value: name
+    }))
+    this.palette.open({
+      placeholder: 'Set syntax…',
+      items,
+      onAccept: async (item) => {
+        const doc = this.active
+        if (!doc) return
+        const name = item.value as string
+        doc.language = await this.editor.setLanguageByName(name)
+        doc.languageLocked = name !== 'Plain Text'
+        this.updateStatus()
+      }
+    })
+  }
+
+  // ---- Persistence ----
+
+  /** Persist settings to disk (fire-and-forget). */
+  private persistSettings(): void {
+    void window.editor.writeSettings(this.settings)
+  }
+
+  /** Debounced session save to avoid thrashing on rapid edits/switches. */
+  private scheduleSessionSave(): void {
+    if (this.saveSessionTimer !== null) window.clearTimeout(this.saveSessionTimer)
+    this.saveSessionTimer = window.setTimeout(() => this.persistSessionNow(), 400)
+  }
+
+  /** Write the current session (open files + active + folder) immediately. */
+  private persistSessionNow(): void {
+    const session: Session = {
+      openFiles: this.docs.filter((d) => d.path).map((d) => ({ path: d.path! })),
+      activePath: this.active?.path ?? null,
+      folder: this.folder
+    }
+    void window.editor.writeSession(session)
+  }
+
+  // ---- Rendering ----
 
   /** Rebuild the tab bar DOM from the current document list. */
   private renderTabs(): void {
@@ -229,12 +548,11 @@ class App {
       close.textContent = '×'
       close.addEventListener('click', (e) => {
         e.stopPropagation()
-        this.activate(doc.id)
-        this.closeActive()
+        void this.activate(doc.id).then(() => this.closeActive())
       })
 
       tab.append(dot, label, close)
-      tab.addEventListener('click', () => this.activate(doc.id))
+      tab.addEventListener('click', () => void this.activate(doc.id))
       this.tabBar.appendChild(tab)
     }
   }

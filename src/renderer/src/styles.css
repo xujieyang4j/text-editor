@@ -178,11 +178,21 @@ body {
 .editor-host .cm-editor {
   height: 100%;
   font-family: var(--font-mono);
-  font-size: 14px;
 }
 
 .editor-host .cm-scroller {
   overflow: auto;
+}
+
+/* Trailing-whitespace highlight (visual only). */
+.cm-trailingSpace {
+  background: rgba(255, 90, 90, 0.25);
+}
+
+/* Vertical rulers. */
+.cm-ruler {
+  background: var(--border);
+  opacity: 0.6;
 }
 
 /* ---------- Status bar ---------- */
@@ -202,6 +212,112 @@ body {
   white-space: nowrap;
 }
 
+.status-item.clickable {
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.status-item.clickable:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
 .status-spacer {
   flex: 1;
+}
+
+/* ---------- Command palette / Goto overlay ---------- */
+.palette-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  z-index: 1000;
+}
+
+.palette-overlay.hidden {
+  display: none;
+}
+
+.palette-box {
+  margin-top: 10vh;
+  width: min(640px, 80vw);
+  max-height: 60vh;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.palette-input {
+  border: none;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.palette-item.active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.palette-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.palette-item-main b {
+  color: var(--dirty);
+  font-weight: 700;
+}
+
+.palette-item.active .palette-item-main b {
+  color: #fff;
+  text-decoration: underline;
+}
+
+.palette-item-detail {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-item.active .palette-item-detail {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.palette-item-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.palette-item.active .palette-item-hint {
+  color: rgba(255, 255, 255, 0.85);
 }

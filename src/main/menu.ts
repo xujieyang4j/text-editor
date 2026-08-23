@@ -7,6 +7,15 @@ function emit(event: MenuEvent): void {
   win?.webContents.send(IPC.menuEvent, event)
 }
 
+/** Small helper to define a command menu item that emits a renderer event. */
+function item(
+  label: string,
+  event: MenuEvent,
+  accelerator?: string
+): MenuItemConstructorOptions {
+  return { label, accelerator, click: () => emit(event) }
+}
+
 /**
  * Build and install the native application menu.
  * Accelerators are wired to renderer events so the editor owns document state.
@@ -37,38 +46,15 @@ export function buildMenu(): void {
     {
       label: 'File',
       submenu: [
-        {
-          label: 'New File',
-          accelerator: 'CmdOrCtrl+N',
-          click: () => emit('new-file')
-        },
-        {
-          label: 'Open File…',
-          accelerator: 'CmdOrCtrl+O',
-          click: () => emit('open-file')
-        },
-        {
-          label: 'Open Folder…',
-          accelerator: 'CmdOrCtrl+Shift+O',
-          click: () => emit('open-folder')
-        },
+        item('New File', 'new-file', 'CmdOrCtrl+N'),
+        item('Open File…', 'open-file', 'CmdOrCtrl+O'),
+        item('Open Folder…', 'open-folder', 'CmdOrCtrl+Shift+O'),
         { type: 'separator' },
-        {
-          label: 'Save',
-          accelerator: 'CmdOrCtrl+S',
-          click: () => emit('save')
-        },
-        {
-          label: 'Save As…',
-          accelerator: 'CmdOrCtrl+Shift+S',
-          click: () => emit('save-as')
-        },
+        item('Save', 'save', 'CmdOrCtrl+S'),
+        item('Save As…', 'save-as', 'CmdOrCtrl+Shift+S'),
         { type: 'separator' },
-        {
-          label: 'Close Tab',
-          accelerator: 'CmdOrCtrl+W',
-          click: () => emit('close-tab')
-        },
+        item('Close Tab', 'close-tab', 'CmdOrCtrl+W'),
+        item('Reopen Closed Tab', 'reopen-tab', 'CmdOrCtrl+Shift+T'),
         isMac ? { role: 'close' } : { role: 'quit' }
       ]
     },
@@ -83,69 +69,56 @@ export function buildMenu(): void {
         { role: 'paste' },
         { role: 'selectAll' },
         { type: 'separator' },
-        {
-          label: 'Find',
-          accelerator: 'CmdOrCtrl+F',
-          click: () => emit('find')
-        },
-        {
-          label: 'Replace',
-          accelerator: 'CmdOrCtrl+H',
-          click: () => emit('replace')
-        },
-        {
-          label: 'Go to Line…',
-          accelerator: 'CmdOrCtrl+G',
-          click: () => emit('go-to-line')
-        }
+        item('Toggle Comment', 'toggle-comment', 'CmdOrCtrl+/'),
+        item('Move Line Up', 'move-line-up', 'Alt+Up'),
+        item('Move Line Down', 'move-line-down', 'Alt+Down'),
+        item('Copy Line Up', 'copy-line-up', 'Shift+Alt+Up'),
+        item('Copy Line Down', 'copy-line-down', 'Shift+Alt+Down'),
+        item('Duplicate Line/Selection', 'duplicate-selection', 'CmdOrCtrl+Shift+D'),
+        item('Delete Line', 'delete-line', 'CmdOrCtrl+Shift+K'),
+        item('Sort Lines', 'sort-lines'),
+        { type: 'separator' },
+        item('Find', 'find', 'CmdOrCtrl+F'),
+        item('Replace', 'replace', 'CmdOrCtrl+H')
+      ]
+    },
+    {
+      label: 'Selection',
+      submenu: [
+        // These map to CM6 defaults already bound in-editor; listed for
+        // discoverability. selectAll is provided by the Edit role above.
+        item('Duplicate Line/Selection', 'duplicate-selection', 'CmdOrCtrl+Shift+D'),
+        item('Sort Lines', 'sort-lines')
+      ]
+    },
+    {
+      label: 'Goto',
+      submenu: [
+        item('Goto Anything…', 'goto-anything', 'CmdOrCtrl+P'),
+        item('Goto Symbol…', 'goto-symbol', 'CmdOrCtrl+R'),
+        item('Goto Line…', 'go-to-line', 'CmdOrCtrl+G'),
+        { type: 'separator' },
+        item('Next Tab', 'next-tab', 'CmdOrCtrl+Alt+Right'),
+        item('Previous Tab', 'prev-tab', 'CmdOrCtrl+Alt+Left')
       ]
     },
     {
       label: 'View',
       submenu: [
-        {
-          label: 'Command Palette…',
-          accelerator: 'CmdOrCtrl+Shift+P',
-          click: () => emit('command-palette')
-        },
+        item('Command Palette…', 'command-palette', 'CmdOrCtrl+Shift+P'),
+        item('Set Syntax…', 'select-language'),
         { type: 'separator' },
-        {
-          label: 'Toggle Sidebar',
-          accelerator: 'CmdOrCtrl+B',
-          click: () => emit('toggle-sidebar')
-        },
-        {
-          label: 'Toggle Word Wrap',
-          accelerator: 'Alt+Z',
-          click: () => emit('toggle-word-wrap')
-        },
-        {
-          label: 'Toggle Theme',
-          accelerator: 'CmdOrCtrl+K',
-          click: () => emit('toggle-theme')
-        },
+        item('Toggle Sidebar', 'toggle-sidebar', 'CmdOrCtrl+B'),
+        item('Toggle Minimap', 'toggle-minimap'),
+        item('Toggle Word Wrap', 'toggle-word-wrap', 'Alt+Z'),
+        item('Toggle Theme', 'toggle-theme', 'CmdOrCtrl+K'),
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        item('Zoom In', 'font-zoom-in', 'CmdOrCtrl+='),
+        item('Zoom Out', 'font-zoom-out', 'CmdOrCtrl+-'),
+        item('Reset Zoom', 'font-zoom-reset', 'CmdOrCtrl+0'),
         { type: 'separator' },
         { role: 'togglefullscreen' },
         { role: 'toggleDevTools' }
-      ]
-    },
-    {
-      label: 'Go',
-      submenu: [
-        {
-          label: 'Next Tab',
-          accelerator: 'CmdOrCtrl+Alt+Right',
-          click: () => emit('next-tab')
-        },
-        {
-          label: 'Previous Tab',
-          accelerator: 'CmdOrCtrl+Alt+Left',
-          click: () => emit('prev-tab')
-        }
       ]
     },
     {

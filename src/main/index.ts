@@ -3,6 +3,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { registerFileHandlers } from './files.js'
 import { buildMenu } from './menu.js'
+import { IPC, type MenuEvent } from '../shared/ipc.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -59,6 +60,15 @@ app.whenReady().then(() => {
     // macOS: re-create a window when the dock icon is clicked and none are open.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('before-quit', () => {
+  // Ask the renderer to flush its session so tabs/folder restore next launch.
+  // The renderer persists synchronously enough for a graceful quit; this is a
+  // best-effort nudge for cases where the window isn't closed individually.
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send(IPC.menuEvent, 'persist-session' as MenuEvent)
+  }
 })
 
 app.on('window-all-closed', () => {

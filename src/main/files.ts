@@ -1,16 +1,29 @@
-import { dialog, ipcMain, BrowserWindow } from 'electron'
+import { dialog, ipcMain, BrowserWindow, app } from 'electron'
 import { promises as fs } from 'fs'
 import path from 'path'
 import {
   IPC,
+  DEFAULT_SETTINGS,
+  EMPTY_SESSION,
   type OpenedFile,
   type SaveResult,
   type OpenedFolder,
-  type DirEntry
+  type DirEntry,
+  type Settings,
+  type Session
 } from '../shared/ipc.js'
 
 /** Directory entries that are noisy and rarely useful in a file tree. */
-const IGNORED_ENTRIES = new Set(['.git', 'node_modules', '.DS_Store'])
+const IGNORED_ENTRIES = new Set([
+  '.git',
+  'node_modules',
+  '.DS_Store',
+  '.cache',
+  'dist',
+  'out',
+  'release',
+  '.npm-cache'
+])
 
 /** Read a directory and return its immediate children, folders first. */
 async function readDirectory(dirPath: string): Promise<DirEntry[]> {
@@ -31,10 +44,63 @@ async function readDirectory(dirPath: string): Promise<DirEntry[]> {
   return entries
 }
 
+/**
+ * Recursively list all files under a root (used by Goto Anything).
+ * Bounded by a file cap and depth to stay responsive on huge trees.
+ */
+async function listFilesRecursive(root: string): Promise<string[]> {
+  const MAX_FILES = 20000
+  const results: string[] = []
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (results.length >= MAX_FILES || depth > 20) return
+    let dirents: import('fs').Dirent[]
+    try {
+      dirents = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      return // unreadable dir — skip silently
+    }
+    for (const d of dirents) {
+      if (IGNORED_ENTRIES.has(d.name)) continue
+      const full = path.join(dir, d.name)
+      if (d.isDirectory()) {
+        await walk(full, depth + 1)
+      } else if (d.isFile()) {
+        results.push(full)
+        if (results.length >= MAX_FILES) return
+      }
+    }
+  }
+
+  await walk(root, 0)
+  return results
+}
+
 /** Read a single file from disk as UTF-8 text. */
 async function readFile(filePath: string): Promise<OpenedFile> {
   const content = await fs.readFile(filePath, 'utf-8')
   return { path: filePath, content }
+}
+
+/** Absolute path to a JSON file living in the app's userData directory. */
+function userDataFile(name: string): string {
+  return path.join(app.getPath('userData'), name)
+}
+
+/** Read + parse a JSON file, returning `fallback` on any error. */
+async function readJson<T>(file: string, fallback: T): Promise<T> {
+  try {
+    const raw = await fs.readFile(file, 'utf-8')
+    return { ...fallback, ...(JSON.parse(raw) as Partial<T>) }
+  } catch {
+    return fallback
+  }
+}
+
+/** Serialise + write a JSON file, creating the directory if needed. */
+async function writeJson(file: string, data: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf-8')
 }
 
 /**
@@ -75,6 +141,11 @@ export function registerFileHandlers(): void {
     return readDirectory(dirPath)
   })
 
+  // Recursively list files under a root — used by Goto Anything.
+  ipcMain.handle(IPC.dirListFiles, async (_event, root: string): Promise<string[]> => {
+    return listFilesRecursive(root)
+  })
+
   // Save content to a known path. If no path is provided, fall through to save-as.
   ipcMain.handle(
     IPC.fileSave,
@@ -94,6 +165,23 @@ export function registerFileHandlers(): void {
       return saveAs(event.sender, content, suggestedName)
     }
   )
+
+  // ---- Settings & session persistence (JSON in userData) ----
+  ipcMain.handle(IPC.settingsRead, async (): Promise<Settings> => {
+    return readJson<Settings>(userDataFile('settings.json'), DEFAULT_SETTINGS)
+  })
+
+  ipcMain.handle(IPC.settingsWrite, async (_event, settings: Settings): Promise<void> => {
+    await writeJson(userDataFile('settings.json'), settings)
+  })
+
+  ipcMain.handle(IPC.sessionRead, async (): Promise<Session> => {
+    return readJson<Session>(userDataFile('session.json'), EMPTY_SESSION)
+  })
+
+  ipcMain.handle(IPC.sessionWrite, async (_event, session: Session): Promise<void> => {
+    await writeJson(userDataFile('session.json'), session)
+  })
 }
 
 /** Shared save-as implementation used by both save (untitled) and explicit save-as. */

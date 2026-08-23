@@ -15,6 +15,8 @@ export interface Doc {
   savedContent: string
   /** Resolved language display name for the status bar. */
   language: string
+  /** True when the user manually picked a language (skip auto-detect). */
+  languageLocked: boolean
 }
 
 let counter = 0
@@ -28,7 +30,8 @@ export function createUntitled(): Doc {
     name: `Untitled-${counter}`,
     content: '',
     savedContent: '',
-    language: 'Plain Text'
+    language: 'Plain Text',
+    languageLocked: false
   }
 }
 
@@ -41,7 +44,8 @@ export function createFromFile(path: string, content: string): Doc {
     name: baseName(path),
     content,
     savedContent: content,
-    language: 'Plain Text'
+    language: 'Plain Text',
+    languageLocked: false
   }
 }
 
