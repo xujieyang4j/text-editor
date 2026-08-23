@@ -5,6 +5,8 @@
 A cross-platform desktop text editor built with **Electron + TypeScript + CodeMirror 6**.
 Runs on **Linux, Windows, and macOS** from a single codebase.
 
+📖 **Full user guide (bilingual):** [`docs/USER_GUIDE.md`](./docs/USER_GUIDE.md)
+
 ## Features
 
 - **Command Palette** (`Ctrl/Cmd+Shift+P`) — fuzzy-search every command, Sublime-style

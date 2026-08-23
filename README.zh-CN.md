@@ -5,6 +5,8 @@
 一款基于 **Electron + TypeScript + CodeMirror 6** 的跨平台桌面文本编辑器，
 单一代码库即可在 **Linux、Windows、macOS** 上运行。
 
+📖 **完整使用指南（中英双语）：** [`docs/USER_GUIDE.md`](./docs/USER_GUIDE.md)
+
 ## 功能特性
 
 - **命令面板**（`Ctrl/Cmd+Shift+P`）：模糊搜索全部命令，Sublime 风格
