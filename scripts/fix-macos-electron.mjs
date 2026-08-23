@@ -63,6 +63,16 @@ function capture(command, args) {
   return result.stdout ?? ''
 }
 
+/** Check a command's exit status without printing output or terminating. */
+function succeeds(command, args) {
+  const result = spawnSync(command, args, {
+    cwd: projectRoot,
+    stdio: 'ignore',
+    shell: false
+  })
+  return !result.error && result.status === 0
+}
+
 if (process.platform !== 'darwin') {
   log(`Skipped: this command is only needed on macOS (current platform: ${process.platform}).`)
   process.exit(0)
@@ -103,16 +113,22 @@ if (attributes.includes('com.apple.quarantine')) {
   log('No quarantine attribute found; continuing with signature repair.')
 }
 
-// Ad-hoc sign the local development runtime. This is intentionally not a
-// distribution signature; release builds should use Developer ID + notarization.
-run('/usr/bin/codesign', [
-  '--force',
-  '--deep',
-  '--sign',
-  '-',
-  '--timestamp=none',
-  electronApp
-])
+// Preserve Electron's existing valid signature. Only fall back to an ad-hoc
+// local signature when verification fails; this keeps repeated dev:mac starts
+// fast and avoids modifying a healthy app bundle.
+if (!succeeds('/usr/bin/codesign', ['--verify', '--deep', '--strict', electronApp])) {
+  log('The existing signature is invalid; applying an ad-hoc development signature…')
+  run('/usr/bin/codesign', [
+    '--force',
+    '--deep',
+    '--sign',
+    '-',
+    '--timestamp=none',
+    electronApp
+  ])
+} else {
+  log('Existing Electron.app signature is valid; no re-signing needed.')
+}
 
 // Fail loudly if the resulting bundle is internally inconsistent.
 run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', electronApp])

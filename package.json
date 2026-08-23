@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "fix:mac": "node scripts/fix-macos-electron.mjs",
+    "dev:mac": "npm run fix:mac && npm run dev",
     "start": "electron-vite preview",
     "build": "electron-vite build",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",

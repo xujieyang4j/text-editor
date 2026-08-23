@@ -313,18 +313,19 @@ the toolchain (ERESOLVE, `cac` export error). Recover with a fresh `git clone`, 
 `rm -rf node_modules package-lock.json && git checkout package.json package-lock.json && npm install`.
 
 **macOS says "Electron.app is damaged / malware" and trashes it.** This is a false positive for
-the development runtime. Run the built-in repair command:
+the development runtime. Repair and launch with one command:
 
 ```bash
-npm run fix:mac
-npm run dev
+npm run dev:mac
 ```
 
-`fix:mac` restores Electron if macOS moved it to the Trash, removes the quarantine attribute only
-from this project's `Electron.app`, ad-hoc signs it, then verifies the resulting bundle. It does
-not disable Gatekeeper or change system-wide security settings. If downloading Electron is slow,
-set `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` before running it. This command is for
-local development; distributable macOS builds should use Developer ID signing + notarization.
+`dev:mac` runs the built-in repair and then starts the editor. The repair restores Electron if
+macOS moved it to the Trash, removes the quarantine attribute only from this project's
+`Electron.app`, ad-hoc signs it, then verifies the resulting bundle. It does not disable Gatekeeper
+or change system-wide security settings. If downloading Electron is slow, set
+`ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` before running it. Use `npm run fix:mac`
+when you want to repair without launching. This command is for local development; distributable
+macOS builds should use Developer ID signing + notarization.
 
 Or approve it under **System Settings → Privacy & Security → Open Anyway**.
 
@@ -622,14 +623,14 @@ Sublime 的 “hot exit”）。
 **macOS 提示“Electron.app 已损坏/含恶意软件”并移到废纸篓。** 这是未签名开发运行时的误报。恢复：
 
 ```bash
-npm run fix:mac
-npm run dev
+npm run dev:mac
 ```
 
-`fix:mac` 会在 Electron 被移到废纸篓时自动恢复它，只对当前项目的 `Electron.app` 清除隔离属性、
-执行临时签名并验证签名；它不会关闭 Gatekeeper，也不会修改系统级安全设置。Electron 下载慢时，可先
-设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`。此命令只用于本地开发；正式分发的
-macOS 安装包应使用 Developer ID 签名与 Apple 公证。
+`dev:mac` 会自动执行内置修复，然后直接启动编辑器。Electron 被移到废纸篓时会自动恢复；只对当前
+项目的 `Electron.app` 清除隔离属性、执行临时签名并验证签名，不会关闭 Gatekeeper 或修改系统级
+安全设置。Electron 下载慢时，可先设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`。
+只修复、不启动时可用 `npm run fix:mac`。此命令只用于本地开发；正式分发的 macOS 安装包应使用
+Developer ID 签名与 Apple 公证。
 
 或到 **系统设置 → 隐私与安全性 → 仍要打开** 放行。
 
