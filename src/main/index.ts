@@ -152,6 +152,10 @@ app.on('open-file', (event, filePath) => {
 
 app.whenReady().then(() => {
   registerFileHandlers()
+  ipcMain.handle(IPC.appNewWindow, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win) createWindow()
+  })
   ipcMain.handle(IPC.sessionFlushed, (event) => {
     pendingSessionFlushes.get(event.sender)?.()
     pendingSessionFlushes.delete(event.sender)

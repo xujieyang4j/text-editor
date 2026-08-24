@@ -47,6 +47,7 @@ export function buildMenu(): void {
       label: 'File',
       submenu: [
         item('New File', 'new-file', 'CmdOrCtrl+N'),
+        item('New Window', 'new-window', 'CmdOrCtrl+Shift+N'),
         item('Open File…', 'open-file', 'CmdOrCtrl+O'),
         item('Open Folder…', 'open-folder', 'CmdOrCtrl+Shift+O'),
         { type: 'separator' },
@@ -81,7 +82,9 @@ export function buildMenu(): void {
         item('Find', 'find', 'CmdOrCtrl+F'),
         item('Replace', 'replace', 'CmdOrCtrl+H'),
         item('Find in Files…', 'find-in-files', 'CmdOrCtrl+Shift+F'),
-        item('Replace in Files…', 'replace-in-files', 'CmdOrCtrl+Shift+H')
+        item('Replace in Files…', 'replace-in-files', 'CmdOrCtrl+Shift+H'),
+        item('Next Find Result', 'find-results-next', 'F4'),
+        item('Previous Find Result', 'find-results-prev', 'Shift+F4')
       ]
     },
     {
@@ -98,7 +101,11 @@ export function buildMenu(): void {
       submenu: [
         item('Goto Anything…', 'goto-anything', 'CmdOrCtrl+P'),
         item('Goto Symbol…', 'goto-symbol', 'CmdOrCtrl+R'),
+        item('Goto Symbol in Project…', 'goto-project-symbol', 'CmdOrCtrl+Shift+R'),
         item('Goto Line…', 'go-to-line', 'CmdOrCtrl+G'),
+        { type: 'separator' },
+        item('Back', 'navigate-back', 'Alt+Left'),
+        item('Forward', 'navigate-forward', 'Alt+Right'),
         { type: 'separator' },
         item('Next Tab', 'next-tab', 'CmdOrCtrl+Alt+Right'),
         item('Previous Tab', 'prev-tab', 'CmdOrCtrl+Alt+Left'),
@@ -119,6 +126,15 @@ export function buildMenu(): void {
         { type: 'separator' },
         item('Toggle Sidebar', 'toggle-sidebar', 'CmdOrCtrl+B'),
         item('Toggle Split Editor', 'split-editor', 'CmdOrCtrl+Alt+2'),
+        { type: 'separator' },
+        item('Layout: Single', 'layout-single'),
+        item('Layout: Columns 2', 'layout-columns2'),
+        item('Layout: Columns 3', 'layout-columns3'),
+        item('Layout: Grid 4', 'layout-grid4'),
+        item('Move File to Next Group', 'move-file-next-group'),
+        item('Clone File to Next Group', 'clone-file-next-group'),
+        item('Focus Next Group', 'focus-next-group', 'CmdOrCtrl+Alt+]'),
+        item('Focus Previous Group', 'focus-prev-group', 'CmdOrCtrl+Alt+['),
         item('Toggle Minimap', 'toggle-minimap'),
         item('Toggle Word Wrap', 'toggle-word-wrap', 'Alt+Z'),
         item('Toggle Theme', 'toggle-theme', 'CmdOrCtrl+K'),

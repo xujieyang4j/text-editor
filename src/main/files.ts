@@ -5,6 +5,7 @@ import path from 'path'
 import { pathToFileURL } from 'url'
 import { detectLineEnding, encodeText as encodePreservedText } from '../shared/text.js'
 import { isBinaryBuffer, maxEditableBytes } from '../shared/filePolicy.js'
+import { extractWorkspaceSymbols } from '../shared/symbolIndex.js'
 import {
   IPC,
   DEFAULT_SETTINGS,
@@ -22,6 +23,7 @@ import {
   type WorkspaceSearchRequest,
   type WorkspaceReplaceRequest,
   type WorkspaceReplaceResult,
+  type WorkspaceSymbol,
   type BuildRequest,
   type BuildOutput,
   type PluginManifest,
@@ -30,6 +32,7 @@ import {
   type LanguageServerRequest,
   type LanguageServerResult,
   type PluginInstallRequest
+  , type LayoutKind
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -316,6 +319,30 @@ function sanitizeSession(value: unknown): Session {
         }))
     : []
   const project = raw.project && typeof raw.project === 'object' ? raw.project : EMPTY_SESSION.project!
+  const rawLayout = raw.layout && typeof raw.layout === 'object' ? raw.layout : undefined
+  const layoutKind: LayoutKind =
+    rawLayout?.kind === 'columns2' || rawLayout?.kind === 'columns3' || rawLayout?.kind === 'grid4'
+      ? rawLayout.kind
+      : 'single'
+  const layoutCount = layoutKind === 'single' ? 1 : layoutKind === 'columns2' ? 2 : layoutKind === 'columns3' ? 3 : 4
+  const rawGroups = Array.isArray(rawLayout?.groups) ? rawLayout.groups : []
+  const layout = {
+    kind: layoutKind,
+    activeGroup: asFiniteInt(rawLayout?.activeGroup, 0, 0, layoutCount - 1),
+    groups: Array.from({ length: layoutCount }, (_value, index) => {
+      const group = rawGroups[index] && typeof rawGroups[index] === 'object' ? rawGroups[index] : {}
+      const rawIndexes = (group as { docIndexes?: unknown }).docIndexes
+      const docIndexes = Array.isArray(rawIndexes)
+        ? rawIndexes
+            .filter((item): item is number => typeof item === 'number' && Number.isInteger(item) && item >= 0 && item < openFiles.length)
+            .slice(0, 200)
+        : []
+      return {
+        docIndexes,
+        activeIndex: asFiniteInt((group as { activeIndex?: unknown }).activeIndex, 0, 0, Math.max(0, docIndexes.length - 1))
+      }
+    })
+  }
   return {
     openFiles,
     activeIndex: asFiniteInt(raw.activeIndex, 0, 0, Math.max(0, openFiles.length - 1)),
@@ -375,7 +402,8 @@ function sanitizeSession(value: unknown): Session {
               })
           )
         : {}
-    }
+    },
+    layout
   }
 }
 
@@ -492,6 +520,25 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
     }
   }
   return { files: changedFiles, replacements }
+}
+
+/** Index symbols across a bounded workspace scan for Project Symbol navigation. */
+async function indexWorkspaceSymbols(root: string): Promise<WorkspaceSymbol[]> {
+  const files = await listFilesRecursive(root)
+  const symbols: WorkspaceSymbol[] = []
+  for (const file of files) {
+    if (symbols.length >= 20_000) break
+    try {
+      const stat = await fs.stat(file)
+      if (stat.size > MAX_SEARCH_FILE_BYTES) continue
+      const opened = await readFile(file)
+      if (opened.isBinary || opened.isTooLarge) continue
+      symbols.push(...extractWorkspaceSymbols(file, opened.content).slice(0, 500))
+    } catch {
+      // Ignore transient workspace files.
+    }
+  }
+  return symbols.slice(0, 20_000)
 }
 
 /** Load declarative local plugins. They can contribute text commands/snippets, never Node access. */
@@ -847,6 +894,12 @@ export function registerFileHandlers(): void {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
     return replaceWorkspace(request)
+  })
+  ipcMain.handle(IPC.workspaceSymbols, async (event, root: unknown): Promise<WorkspaceSymbol[]> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    return indexWorkspaceSymbols(root)
   })
 
   ipcMain.handle(IPC.fileCreate, async (event, target: unknown, isDirectory = false): Promise<DirEntry> => {

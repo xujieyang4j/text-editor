@@ -16,6 +16,8 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   from a temporary snapshot without prompting you to save
 - **Command Palette** (`Ctrl/Cmd+Shift+P`) — fuzzy-search every command, Sublime-style
 - **Goto Anything** (`Ctrl/Cmd+P`) — fuzzy file finder with `:line` and `@symbol` sub-modes
+- **Multi-group layouts & windows** — single, 2/3-column and 4-grid layouts with independent tab groups
+- **Find Results & project symbols** — persistent workspace results (`F4` navigation), project-wide symbols and back/forward history
 - **Goto Symbol** (`Ctrl/Cmd+R`) and **Goto Line** (`Ctrl/Cmd+G`)
 - **Multi-tab editing** with dirty (unsaved) indicators and close buttons
 - **Syntax highlighting** for 100+ languages, auto-detected by extension; manual override via

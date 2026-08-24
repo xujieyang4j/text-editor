@@ -2,6 +2,7 @@ import { Editor, allLanguageNames } from './editor.js'
 import { FileTree } from './fileTree.js'
 import { Palette, type PaletteItem } from './palette.js'
 import { WorkspaceSearchPanel } from './workspaceSearch.js'
+import { FindResultsView } from './findResults.js'
 import { BuildPanel } from './buildPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS } from './commands.js'
@@ -26,9 +27,24 @@ import {
   type OpenedFile,
   type ProjectSettings,
   type PluginManifest,
-  type LanguageServerResult
+  type LanguageServerResult,
+  type WorkspaceMatch,
+  type WorkspaceSymbol,
+  type LayoutKind,
+  type SessionLayout
 } from '../../shared/ipc.js'
 import './styles.css'
+
+interface EditorGroup {
+  id: number
+  root: HTMLElement
+  tabBar: HTMLElement
+  host: HTMLElement
+  editorArea: HTMLElement
+  editor: Editor
+  docIds: string[]
+  activeId: string | null
+}
 
 /**
  * The renderer application shell. Owns the list of open documents, the single
@@ -37,14 +53,17 @@ import './styles.css'
  * events forwarded from the main process.
  */
 class App {
-  private editor!: Editor
+  private primaryEditor!: Editor
   private tree: FileTree
   private palette = new Palette()
   private searchPanel: WorkspaceSearchPanel
+  private findResults: FindResultsView
   private buildPanel!: BuildPanel
   private preview!: MarkdownPreview
   private docs: Doc[] = []
-  private activeId: string | null = null
+  private groups: EditorGroup[] = []
+  private activeGroup = 0
+  private layoutKind: LayoutKind = 'single'
   private settings: Settings = { ...DEFAULT_SETTINGS }
   private folder: string | null = null
   private project: ProjectSettings = { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {} }
@@ -66,9 +85,14 @@ class App {
   private workspacePollTimer: number | null = null
   private conflictBar: HTMLDivElement | null = null
   private conflictDocId: string | null = null
+  private navigationBack: Array<{ path: string; line: number; column: number }> = []
+  private navigationForward: Array<{ path: string; line: number; column: number }> = []
+  private isNavigatingHistory = false
+  private projectSymbols: WorkspaceSymbol[] = []
+  private projectSymbolIndexAt = 0
 
   // Cached DOM references.
-  private tabBar = document.getElementById('tab-bar')!
+  private primaryTabBar = document.getElementById('tab-bar')!
   private workspaceName = document.getElementById('workspace-name')!
   private statusPosition = document.getElementById('status-position')!
   private statusSelection = document.getElementById('status-selection')!
@@ -76,12 +100,34 @@ class App {
   private statusEol = document.getElementById('status-eol')!
   private statusEncoding = document.getElementById('status-encoding')!
   private sidebar = document.getElementById('sidebar')!
-  private host = document.getElementById('editor-host')!
-  private splitHost: HTMLElement | null = null
-  private splitEditor: Editor | null = null
-  private editorArea = document.getElementById('editor-area')!
+  private primaryHost = document.getElementById('editor-host')!
+  private primaryEditorArea = document.getElementById('editor-area')!
+  private layoutRoot = document.getElementById('layout-root')!
+  private primaryGroupRoot = document.getElementById('editor-group-0')!
+  private findResultsHost = document.getElementById('find-results-host')!
   private browserBtn = document.getElementById('browser-btn') as HTMLButtonElement
   private previewBtn = document.getElementById('preview-btn') as HTMLButtonElement
+
+  private get editor(): Editor {
+    return this.groups[this.activeGroup]?.editor ?? this.primaryEditor
+  }
+
+  private get host(): HTMLElement {
+    return this.groups[this.activeGroup]?.host ?? this.primaryHost
+  }
+
+  private get editorArea(): HTMLElement {
+    return this.groups[this.activeGroup]?.editorArea ?? this.primaryEditorArea
+  }
+
+  private get activeId(): string | null {
+    return this.groups[this.activeGroup]?.activeId ?? null
+  }
+
+  private set activeId(value: string | null) {
+    const group = this.groups[this.activeGroup]
+    if (group) group.activeId = value
+  }
 
   constructor() {
     this.tree = new FileTree(document.getElementById('file-tree')!, {
@@ -102,8 +148,13 @@ class App {
       afterReplace: () => {
         void this.reloadWorkspaceTree()
         this.renderTabs()
-      }
+      },
+      onResults: (query, matches) => this.showFindResults(query, matches)
     })
+    this.findResults = new FindResultsView({
+      onOpenMatch: (match) => { void this.openWorkspaceMatch(match) }
+    })
+    this.findResultsHost.appendChild(this.findResults.root)
     this.createConflictBar()
     // The status-bar language field opens the syntax picker (like Sublime).
     this.statusLanguage.addEventListener('click', () => this.pickLanguage())
@@ -118,6 +169,7 @@ class App {
     this.bindShortcuts()
     window.editor.onFileChange((change) => {
       if (this.folder) void this.reloadWorkspaceTree()
+      this.projectSymbols = []
       void this.handleExternalFileChange(change.path)
     })
     window.editor.onOpenPathRequested((filePath) => {
@@ -137,16 +189,28 @@ class App {
       this.settings = { ...DEFAULT_SETTINGS }
     }
 
-    this.editor = new Editor(
-      this.host,
+    this.primaryEditor = new Editor(
+      this.primaryHost,
       {
         onDocChange: () => this.handleDocChange(),
         onCursorChange: (state) => this.updatePositionStatus(state)
       },
       this.settings
     )
+    this.groups = [{
+      id: 0,
+      root: this.primaryGroupRoot,
+      tabBar: this.primaryTabBar,
+      host: this.primaryHost,
+      editorArea: this.primaryEditorArea,
+      editor: this.primaryEditor,
+      docIds: [],
+      activeId: null
+    }]
+    this.primaryGroupRoot.classList.add('active')
+    this.primaryGroupRoot.addEventListener('mousedown', () => this.focusGroup(0))
 
-    this.preview = new MarkdownPreview(this.editorArea)
+    this.preview = new MarkdownPreview(this.primaryEditorArea)
     this.buildPanel = new BuildPanel(this.settings.buildCommand, (command) => { void this.runBuild(command) }, () => { void window.editor.cancelBuild() })
 
     try {
@@ -206,15 +270,28 @@ class App {
       }
     }
 
-    if (this.docs.length === 0) {
-      this.docs.push(createUntitled())
-    }
+    if (this.docs.length === 0) this.docs.push(createUntitled())
 
-    const idx =
-      session.activeIndex >= 0 && session.activeIndex < this.docs.length
-        ? session.activeIndex
-        : 0
-    await this.activate(this.docs[idx].id)
+    const layout = session.layout
+    if (layout && layout.groups.length > 0) {
+      this.setLayout(layout.kind)
+      for (const [groupIndex, savedGroup] of layout.groups.entries()) {
+        const group = this.groups[groupIndex]
+        if (!group) continue
+        group.docIds = savedGroup.docIndexes
+          .map((index) => this.docs[index]?.id)
+          .filter((id): id is string => !!id)
+        if (group.docIds.length === 0) group.docIds = [this.docs[0].id]
+        group.activeId = group.docIds[Math.max(0, Math.min(savedGroup.activeIndex, group.docIds.length - 1))]
+      }
+      this.activeGroup = Math.max(0, Math.min(layout.activeGroup, this.groups.length - 1))
+      await this.activate(this.groups[this.activeGroup].activeId ?? this.docs[0].id, this.activeGroup)
+    } else {
+      const first = this.groups[0]
+      first.docIds = this.docs.map((doc) => doc.id)
+      const idx = session.activeIndex >= 0 && session.activeIndex < this.docs.length ? session.activeIndex : 0
+      await this.activate(this.docs[idx].id, 0)
+    }
   }
 
   /** Subscribe to menu / accelerator events from the main process. */
@@ -233,6 +310,9 @@ class App {
     switch (event) {
       case 'new-file':
         this.addDoc(createUntitled())
+        break
+      case 'new-window':
+        void window.editor.newWindow()
         break
       case 'open-file':
         void this.openViaDialog()
@@ -270,8 +350,47 @@ class App {
       case 'replace-in-files':
         this.searchPanel.show(true)
         break
+      case 'find-results-next':
+        this.findResults.move(1)
+        break
+      case 'find-results-prev':
+        this.findResults.move(-1)
+        break
+      case 'goto-project-symbol':
+        void this.openProjectSymbol()
+        break
+      case 'navigate-back':
+        void this.navigateHistory(-1)
+        break
+      case 'navigate-forward':
+        void this.navigateHistory(1)
+        break
       case 'split-editor':
         this.toggleSplitEditor()
+        break
+      case 'layout-single':
+        this.setLayout('single')
+        break
+      case 'layout-columns2':
+        this.setLayout('columns2')
+        break
+      case 'layout-columns3':
+        this.setLayout('columns3')
+        break
+      case 'layout-grid4':
+        this.setLayout('grid4')
+        break
+      case 'move-file-next-group':
+        this.moveActiveToNextGroup(false)
+        break
+      case 'clone-file-next-group':
+        this.moveActiveToNextGroup(true)
+        break
+      case 'focus-next-group':
+        this.focusGroup((this.activeGroup + 1) % this.groups.length)
+        break
+      case 'focus-prev-group':
+        this.focusGroup((this.activeGroup - 1 + this.groups.length) % this.groups.length)
         break
       case 'toggle-bookmark':
         this.toggleBookmark()
@@ -404,9 +523,10 @@ class App {
       // Ctrl/Cmd+1..9 → jump to tab N.
       if (mod && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
         const idx = Number(e.key) - 1
-        if (idx < this.docs.length) {
+        const group = this.groups[this.activeGroup]
+        if (group && idx < group.docIds.length) {
           e.preventDefault()
-          void this.activate(this.docs[idx].id)
+          void this.activate(group.docIds[idx], this.activeGroup)
         }
       }
     })
@@ -427,10 +547,115 @@ class App {
     return COMMANDS.some((command) => command.id === value)
   }
 
-  /** Add a document, make it active and render the UI. */
+  /** Select a layout, create/destroy editor groups, and retain group-local tabs. */
+  private setLayout(kind: LayoutKind): void {
+    const count = kind === 'single' ? 1 : kind === 'columns2' ? 2 : kind === 'columns3' ? 3 : 4
+    const active = this.active
+    const currentGroup = this.groups[this.activeGroup]
+    if (currentGroup && active) {
+      active.content = currentGroup.editor.getContent()
+      active.editorState = currentGroup.editor.getState()
+    }
+
+    while (this.groups.length > count) {
+      const group = this.groups.pop()!
+      const destination = this.groups[0]
+      for (const id of group.docIds) {
+        if (!destination.docIds.includes(id)) destination.docIds.push(id)
+      }
+      if (!destination.activeId) destination.activeId = group.activeId
+      group.editor.view.destroy()
+      group.root.remove()
+    }
+    while (this.groups.length < count) this.groups.push(this.createEditorGroup(this.groups.length))
+
+    for (const group of this.groups) {
+      if (group.docIds.length === 0 && active) {
+        group.docIds.push(active.id)
+        group.activeId = active.id
+      }
+    }
+
+    this.layoutKind = kind
+    this.layoutRoot.className = `layout-root layout-${kind}`
+    this.activeGroup = Math.min(this.activeGroup, this.groups.length - 1)
+    this.focusGroup(this.activeGroup)
+    this.renderTabs()
+    this.scheduleSessionSave()
+  }
+
+  private createEditorGroup(id: number): EditorGroup {
+    const root = document.createElement('section')
+    root.className = 'editor-group'
+    root.dataset.groupId = String(id)
+    const tabBar = document.createElement('div')
+    tabBar.className = 'tab-bar'
+    const area = document.createElement('div')
+    area.className = 'editor-area'
+    const host = document.createElement('div')
+    host.className = 'editor-host'
+    area.appendChild(host)
+    root.append(tabBar, area)
+    this.layoutRoot.appendChild(root)
+
+    const group: EditorGroup = {
+      id,
+      root,
+      tabBar,
+      host,
+      editorArea: area,
+      editor: undefined as unknown as Editor,
+      docIds: [],
+      activeId: null
+    }
+    group.editor = new Editor(
+      host,
+      {
+        onDocChange: () => this.handleDocChange(id),
+        onCursorChange: (state) => {
+          if (this.activeGroup === id) this.updatePositionStatus(state)
+        }
+      },
+      this.settings
+    )
+    root.addEventListener('mousedown', () => this.focusGroup(id))
+    return group
+  }
+
+  private focusGroup(index: number): void {
+    const group = this.groups[index]
+    if (!group) return
+    const changed = this.activeGroup !== index
+    for (const candidate of this.groups) candidate.root.classList.toggle('active', candidate.id === index)
+    if (changed && group.activeId) void this.activate(group.activeId, index)
+  }
+
+  private moveActiveToNextGroup(clone: boolean): void {
+    if (this.groups.length < 2) {
+      this.setLayout('columns2')
+    }
+    const source = this.groups[this.activeGroup]
+    const doc = this.active
+    if (!source || !doc) return
+    const targetIndex = (this.activeGroup + 1) % this.groups.length
+    const target = this.groups[targetIndex]
+    if (!target.docIds.includes(doc.id)) target.docIds.push(doc.id)
+    target.activeId = doc.id
+    if (!clone) {
+      source.docIds = source.docIds.filter((id) => id !== doc.id)
+      if (source.activeId === doc.id) source.activeId = source.docIds[0] ?? null
+    }
+    this.focusGroup(targetIndex)
+    this.renderTabs()
+    this.scheduleSessionSave()
+  }
+
+  /** Add a document to the active editor group, then focus it. */
   private addDoc(doc: Doc): void {
     this.docs.push(doc)
-    void this.activate(doc.id)
+    const group = this.groups[this.activeGroup]
+    if (group && !group.docIds.includes(doc.id)) group.docIds.push(doc.id)
+    void this.activate(doc.id, this.activeGroup)
     this.scheduleSessionSave()
   }
 
@@ -439,23 +664,25 @@ class App {
     return this.docs.find((d) => d.id === this.activeId)
   }
 
-  /** Switch the active tab, syncing the editor content and status bar. */
-  private async activate(id: string): Promise<void> {
-    const current = this.active
-    if (current) {
-      current.content = this.editor.getContent()
-      current.editorState = this.editor.getState()
+  /** Switch a group to a document, preserving the previous group's editor state. */
+  private async activate(id: string, groupIndex = this.activeGroup): Promise<void> {
+    const previousGroup = this.groups[this.activeGroup]
+    const previousId = previousGroup?.activeId
+    const previous = previousId ? this.docs.find((doc) => doc.id === previousId) : undefined
+    if (previous && previousGroup) {
+      previous.content = previousGroup.editor.getContent()
+      previous.editorState = previousGroup.editor.getState()
     }
 
-    const doc = this.docs.find((d) => d.id === id)
-    if (!doc) return
-    this.activeId = id
+    const group = this.groups[groupIndex]
+    const doc = this.docs.find((candidate) => candidate.id === id)
+    if (!group || !doc) return
+    if (!group.docIds.includes(id)) group.docIds.push(id)
+    this.activeGroup = groupIndex
+    group.activeId = id
+    this.hideFindResults()
     const activation = ++this.languageActivation
-    this.editor.setDocument(doc.content, doc.editorState)
-    if (this.splitEditor) {
-      this.splitEditor.setDocument(doc.content)
-      void this.splitEditor.setLanguageByName(doc.language).catch(() => undefined)
-    }
+    group.editor.setDocument(doc.content, doc.editorState)
 
     // File-name based actions (HTML browser / Markdown preview) must appear
     // immediately. Language support is lazy-loaded and must not delay or block
@@ -464,20 +691,20 @@ class App {
 
     try {
       const language = !doc.languageLocked
-        ? await this.editor.setLanguageForFile(doc.name)
-        : await this.editor.setLanguageByName(doc.language)
+        ? await group.editor.setLanguageForFile(doc.name)
+        : await group.editor.setLanguageByName(doc.language)
       // A slow lazy language bundle can finish after the user moved to another
       // tab. Do not let that request overwrite the active editor configuration.
-      if (activation !== this.languageActivation || this.activeId !== id) return
+      if (activation !== this.languageActivation || this.activeGroup !== groupIndex || group.activeId !== id) return
       doc.language = language
-      doc.editorState = this.editor.getState()
+      doc.editorState = group.editor.getState()
     } catch (error) {
       console.error(`Failed to load syntax support for ${doc.name}:`, error)
     }
-    if (activation !== this.languageActivation || this.activeId !== id) return
+    if (activation !== this.languageActivation || this.activeGroup !== groupIndex || group.activeId !== id) return
     this.renderTabs()
     this.updateStatus()
-    this.editor.focus()
+    group.editor.focus()
     this.scheduleSessionSave()
     // Run again because a manually-selected HTML/Markdown language can reveal
     // an action even when the filename has no recognised extension.
@@ -485,13 +712,16 @@ class App {
   }
 
   /** Update the active doc's cached content and refresh the dirty indicator. */
-  private handleDocChange(): void {
-    const doc = this.active
+  private handleDocChange(groupIndex = this.activeGroup): void {
+    const group = this.groups[groupIndex]
+    const doc = group?.activeId ? this.docs.find((candidate) => candidate.id === group.activeId) : undefined
     if (!doc) return
-    doc.content = this.editor.getContent()
-    doc.editorState = this.editor.getState()
-    if (this.splitEditor && this.splitEditor.getContent() !== doc.content) {
-      this.splitEditor.replaceContent(doc.content)
+    doc.content = group.editor.getContent()
+    doc.editorState = group.editor.getState()
+    for (const sibling of this.groups) {
+      if (sibling.id !== groupIndex && sibling.activeId === doc.id && sibling.editor.getContent() !== doc.content) {
+        sibling.editor.replaceContent(doc.content)
+      }
     }
     this.renderTabs()
     // Live-update the markdown preview if it's showing this doc.
@@ -612,10 +842,11 @@ class App {
    */
   private syncEditorChrome(): void {
     const doc = this.active
-    const html = !!doc && (isHtml(doc.name) || doc.language === 'HTML')
-    const md = !!doc && this.isMarkdownDoc(doc)
+    const canShowChrome = this.activeGroup === 0
+    const html = canShowChrome && !!doc && (isHtml(doc.name) || doc.language === 'HTML')
+    const md = canShowChrome && !!doc && this.isMarkdownDoc(doc)
 
-    this.host.classList.toggle('has-minimap', this.settings.showMinimap)
+    this.primaryHost.classList.toggle('has-minimap', this.settings.showMinimap)
     this.setActionVisible(this.browserBtn, html)
     this.setActionVisible(this.previewBtn, md)
 
@@ -684,7 +915,9 @@ class App {
   private async openPath(path: string): Promise<void> {
     const existing = this.docs.find((d) => d.path === path)
     if (existing) {
-      void this.activate(existing.id)
+      const group = this.groups[this.activeGroup]
+      if (group && !group.docIds.includes(existing.id)) group.docIds.push(existing.id)
+      void this.activate(existing.id, this.activeGroup)
       return
     }
     try {
@@ -692,6 +925,104 @@ class App {
       this.openLoadedFile(file)
     } catch (error) {
       this.showError(`Could not open “${baseName(path)}”.`, error)
+    }
+  }
+
+  private currentLocation(): { path: string; line: number; column: number } | null {
+    const doc = this.active
+    if (!doc?.path) return null
+    const selection = this.editor.view.state.selection.main
+    const line = this.editor.view.state.doc.lineAt(selection.head)
+    return { path: doc.path, line: line.number, column: selection.head - line.from + 1 }
+  }
+
+  private recordNavigation(): void {
+    if (this.isNavigatingHistory) return
+    const current = this.currentLocation()
+    if (!current) return
+    const previous = this.navigationBack[this.navigationBack.length - 1]
+    if (!previous || previous.path !== current.path || previous.line !== current.line || previous.column !== current.column) {
+      this.navigationBack.push(current)
+      if (this.navigationBack.length > 100) this.navigationBack.shift()
+    }
+    this.navigationForward = []
+  }
+
+  private async openWorkspaceMatch(match: WorkspaceMatch): Promise<void> {
+    this.recordNavigation()
+    await this.openPath(match.path)
+    this.editor.gotoLineNumber(match.line)
+    const state = this.editor.view.state
+    const line = state.doc.line(Math.max(1, Math.min(state.doc.lines, match.line)))
+    this.editor.gotoPos(Math.min(line.to, line.from + match.column - 1))
+  }
+
+  private showFindResults(query: string, matches: WorkspaceMatch[]): void {
+    this.focusGroup(0)
+    this.findResults.setResults(query, matches)
+    this.findResults.show()
+    this.host.classList.add('hidden')
+  }
+
+  private hideFindResults(): void {
+    this.findResults.hide()
+    this.host.classList.remove('hidden')
+  }
+
+  private async openProjectSymbol(): Promise<void> {
+    if (!this.folder) {
+      this.showError('Open a folder before searching project symbols.')
+      return
+    }
+    if (this.projectSymbols.length === 0 || Date.now() - this.projectSymbolIndexAt > 30_000) {
+      try {
+        this.projectSymbols = (await window.editor.listWorkspaceSymbols(this.folder)).filter(
+          (symbol) => !this.isProjectExcluded(symbol.path)
+        )
+        this.projectSymbolIndexAt = Date.now()
+      } catch (error) {
+        this.showError('Project symbols could not be indexed.', error)
+        return
+      }
+    }
+    const symbols = this.projectSymbols
+    this.palette.open({
+      placeholder: 'Goto Symbol in Project',
+      onQuery: (query) => {
+        const source = query ? fuzzyFilter(query, symbols, (symbol) => `${symbol.label} ${symbol.path}`) : symbols.map((symbol) => ({ item: symbol }))
+        return source.slice(0, 500).map(({ item }) => ({
+          label: item.label,
+          detail: `${item.path}:${item.line}`,
+          value: item
+        }))
+      },
+      onAccept: (item) => {
+        const symbol = item.value as WorkspaceSymbol
+        void this.openWorkspaceMatch({
+          path: symbol.path,
+          line: symbol.line,
+          column: symbol.column,
+          lineText: '',
+          matchText: symbol.label
+        })
+      }
+    })
+  }
+
+  private async navigateHistory(direction: -1 | 1): Promise<void> {
+    const source = direction < 0 ? this.navigationBack : this.navigationForward
+    const target = source.pop()
+    if (!target) return
+    const current = this.currentLocation()
+    if (current) (direction < 0 ? this.navigationForward : this.navigationBack).push(current)
+    this.isNavigatingHistory = true
+    try {
+      await this.openPath(target.path)
+      const state = this.editor.view.state
+      const line = state.doc.line(Math.max(1, Math.min(state.doc.lines, target.line)))
+      this.editor.gotoPos(Math.min(line.to, line.from + target.column - 1))
+    } finally {
+      this.isNavigatingHistory = false
     }
   }
 
@@ -718,12 +1049,16 @@ class App {
   ): void {
     const existing = this.docs.find((d) => d.path === path)
     if (existing) {
-      void this.activate(existing.id)
+      const group = this.groups[this.activeGroup]
+      if (group && !group.docIds.includes(existing.id)) group.docIds.push(existing.id)
+      void this.activate(existing.id, this.activeGroup)
       return
     }
     // Replace a single pristine untitled buffer instead of stacking tabs.
     if (this.docs.length === 1 && this.docs[0].path === null && !isDirty(this.docs[0])) {
+      const replacement = this.docs[0].id
       this.docs = []
+      for (const group of this.groups) group.docIds = group.docIds.filter((id) => id !== replacement)
     }
     this.addDoc(createFromFile(path, content, encoding, eol))
   }
@@ -1023,17 +1358,32 @@ class App {
       const ok = confirm(`"${doc.name}" has unsaved changes. Close anyway?`)
       if (!ok) return
     }
-    if (doc.path) this.closedStack.push(doc.path)
+    this.closeDocFromGroup(doc.id, this.activeGroup, false)
+  }
 
-    const idx = this.docs.findIndex((d) => d.id === doc.id)
-    this.docs.splice(idx, 1)
+  private closeDocFromGroup(id: string, groupIndex: number, confirmClose = true): void {
+    const doc = this.docs.find((candidate) => candidate.id === id)
+    const group = this.groups[groupIndex]
+    if (!doc || !group) return
+    if (confirmClose && isDirty(doc) && !confirm(`"${doc.name}" has unsaved changes. Close anyway?`)) return
+    if (doc.path && !this.closedStack.includes(doc.path)) this.closedStack.push(doc.path)
 
+    const index = group.docIds.indexOf(id)
+    group.docIds = group.docIds.filter((docId) => docId !== id)
+    if (group.activeId === id) group.activeId = group.docIds[Math.max(0, Math.min(index, group.docIds.length - 1))] ?? null
+
+    const stillVisible = this.groups.some((candidate) => candidate.docIds.includes(id))
+    if (!stillVisible) this.docs = this.docs.filter((candidate) => candidate.id !== id)
     if (this.docs.length === 0) {
-      this.addDoc(createUntitled())
-      return
+      const fresh = createUntitled()
+      this.docs.push(fresh)
+      this.groups[0].docIds = [fresh.id]
+      this.groups[0].activeId = fresh.id
     }
-    const next = this.docs[Math.min(idx, this.docs.length - 1)]
-    void this.activate(next.id)
+    if (groupIndex === this.activeGroup) {
+      const next = group.activeId ?? this.docs[0].id
+      void this.activate(next, groupIndex)
+    }
     this.scheduleSessionSave()
   }
 
@@ -1046,12 +1396,13 @@ class App {
     if (this.docs.length > before || this.docs.some((doc) => doc.path === path)) this.closedStack.pop()
   }
 
-  /** Cycle to the next/previous tab, wrapping around. */
+  /** Cycle within the active group's tab order. */
   private cycleTab(delta: number): void {
-    if (this.docs.length < 2) return
-    const idx = this.docs.findIndex((d) => d.id === this.activeId)
-    const next = (idx + delta + this.docs.length) % this.docs.length
-    void this.activate(this.docs[next].id)
+    const group = this.groups[this.activeGroup]
+    if (!group || group.docIds.length < 2) return
+    const idx = group.docIds.indexOf(group.activeId ?? '')
+    const next = (idx + delta + group.docIds.length) % group.docIds.length
+    void this.activate(group.docIds[next], this.activeGroup)
   }
 
   /** Show or hide the sidebar. */
@@ -1059,47 +1410,9 @@ class App {
     this.sidebar.classList.toggle('hidden')
   }
 
-  /**
-   * Toggle a lightweight second editor view. It mirrors the active document
-   * live, providing a practical split reading/editing surface without creating
-   * a second document model that could diverge from the primary tab state.
-   */
+  /** Legacy split shortcut now toggles a proper two-column editor group layout. */
   private toggleSplitEditor(): void {
-    if (this.splitHost) {
-      this.splitEditor?.view.destroy()
-      this.splitHost.remove()
-      this.splitHost = null
-      this.splitEditor = null
-      return
-    }
-    const split = document.createElement('div')
-    split.className = 'editor-split-host'
-    this.editorArea.appendChild(split)
-    this.splitHost = split
-    this.splitEditor = new Editor(
-      split,
-      {
-        onDocChange: () => this.handleSplitDocChange(),
-        onCursorChange: () => undefined
-      },
-      this.settings
-    )
-    const doc = this.active
-    this.splitEditor.setDocument(this.editor.getContent())
-    if (doc) void this.splitEditor.setLanguageByName(doc.language).catch(() => undefined)
-  }
-
-  /** Keep both CodeMirror panes on the same active document without event loops. */
-  private handleSplitDocChange(): void {
-    const split = this.splitEditor
-    const doc = this.active
-    if (!split || !doc) return
-    const content = split.getContent()
-    if (this.editor.getContent() !== content) this.editor.replaceContent(content)
-    doc.content = content
-    doc.editorState = this.editor.getState()
-    this.renderTabs()
-    this.scheduleSessionSave()
+    this.setLayout(this.layoutKind === 'columns2' ? 'single' : 'columns2')
   }
 
   private toggleBookmark(): void {
@@ -1469,9 +1782,14 @@ class App {
    * path and are re-read from disk on restore.
    */
   private async persistSessionNow(): Promise<void> {
-    // Keep the active buffer's cached content current before snapshotting.
-    const current = this.active
-    if (current) current.content = this.editor.getContent()
+    // Keep all group-local active buffers current before snapshotting.
+    for (const group of this.groups) {
+      const doc = group.activeId ? this.docs.find((candidate) => candidate.id === group.activeId) : undefined
+      if (doc) {
+        doc.content = group.editor.getContent()
+        doc.editorState = group.editor.getState()
+      }
+    }
 
     const openFiles: SessionFile[] = this.docs
       // Drop pristine untitled buffers (no path, no content) — nothing to keep.
@@ -1489,15 +1807,22 @@ class App {
         }
       })
 
+    const indexForId = (id: string): number => {
+      const doc = this.docs.find((candidate) => candidate.id === id)
+      return doc ? openFiles.findIndex((file) => file.path === doc.path && file.name === doc.name) : -1
+    }
     const activeDoc = this.active
-    const activeIndex = activeDoc
-      ? Math.max(
-          0,
-          openFiles.findIndex((f) => f.path === activeDoc.path && f.name === activeDoc.name)
-        )
-      : 0
+    const activeIndex = activeDoc ? Math.max(0, indexForId(activeDoc.id)) : 0
+    const layout: SessionLayout = {
+      kind: this.layoutKind,
+      activeGroup: this.activeGroup,
+      groups: this.groups.map((group) => ({
+        docIndexes: group.docIds.map(indexForId).filter((index) => index >= 0),
+        activeIndex: Math.max(0, group.docIds.indexOf(group.activeId ?? ''))
+      }))
+    }
 
-    const session: Session = { openFiles, activeIndex, folder: this.folder }
+    const session: Session = { openFiles, activeIndex, folder: this.folder, layout }
     try {
       await window.editor.writeSession(session)
     } catch (error) {
@@ -1507,33 +1832,37 @@ class App {
 
   // ---- Rendering ----
 
-  /** Rebuild the tab bar DOM from the current document list. */
+  /** Rebuild each editor group's tab bar from its independent tab order. */
   private renderTabs(): void {
-    this.tabBar.replaceChildren()
-    for (const doc of this.docs) {
-      const tab = document.createElement('div')
-      tab.className = 'tab' + (doc.id === this.activeId ? ' active' : '')
+    for (const group of this.groups) {
+      group.tabBar.replaceChildren()
+      for (const id of group.docIds) {
+        const doc = this.docs.find((candidate) => candidate.id === id)
+        if (!doc) continue
+        const tab = document.createElement('div')
+        tab.className = 'tab' + (doc.id === group.activeId ? ' active' : '')
 
-      const dot = document.createElement('span')
-      dot.className = 'tab-dirty'
-      dot.textContent = doc.externalChange ? '!' : isDirty(doc) ? '●' : ''
-      dot.title = doc.externalChange ? 'Changed on disk' : isDirty(doc) ? 'Unsaved changes' : ''
+        const dot = document.createElement('span')
+        dot.className = 'tab-dirty'
+        dot.textContent = doc.externalChange ? '!' : isDirty(doc) ? '●' : ''
+        dot.title = doc.externalChange ? 'Changed on disk' : isDirty(doc) ? 'Unsaved changes' : ''
 
-      const label = document.createElement('span')
-      label.className = 'tab-label'
-      label.textContent = doc.name
+        const label = document.createElement('span')
+        label.className = 'tab-label'
+        label.textContent = doc.name
 
-      const close = document.createElement('span')
-      close.className = 'tab-close'
-      close.textContent = '×'
-      close.addEventListener('click', (e) => {
-        e.stopPropagation()
-        this.closeActive(doc.id)
-      })
+        const close = document.createElement('span')
+        close.className = 'tab-close'
+        close.textContent = '×'
+        close.addEventListener('click', (e) => {
+          e.stopPropagation()
+          this.closeDocFromGroup(doc.id, group.id)
+        })
 
-      tab.append(dot, label, close)
-      tab.addEventListener('click', () => void this.activate(doc.id))
-      this.tabBar.appendChild(tab)
+        tab.append(dot, label, close)
+        tab.addEventListener('click', () => void this.activate(doc.id, group.id))
+        group.tabBar.appendChild(tab)
+      }
     }
   }
 

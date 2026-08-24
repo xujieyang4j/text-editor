@@ -28,12 +28,17 @@ export const COMMANDS: Command[] = [
 
   { id: 'goto-anything', title: 'Goto: Goto Anything…', hint: 'Ctrl/Cmd+P' },
   { id: 'goto-symbol', title: 'Goto: Goto Symbol…', hint: 'Ctrl/Cmd+R' },
+  { id: 'goto-project-symbol', title: 'Goto: Goto Symbol in Project…', hint: 'Ctrl/Cmd+Shift+R' },
   { id: 'go-to-line', title: 'Goto: Goto Line…', hint: 'Ctrl/Cmd+G' },
+  { id: 'navigate-back', title: 'Goto: Back', hint: 'Alt+Left' },
+  { id: 'navigate-forward', title: 'Goto: Forward', hint: 'Alt+Right' },
 
   { id: 'find', title: 'Find: Find…', hint: 'Ctrl/Cmd+F' },
   { id: 'replace', title: 'Find: Replace…', hint: 'Ctrl/Cmd+H' },
   { id: 'find-in-files', title: 'Find: Find in Files…', hint: 'Ctrl/Cmd+Shift+F' },
   { id: 'replace-in-files', title: 'Find: Replace in Files…', hint: 'Ctrl/Cmd+Shift+H' },
+  { id: 'find-results-next', title: 'Find: Next Result', hint: 'F4' },
+  { id: 'find-results-prev', title: 'Find: Previous Result', hint: 'Shift+F4' },
 
   { id: 'toggle-comment', title: 'Edit: Toggle Comment', hint: 'Ctrl/Cmd+/' },
   { id: 'move-line-up', title: 'Edit: Move Line Up', hint: 'Alt+Up' },
@@ -70,5 +75,14 @@ export const COMMANDS: Command[] = [
   { id: 'manage-plugins', title: 'Tools: Manage Plugins…' },
 
   { id: 'next-tab', title: 'Go: Next Tab', hint: 'Ctrl/Cmd+Alt+Right' },
-  { id: 'prev-tab', title: 'Go: Previous Tab', hint: 'Ctrl/Cmd+Alt+Left' }
+  { id: 'prev-tab', title: 'Go: Previous Tab', hint: 'Ctrl/Cmd+Alt+Left' },
+  { id: 'layout-single', title: 'View: Layout Single' },
+  { id: 'layout-columns2', title: 'View: Layout Columns 2' },
+  { id: 'layout-columns3', title: 'View: Layout Columns 3' },
+  { id: 'layout-grid4', title: 'View: Layout Grid 4' },
+  { id: 'move-file-next-group', title: 'View: Move File to Next Group' },
+  { id: 'clone-file-next-group', title: 'View: Clone File to Next Group' },
+  { id: 'focus-next-group', title: 'View: Focus Next Group', hint: 'Ctrl/Cmd+Alt+]' },
+  { id: 'focus-prev-group', title: 'View: Focus Previous Group', hint: 'Ctrl/Cmd+Alt+[' },
+  { id: 'new-window', title: 'File: New Window' }
 ]

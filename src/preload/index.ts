@@ -14,6 +14,7 @@ import {
   type WorkspaceSearchRequest,
   type WorkspaceReplaceRequest,
   type WorkspaceReplaceResult,
+  type WorkspaceSymbol,
   type FileChangeEvent,
   type BuildRequest,
   type BuildOutput,
@@ -87,6 +88,9 @@ const api = {
   replaceWorkspace: (request: WorkspaceReplaceRequest): Promise<WorkspaceReplaceResult> =>
     ipcRenderer.invoke(IPC.workspaceReplace, request),
 
+  listWorkspaceSymbols: (root: string): Promise<WorkspaceSymbol[]> =>
+    ipcRenderer.invoke(IPC.workspaceSymbols, root),
+
   createPath: (target: string, isDirectory: boolean): Promise<DirEntry> =>
     ipcRenderer.invoke(IPC.fileCreate, target, isDirectory),
 
@@ -139,6 +143,8 @@ const api = {
     ipcRenderer.on(IPC.openPathRequested, listener)
     return () => ipcRenderer.removeListener(IPC.openPathRequested, listener)
   },
+
+  newWindow: (): Promise<void> => ipcRenderer.invoke(IPC.appNewWindow),
 
   /** Subscribe to menu / accelerator events. Returns an unsubscribe fn. */
   onMenu: (handler: (event: MenuEvent) => void): (() => void) => {

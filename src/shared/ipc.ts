@@ -22,6 +22,7 @@ export const IPC = {
   openExternal: 'shell:open-external',
   workspaceSearch: 'workspace:search',
   workspaceReplace: 'workspace:replace',
+  workspaceSymbols: 'workspace:symbols',
   fileCreate: 'file:create',
   fileRename: 'file:rename',
   fileDelete: 'file:delete',
@@ -38,6 +39,7 @@ export const IPC = {
   languageToolRun: 'language-tool:run',
   languageServerRun: 'language-server:run',
   openPathRequested: 'app:open-path-requested',
+  appNewWindow: 'app:new-window',
   // main -> renderer notifications (menu / accelerator driven)
   menuEvent: 'menu:event'
 } as const
@@ -116,6 +118,14 @@ export interface WorkspaceReplaceRequest extends WorkspaceSearchRequest {
 export interface WorkspaceReplaceResult {
   files: number
   replacements: number
+}
+
+/** Lightweight project-wide symbol entry, suitable for fast navigation. */
+export interface WorkspaceSymbol {
+  path: string
+  label: string
+  line: number
+  column: number
 }
 
 export interface FileChangeEvent {
@@ -237,6 +247,16 @@ export interface Session {
   folder: string | null
   /** User-created project settings live alongside the workspace session. */
   project?: ProjectSettings
+  /** Saved pane arrangement and group-local tab order. */
+  layout?: SessionLayout
+}
+
+export type LayoutKind = 'single' | 'columns2' | 'columns3' | 'grid4'
+
+export interface SessionLayout {
+  kind: LayoutKind
+  activeGroup: number
+  groups: Array<{ docIndexes: number[]; activeIndex: number }>
 }
 
 /** Project settings intentionally kept small and portable in session.json for now. */
@@ -305,7 +325,8 @@ export const EMPTY_SESSION: Session = {
   openFiles: [],
   activeIndex: 0,
   folder: null,
-  project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {} }
+  project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {} },
+  layout: { kind: 'single', activeGroup: 0, groups: [{ docIndexes: [], activeIndex: 0 }] }
 }
 
 /**
@@ -348,6 +369,20 @@ export type MenuEvent =
   | 'open-in-browser'
   | 'find-in-files'
   | 'replace-in-files'
+  | 'find-results-next'
+  | 'find-results-prev'
+  | 'goto-project-symbol'
+  | 'navigate-back'
+  | 'navigate-forward'
+  | 'layout-single'
+  | 'layout-columns2'
+  | 'layout-columns3'
+  | 'layout-grid4'
+  | 'move-file-next-group'
+  | 'clone-file-next-group'
+  | 'focus-next-group'
+  | 'focus-prev-group'
+  | 'new-window'
   | 'split-editor'
   | 'toggle-bookmark'
   | 'next-bookmark'

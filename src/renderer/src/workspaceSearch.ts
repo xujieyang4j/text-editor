@@ -7,6 +7,7 @@ export interface WorkspaceSearchCallbacks {
   openMatch: (match: WorkspaceMatch) => void
   notify: (message: string, error?: unknown) => void
   afterReplace: () => void
+  onResults: (query: string, matches: WorkspaceMatch[]) => void
 }
 
 /**
@@ -152,6 +153,8 @@ export class WorkspaceSearchPanel {
       const matches = await window.editor.searchWorkspace(request)
       if (token !== this.searchToken) return
       this.renderResults(matches)
+      this.callbacks.onResults(request.query, matches)
+      this.hide()
     } catch (error) {
       if (token === this.searchToken) this.callbacks.notify('Find in Files could not complete.', error)
     }

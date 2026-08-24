@@ -145,6 +145,50 @@ body {
   overflow: hidden;
 }
 
+/* ---------- Editor groups / layouts ---------- */
+.layout-root {
+  flex: 1;
+  display: grid;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.layout-root.layout-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layout-root.layout-columns2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.layout-root.layout-columns3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.layout-root.layout-grid4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.editor-group {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-group.active {
+  outline: 1px solid rgba(14, 99, 156, 0.9);
+  outline-offset: -1px;
+}
+
+.editor-group .editor-area {
+  flex: 1;
+}
+
 /* ---------- Tab bar ---------- */
 .tab-bar {
   display: flex;
@@ -205,6 +249,68 @@ body {
   display: flex;
   overflow: hidden;
   position: relative;
+}
+
+.editor-host.hidden,
+.editor-split-host.hidden,
+.find-results-view.hidden {
+  display: none;
+}
+
+/* ---------- Persistent Find Results ---------- */
+.find-results-host {
+  display: contents;
+}
+
+.find-results-view {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: var(--bg);
+  font-family: var(--font-mono);
+}
+
+.find-results-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+.find-results-list {
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.find-results-file {
+  margin-top: 8px;
+  padding: 5px 12px;
+  color: #75beff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.find-results-match {
+  padding: 3px 12px;
+  cursor: pointer;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.find-results-match:hover,
+.find-results-match.active {
+  background: var(--accent);
+  color: var(--accent-text);
 }
 
 /* ---------- External file-change conflict ---------- */
