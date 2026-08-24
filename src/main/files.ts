@@ -13,6 +13,7 @@ import {
   DEFAULT_SETTINGS,
   EMPTY_SESSION,
   type OpenedFile,
+  type DroppedPaths,
   type SaveResult,
   type OpenedFolder,
   type DirEntry,
@@ -1753,6 +1754,40 @@ export function registerFileHandlers(): void {
     assertGrantedFile(event, filePath)
     await rememberRecentFile(filePath)
     return readFile(filePath)
+  })
+
+  ipcMain.handle(IPC.dropOpen, async (event, candidates: unknown): Promise<DroppedPaths> => {
+    assertTrustedSender(event)
+    if (!Array.isArray(candidates) || candidates.length === 0 || candidates.length > 32) {
+      throw new Error('Drop up to 32 local files or folders at a time.')
+    }
+    const unique = [...new Set(candidates)]
+    if (unique.some((candidate) => typeof candidate !== 'string' || !path.isAbsolute(candidate))) {
+      throw new Error('Invalid dropped path.')
+    }
+    const files: OpenedFile[] = []
+    const folders: OpenedFolder[] = []
+    let rejected = 0
+    for (const candidate of unique) {
+      try {
+        const stat = await fs.stat(candidate)
+        if (stat.isFile()) {
+          grantFile(event.sender.id, candidate)
+          await rememberRecentFile(candidate)
+          files.push(await readFile(candidate))
+        } else if (stat.isDirectory()) {
+          grantRoot(event.sender.id, candidate)
+          folders.push({ root: candidate, entries: await readDirectory(candidate) })
+        } else {
+          rejected += 1
+        }
+      } catch {
+        // Drag operations can race with an external move/delete. Skip only the
+        // failed entry so valid items in the same drop still open.
+        rejected += 1
+      }
+    }
+    return { files, folders, rejected }
   })
 
   ipcMain.handle(IPC.folderOpen, async (event): Promise<OpenedFolder | null> => {

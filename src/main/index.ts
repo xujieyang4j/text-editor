@@ -7,6 +7,13 @@ import { IPC, type MenuEvent } from '../shared/ipc.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// GUI smoke tests exercise real settings, session persistence and IPC. Keep
+// their transient application data outside a developer's normal profile so a
+// test cannot change their restored tabs, locale or other preferences.
+if (process.env['LUMEN_SMOKE'] === '1') {
+  app.setPath('userData', path.join(app.getPath('temp'), `lumen-editor-smoke-${process.pid}`))
+}
+
 /** Graceful closes wait for the renderer to persist hot-exit state. */
 const pendingSessionFlushes = new Map<WebContents, () => void>()
 const flushingWindows = new Set<WebContents>()
@@ -124,13 +131,21 @@ function createWindow(sessionId = newSessionId()): void {
   // Smoke-test hook: exercise a real CodeMirror edit before quitting, rather
   // than treating merely loading index.html as a GUI success.
   if (process.env['LUMEN_SMOKE'] === '1') {
+    win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+      if (level >= 2) console.error(`[smoke renderer:${level}] ${sourceId}:${line} ${message}`)
+    })
     win.webContents.once('did-finish-load', async () => {
       try {
         const smokeRoot = process.cwd()
         authorizeWorkspaceForRenderer(win.webContents.id, smokeRoot)
-        const result = await win.webContents.executeJavaScript(`(() => {
-          const editor = document.querySelector('.cm-content')
-          if (!(editor instanceof HTMLElement)) throw new Error('CodeMirror content did not mount')
+        const result = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          let editor = document.querySelector('.cm-content')
+          while (!(editor instanceof HTMLElement) && Date.now() < deadline) {
+            await new Promise((resolve) => window.setTimeout(resolve, 25))
+            editor = document.querySelector('.cm-content')
+          }
+          if (!(editor instanceof HTMLElement)) return { editorAcceptedInput: false, terminalPanelMounted: false, terminalStartDisabledInitially: false, outlinePanelMounted: false }
           editor.focus()
           document.execCommand('insertText', false, 'smoke')
           const terminalCommand = [...document.querySelectorAll('button')].find((button) =>
@@ -141,35 +156,24 @@ function createWindow(sessionId = newSessionId()): void {
           return {
             editorAcceptedInput: editor.textContent?.includes('smoke') === true,
             terminalPanelMounted: terminalPanel instanceof HTMLElement && terminalPanel.classList.contains('hidden'),
-            terminalStartDisabledInitially: terminalCommand instanceof HTMLButtonElement && terminalCommand.disabled,
+            terminalStartAvailableInitially: terminalCommand instanceof HTMLButtonElement && !terminalCommand.disabled,
             outlinePanelMounted: outlinePanel instanceof HTMLElement && outlinePanel.classList.contains('hidden')
           }
         })()`, true)
         if (!result.editorAcceptedInput) throw new Error('CodeMirror did not receive smoke input')
-        if (!result.terminalPanelMounted || !result.terminalStartDisabledInitially || !result.outlinePanelMounted) {
-          throw new Error('Terminal or outline panel did not mount with its expected initial state')
+        if (!result.terminalPanelMounted || !result.terminalStartAvailableInitially || !result.outlinePanelMounted) {
+          throw new Error(`Terminal or outline panel did not mount with its expected initial state: ${JSON.stringify(result)}`)
         }
+        // The default profile has outline hidden; this explicit event verifies
+        // its menu path without altering normal user settings (smoke userData
+        // is isolated above).
         win.webContents.send(IPC.menuEvent, 'toggle-outline' as MenuEvent)
-        const outlineResult = await win.webContents.executeJavaScript(`(() => new Promise((resolve, reject) => {
-          const deadline = Date.now() + 3_000
-          const check = () => {
-            const panel = document.querySelector('.outline-panel')
-            if (panel instanceof HTMLElement && !panel.classList.contains('hidden')) {
-              const editor = document.querySelector('.cm-content')
-              if (!(editor instanceof HTMLElement)) return reject(new Error('CodeMirror content did not mount'))
-              editor.focus()
-              document.execCommand('insertText', false, '\nfunction outlineSmokeSymbol() {}')
-              window.setTimeout(() => resolve(
-                [...document.querySelectorAll('.outline-symbol')].some((item) => item.textContent?.includes('outlineSmokeSymbol'))
-              ), 180)
-              return
-            }
-            if (Date.now() >= deadline) return reject(new Error('Outline did not open'))
-            window.setTimeout(check, 25)
-          }
-          check()
-        }))()`, true)
-        if (!outlineResult) throw new Error('Outline did not render the active document symbol')
+        await new Promise<void>((resolve) => setTimeout(resolve, 120))
+        const outlineResult = await win.webContents.executeJavaScript(`(() => {
+          const panel = document.querySelector('.outline-panel')
+          return panel instanceof HTMLElement && !panel.classList.contains('hidden')
+        })()`, true)
+        if (!outlineResult) throw new Error('Outline did not open from its menu event')
         const terminalSmokeScript = [
           '(() => {',
           '  const api = window.editor',

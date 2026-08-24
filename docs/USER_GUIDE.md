@@ -102,6 +102,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 | New file | `Ctrl/Cmd+N` |
 | Open file | `Ctrl/Cmd+O` |
 | Open folder (workspace) | `Ctrl/Cmd+Shift+O` — populates the sidebar |
+| Drag files/folders into the window | files open as tabs; the first folder replaces the workspace and later folders are added as roots |
 | Save | `Ctrl/Cmd+S` (untitled files prompt for a path) |
 | Save As | `Ctrl/Cmd+Shift+S` |
 | Close tab | `Ctrl/Cmd+W` (prompts if there are unsaved changes) |

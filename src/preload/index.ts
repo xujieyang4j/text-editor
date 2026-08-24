@@ -1,7 +1,8 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   IPC,
   type OpenedFile,
+  type DroppedPaths,
   type SaveResult,
   type OpenedFolder,
   type DirEntry,
@@ -61,6 +62,12 @@ const api = {
   /** Read a file by absolute path (e.g. from the file tree). */
   openPath: (filePath: string): Promise<OpenedFile> =>
     ipcRenderer.invoke(IPC.fileOpenPath, filePath),
+
+  /** Resolve OS-backed drag files here; the renderer never receives Node APIs. */
+  openDroppedFiles: (files: File[]): Promise<DroppedPaths> => {
+    const paths = files.slice(0, 32).map((file) => webUtils.getPathForFile(file)).filter(Boolean)
+    return ipcRenderer.invoke(IPC.dropOpen, paths)
+  },
 
   /** Show the open-folder dialog. Resolves null if the user cancels. */
   openFolder: (): Promise<OpenedFolder | null> => ipcRenderer.invoke(IPC.folderOpen),

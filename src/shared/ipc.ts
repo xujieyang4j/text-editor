@@ -8,6 +8,7 @@ export const IPC = {
   fileNew: 'file:new',
   fileOpen: 'file:open',
   fileOpenPath: 'file:open-path',
+  dropOpen: 'file:drop-open',
   folderOpen: 'folder:open',
   fileSave: 'file:save',
   fileSaveAs: 'file:save-as',
@@ -363,6 +364,13 @@ export interface OpenedFolder {
   root: string
   /** Top-level entries of the folder. */
   entries: DirEntry[]
+}
+
+/** Validated result of dragging local operating-system files or folders into the app. */
+export interface DroppedPaths {
+  files: OpenedFile[]
+  folders: OpenedFolder[]
+  rejected: number
 }
 
 export interface RecentProject {

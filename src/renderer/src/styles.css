@@ -75,6 +75,30 @@ body {
   width: 100vw;
 }
 
+body::after {
+  position: fixed;
+  z-index: 2000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  inset: 10px;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  color: var(--text);
+  content: '拖入文件或文件夹以打开';
+  font: 15px var(--font-ui);
+  pointer-events: none;
+}
+
+body.file-drop-active::after {
+  display: flex;
+}
+
+:root[lang='en-US'] body::after {
+  content: 'Drop files or folders to open';
+}
+
 body.distraction-free #sidebar,
 body.distraction-free #status-bar,
 body.distraction-free .tab-bar {

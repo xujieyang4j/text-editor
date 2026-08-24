@@ -156,6 +156,7 @@ class App {
   /** Ctrl/Cmd-click tab selection mirrors Sublime's tab multi-select. */
   private selectedTabIds = new Set<string>()
   private sidebarVisibleBeforeDistractionFree = false
+  private dragDepth = 0
 
   // Cached DOM references.
   private primaryTabBar = document.getElementById('tab-bar')!
@@ -278,6 +279,7 @@ class App {
 
     this.bindMenu()
     this.bindShortcuts()
+    this.bindFileDrop()
     window.addEventListener('blur', () => {
       if (this.settings.autoSave === 'on_focus_change') void this.autoSaveDirtyDocuments()
     })
@@ -447,6 +449,40 @@ class App {
   /** Subscribe to menu / accelerator events from the main process. */
   private bindMenu(): void {
     window.editor.onMenu((event) => this.run(event))
+  }
+
+  /**
+   * Accept only operating-system file drops. Path extraction is deliberately
+   * confined to preload, then main validates and grants each path before any
+   * content reaches this renderer.
+   */
+  private bindFileDrop(): void {
+    const isLocalFileDrop = (event: DragEvent): boolean => Array.from(event.dataTransfer?.types ?? []).includes('Files')
+    window.addEventListener('dragenter', (event) => {
+      if (!isLocalFileDrop(event)) return
+      event.preventDefault()
+      this.dragDepth += 1
+      document.body.classList.add('file-drop-active')
+    })
+    window.addEventListener('dragover', (event) => {
+      if (!isLocalFileDrop(event)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    })
+    window.addEventListener('dragleave', (event) => {
+      if (!isLocalFileDrop(event)) return
+      event.preventDefault()
+      this.dragDepth = Math.max(0, this.dragDepth - 1)
+      if (this.dragDepth === 0) document.body.classList.remove('file-drop-active')
+    })
+    window.addEventListener('drop', (event) => {
+      if (!isLocalFileDrop(event)) return
+      event.preventDefault()
+      this.dragDepth = 0
+      document.body.classList.remove('file-drop-active')
+      const files = Array.from(event.dataTransfer?.files ?? [])
+      if (files.length > 0) void this.openDroppedFiles(files)
+    })
   }
 
   /**
@@ -1945,23 +1981,49 @@ class App {
     try {
       const folder = await window.editor.openFolder()
       if (!folder) return
-      this.folder = folder.root
-      this.folders = [folder.root]
-      await this.loadProject(folder.root)
-      this.workspaceName.textContent = baseName(folder.root).toUpperCase()
-      await this.renderProjectRoots()
-      if (!this.settings.distractionFree) this.sidebar.classList.remove('hidden')
-      void window.editor.watchWorkspace(folder.root)
-      void window.editor.addRecentProject(folder.root)
-      this.projectSymbols = []
-      this.workspaceWords = []
-      this.statusSelection.textContent = this.settings.locale === 'zh-CN'
-        ? `已打开文件夹：${folder.root}`
-        : `Opened folder: ${folder.root}`
-      this.scheduleSessionSave()
+      await this.replaceWorkspaceFolders(folder.root)
     } catch (error) {
       this.showError('The selected folder could not be opened.', error)
     }
+  }
+
+  /** Open a dropped directory as the primary workspace; extra dropped dirs become roots. */
+  private async openDroppedFiles(files: File[]): Promise<void> {
+    try {
+      const dropped = await window.editor.openDroppedFiles(files)
+      if (dropped.folders.length > 0) {
+        await this.replaceWorkspaceFolders(dropped.folders[0].root)
+        for (const folder of dropped.folders.slice(1)) await this.addFolderPath(folder.root)
+      }
+      for (const file of dropped.files) this.openLoadedFile(file)
+      const opened = dropped.files.length + dropped.folders.length
+      if (opened > 0) {
+        this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+          ? `已打开 ${opened} 个拖入项目${dropped.rejected > 0 ? `，跳过 ${dropped.rejected} 个无效项目` : ''}`
+          : `Opened ${opened} dropped item${opened === 1 ? '' : 's'}${dropped.rejected > 0 ? `; skipped ${dropped.rejected}` : ''}`
+      } else {
+        this.showError(this.settings.locale === 'zh-CN' ? '未能打开拖入的项目。' : 'No dropped items could be opened.')
+      }
+    } catch (error) {
+      this.showError(this.settings.locale === 'zh-CN' ? '拖入的文件或文件夹无法打开。' : 'The dropped files or folders could not be opened.', error)
+    }
+  }
+
+  private async replaceWorkspaceFolders(root: string): Promise<void> {
+    this.folder = root
+    this.folders = [root]
+    await this.loadProject(root)
+    this.workspaceName.textContent = baseName(root).toUpperCase()
+    await this.renderProjectRoots()
+    if (!this.settings.distractionFree) this.sidebar.classList.remove('hidden')
+    void window.editor.watchWorkspace(root)
+    void window.editor.addRecentProject(root)
+    this.projectSymbols = []
+    this.workspaceWords = []
+    this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+      ? `已打开文件夹：${root}`
+      : `Opened folder: ${root}`
+    this.scheduleSessionSave()
   }
 
   /** Add a folder to the active project without discarding its existing roots. */
