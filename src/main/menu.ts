@@ -230,6 +230,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
       submenu: [
         item('Import Sublime Project…', 'import-sublime-project'),
         item('Add Folder to Project…', 'add-folder-to-project'),
+        item('Remove Folder from Project…', 'remove-folder-from-project'),
         item('Open Recent Project…', 'open-recent-project'),
         item('Configure Project…', 'project-settings')
       ]

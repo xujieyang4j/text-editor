@@ -185,6 +185,41 @@ function closeWorkspaceWatchers(senderId: number): void {
   workspaceWatchers.delete(senderId)
 }
 
+function closeWorkspaceWatcher(senderId: number, root: string): void {
+  const watchers = workspaceWatchers.get(senderId)
+  if (!watchers) return
+  const resolved = path.resolve(root)
+  watchers.get(resolved)?.close()
+  watchers.delete(resolved)
+  if (watchers.size === 0) workspaceWatchers.delete(senderId)
+}
+
+/** Drop a recursive workspace grant but preserve direct grants for open tabs. */
+function releaseWorkspaceRoot(event: IpcMainInvokeEvent, root: string, retainFiles: unknown): void {
+  const resolvedRoot = path.resolve(root)
+  const senderId = event.sender.id
+  const roots = grantedRoots.get(senderId)
+  if (!roots?.has(resolvedRoot)) throw new Error('This workspace has not been authorised for the current editor window.')
+  if (!Array.isArray(retainFiles) || retainFiles.length > 100) throw new Error('Invalid retained workspace files.')
+  // A workspace grant may previously have made files in this root accessible
+  // through a direct OS dialog or a restored session. Once the root is removed,
+  // retain *only* the tabs explicitly named by the renderer.
+  const directFiles = grantedFiles.get(senderId)
+  if (directFiles) {
+    for (const file of directFiles) if (isInside(resolvedRoot, file)) directFiles.delete(file)
+    if (directFiles.size === 0) grantedFiles.delete(senderId)
+  }
+  for (const file of retainFiles) {
+    if (typeof file !== 'string' || !path.isAbsolute(file) || !isInside(resolvedRoot, path.resolve(file))) {
+      throw new Error('A retained file is outside the workspace being removed.')
+    }
+    grantFile(senderId, file)
+  }
+  closeWorkspaceWatcher(senderId, resolvedRoot)
+  roots.delete(resolvedRoot)
+  if (roots.size === 0) grantedRoots.delete(senderId)
+}
+
 /**
  * Stop a shell we started, including its POSIX process group where possible.
  * A normal child.kill() can otherwise leave a build started from the shell
@@ -1812,6 +1847,12 @@ export function registerFileHandlers(): void {
     assertAbsolutePath(root, 'workspace root')
     assertGrantedRoot(event, root)
     return listFilesRecursive(root)
+  })
+
+  ipcMain.handle(IPC.workspaceRelease, async (event, root: unknown, retainFiles: unknown): Promise<void> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    releaseWorkspaceRoot(event, root, retainFiles)
   })
 
   ipcMain.handle(IPC.openInBrowser, async (event, request: BrowserOpenRequest): Promise<boolean> => {

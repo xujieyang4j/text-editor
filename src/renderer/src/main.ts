@@ -515,6 +515,9 @@ class App {
       case 'add-folder-to-project':
         void this.addFolderToProject()
         break
+      case 'remove-folder-from-project':
+        void this.removeFolderFromProject()
+        break
       case 'open-recent-project':
         void this.openRecentProject()
         break
@@ -2072,6 +2075,73 @@ class App {
   private async addFolderToProject(): Promise<void> {
     const folder = await window.editor.openFolder()
     if (folder) await this.addFolderPath(folder.root)
+  }
+
+  /** Remove one root while preserving direct access to tabs already open from it. */
+  private async removeFolderFromProject(): Promise<void> {
+    if (this.folders.length === 0) {
+      this.showError(this.settings.locale === 'zh-CN' ? '当前没有可移除的项目文件夹。' : 'There is no project folder to remove.')
+      return
+    }
+    this.palette.open({
+      placeholder: this.settings.locale === 'zh-CN' ? '选择要从项目移除的文件夹…' : 'Select a folder to remove from the project…',
+      items: this.folders.map((root) => ({ label: baseName(root), detail: root, value: root })),
+      onAccept: (item) => { void this.releaseWorkspaceFolder(item.value as string) }
+    })
+  }
+
+  private async releaseWorkspaceFolder(root: string): Promise<void> {
+    if (!this.folders.includes(root)) return
+    const isPrimary = root === this.folder
+    const title = this.settings.locale === 'zh-CN' ? '从项目移除文件夹？' : 'Remove folder from project?'
+    const detail = this.settings.locale === 'zh-CN'
+      ? `将移除：${root}\n\n已打开的文件标签会保留，但该文件夹不再参与文件树、搜索、符号索引、构建、Git 或终端。`
+      : `Remove: ${root}\n\nOpen file tabs will remain, but this folder will no longer participate in the file tree, search, symbol index, build, Git, or terminal.`
+    if (!window.confirm(`${title}\n\n${detail}`)) return
+
+    const retainedFiles = this.docs
+      .map((doc) => doc.path)
+      .filter((path): path is string => !!path && (path === root || path.startsWith(`${root}/`) || path.startsWith(`${root}\\`)))
+    try {
+      if (isPrimary) await this.stopTerminal()
+      for (const config of Object.values(this.project.languageServers)) {
+        await window.editor.stopLanguageServer(root, config).catch(() => undefined)
+      }
+      await window.editor.releaseWorkspace(root, retainedFiles)
+      this.folders = this.folders.filter((candidate) => candidate !== root)
+      this.projectSymbols = []
+      this.workspaceWords = []
+      this.projectSymbolIndexAt = 0
+      this.workspaceWordIndexAt = 0
+
+      if (isPrimary) {
+        this.folder = this.folders[0] ?? null
+        if (this.folder) await this.loadProject(this.folder)
+        else {
+          this.project = { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], pluginPermissions: {}, languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] }
+          this.plugins = []
+          this.extensionHost.dispose()
+          this.extensionCommands.clear()
+          this.buildPanel.setCommand('')
+          this.tree.clear()
+          this.gitPanel.toggle(false)
+        }
+      }
+
+      if (this.folder) {
+        this.workspaceName.textContent = this.folders.length === 1 ? baseName(this.folder).toUpperCase() : `${this.folders.length} FOLDERS`
+        await this.renderProjectRoots()
+      } else {
+        this.workspaceName.textContent = this.t('noFolder')
+        this.sidebar.classList.add('hidden')
+      }
+      this.scheduleSessionSave()
+      this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+        ? `已从项目移除：${baseName(root)}`
+        : `Removed from project: ${baseName(root)}`
+    } catch (error) {
+      this.showError(this.settings.locale === 'zh-CN' ? '无法从项目移除文件夹。' : 'The folder could not be removed from the project.', error)
+    }
   }
 
   /** Import the portable subset of a `.sublime-project` after user file selection. */

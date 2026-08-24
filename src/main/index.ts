@@ -218,6 +218,7 @@ function createWindow(sessionId = newSessionId()): void {
         ].join('\n')
         const terminalResult = await win.webContents.executeJavaScript(terminalSmokeScript, true)
         if (!terminalResult) throw new Error('Terminal did not echo its smoke marker')
+        await win.webContents.executeJavaScript(`window.editor.releaseWorkspace(${JSON.stringify(smokeRoot)}, [])`, true)
         console.log('[smoke] renderer, editor, and controlled terminal passed')
         setTimeout(() => app.quit(), 250)
       } catch (error) {

@@ -78,6 +78,10 @@ const api = {
   /** Recursively list every file under a root (for Goto Anything). */
   listFiles: (root: string): Promise<string[]> => ipcRenderer.invoke(IPC.dirListFiles, root),
 
+  /** Revoke a workspace root while retaining direct access to listed open files. */
+  releaseWorkspace: (root: string, retainFiles: string[]): Promise<void> =>
+    ipcRenderer.invoke(IPC.workspaceRelease, root, retainFiles),
+
   /** Preview current HTML in the system browser without forcing a save. */
   openInBrowser: (request: BrowserOpenRequest): Promise<boolean> =>
     ipcRenderer.invoke(IPC.openInBrowser, request),

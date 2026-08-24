@@ -14,6 +14,7 @@ export const IPC = {
   fileSaveAs: 'file:save-as',
   dirRead: 'dir:read',
   dirListFiles: 'dir:list-files',
+  workspaceRelease: 'workspace:release',
   openInBrowser: 'shell:open-in-browser',
   settingsRead: 'settings:read',
   settingsWrite: 'settings:write',
@@ -751,6 +752,7 @@ export type MenuEvent =
   | 'focus-prev-group'
   | 'new-window'
   | 'add-folder-to-project'
+  | 'remove-folder-from-project'
   | 'open-recent-project'
   | 'open-recent-file'
   | 'import-sublime-project'

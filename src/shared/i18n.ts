@@ -68,7 +68,7 @@ const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
   'toggle-git': '切换 Git 更改', 'refresh-git': '刷新 Git 更改', 'open-git-conflicts': '打开合并冲突', 'check-for-updates': '检查更新…',
   'open-marketplace': '浏览插件市场…', 'install-plugin': '安装本地插件…', 'manage-plugins': '管理插件…', 'insert-snippet': '插入片段…', 'import-sublime-snippet': '导入 Sublime 片段…',
   'record-macro': '开始/停止录制宏', 'run-macro': '运行上次宏', 'save-macro': '保存上次宏…', 'run-saved-macro': '运行已保存宏…',
-  'project-settings': '配置项目…', 'add-folder-to-project': '添加文件夹到项目…', 'import-sublime-project': '导入 Sublime 项目…',
+  'project-settings': '配置项目…', 'add-folder-to-project': '添加文件夹到项目…', 'remove-folder-from-project': '从项目移除文件夹…', 'import-sublime-project': '导入 Sublime 项目…',
   'import-sublime-settings': '导入 Sublime 设置…', 'import-sublime-keymap': '导入 Sublime 快捷键…',
   'set-ui-language-zh': '切换为简体中文', 'set-ui-language-en': '切换为英文', 'open-settings': '打开设置…'
   , 'format-json': '格式化 JSON', 'compact-json': '压缩 JSON', 'toggle-json-view': '切换 JSON 视图'

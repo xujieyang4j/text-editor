@@ -133,6 +133,7 @@ export const COMMANDS: Command[] = [
   { id: 'focus-prev-group', title: 'View: Focus Previous Group', hint: 'Ctrl/Cmd+Alt+[' },
   { id: 'new-window', title: 'File: New Window' }
   , { id: 'add-folder-to-project', title: 'Project: Add Folder to Project…' }
+  , { id: 'remove-folder-from-project', title: 'Project: Remove Folder from Project…' }
   , { id: 'open-recent-project', title: 'Project: Open Recent Project…' }
   , { id: 'import-sublime-project', title: 'Project: Import Sublime Project…' }
   , { id: 'import-sublime-settings', title: 'Preferences: Import Sublime Settings…' }
