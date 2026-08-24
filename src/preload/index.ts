@@ -19,6 +19,7 @@ import {
   type FileChangeEvent,
   type BuildRequest,
   type BuildOutput,
+  type TerminalOutput,
   type SublimeBuildImport,
   type ProjectSettings,
   type SublimeProjectImport,
@@ -173,6 +174,18 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, output: BuildOutput): void => handler(output)
     ipcRenderer.on(IPC.buildOutput, listener)
     return () => ipcRenderer.removeListener(IPC.buildOutput, listener)
+  },
+
+  startTerminal: (root: string, sessionId: string): Promise<void> => ipcRenderer.invoke(IPC.terminalStart, root, sessionId),
+
+  writeTerminal: (sessionId: string, text: string): Promise<void> => ipcRenderer.invoke(IPC.terminalWrite, sessionId, text),
+
+  stopTerminal: (sessionId: string): Promise<void> => ipcRenderer.invoke(IPC.terminalStop, sessionId),
+
+  onTerminalOutput: (handler: (output: TerminalOutput) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, output: TerminalOutput): void => handler(output)
+    ipcRenderer.on(IPC.terminalOutput, listener)
+    return () => ipcRenderer.removeListener(IPC.terminalOutput, listener)
   },
 
   readProject: (root: string): Promise<ProjectSettings | undefined> =>

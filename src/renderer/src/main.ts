@@ -10,6 +10,7 @@ import { incrementalChanges, revertIncrementalChange, type IncrementalChange } f
 import { JsonView } from './jsonView.js'
 import { parseLosslessJson, stringifyLosslessJson } from '../../shared/losslessJson.js'
 import { BuildPanel } from './buildPanel.js'
+import { TerminalPanel } from './terminalPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS, localizedCommands } from './commands.js'
 import { extractSymbols } from './symbols.js'
@@ -90,6 +91,7 @@ class App {
   private findResults: FindResultsView
   private gitPanel: GitPanel
   private buildPanel!: BuildPanel
+  private terminalPanel!: TerminalPanel
   private preview!: MarkdownPreview
   private jsonView!: JsonView
   private docs: Doc[] = []
@@ -134,6 +136,10 @@ class App {
   private lspSyncTimer: number | null = null
   private lspDocumentVersion = new Map<string, number>()
   private buildOutputText = ''
+  /** Opaque session token prevents a delayed old-shell message affecting a new session. */
+  private terminalSessionId: string | null = null
+  /** Tracks a start request before the shell has acknowledged creation. */
+  private terminalStartingSessionId: string | null = null
   private activeBuildSystem: BuildSystem | null = null
   private replaceUndoToken: string | null = null
   private windowSessionId = new URLSearchParams(location.hash.slice(1)).get('window') ?? 'legacy'
@@ -275,6 +281,7 @@ class App {
       else this.pendingLaunchPaths.push(filePath)
     })
     window.editor.onBuildOutput((output) => this.handleBuildOutput(output))
+    window.editor.onTerminalOutput((output) => this.handleTerminalOutput(output))
     window.editor.onLanguageServerDiagnostics((event) => this.applyLanguageServerDiagnostics(event))
     void this.boot()
   }
@@ -335,6 +342,11 @@ class App {
         onOpenProblem: (problem) => { void this.openBuildProblem(problem) }
       }
     )
+    this.terminalPanel = new TerminalPanel({
+      onStart: () => { void this.startTerminal() },
+      onWrite: (text) => { void this.writeTerminal(text) },
+      onStop: () => { void this.stopTerminal() }
+    })
     this.applyLocale(this.settings.locale)
 
     try {
@@ -673,6 +685,9 @@ class App {
         break
       case 'toggle-problems':
         this.buildPanel.toggle()
+        break
+      case 'toggle-terminal':
+        this.toggleTerminal()
         break
       case 'select-color-scheme':
         this.selectColorScheme()
@@ -3038,6 +3053,113 @@ class App {
     if (output.kind === 'exit') this.buildPanel.setProblems(this.parseBuildProblems())
   }
 
+  /** Open a project-scoped shell only after explicit per-session approval. */
+  private toggleTerminal(): void {
+    if (!this.folder) {
+      this.showError(this.settings.locale === 'zh-CN' ? '请先打开文件夹，再启动终端。' : 'Open a folder before starting the terminal.')
+      return
+    }
+    const wasVisible = this.terminalPanel.isVisible
+    this.terminalPanel.toggle(!wasVisible)
+    if (!wasVisible && !this.terminalSessionId && !this.terminalStartingSessionId) void this.startTerminal()
+  }
+
+  private newTerminalSessionId(): string {
+    const bytes = new Uint32Array(4)
+    crypto.getRandomValues(bytes)
+    return `terminal-${Array.from(bytes, (value) => value.toString(36)).join('-')}`
+  }
+
+  private async startTerminal(): Promise<void> {
+    if (!this.folder) {
+      this.showError(this.settings.locale === 'zh-CN' ? '请先打开文件夹，再启动终端。' : 'Open a folder before starting the terminal.')
+      return
+    }
+    if (this.terminalSessionId || this.terminalStartingSessionId) {
+      this.terminalPanel.toggle(true)
+      return
+    }
+    const root = this.folder
+    const approved = window.confirm(this.settings.locale === 'zh-CN'
+      ? `启动项目终端？\n\n工作目录：${root}\n\n这会启动本机 shell。该 shell 运行的命令可读取、修改或删除当前项目文件，并可能访问网络。仅在信任此项目和命令时继续。`
+      : `Start project terminal?\n\nWorking directory: ${root}\n\nThis starts a local shell. Commands run by it can read, modify, or delete project files and may access the network. Continue only if you trust this project and its commands.`)
+    if (!approved) return
+
+    const sessionId = this.newTerminalSessionId()
+    this.terminalStartingSessionId = sessionId
+    // Register before awaiting IPC: shell output can arrive before the invoke
+    // response, and must not be discarded as belonging to no active session.
+    this.terminalSessionId = sessionId
+    this.terminalPanel.clear()
+    this.terminalPanel.toggle(true)
+    this.terminalPanel.setStarting(true)
+    try {
+      await window.editor.startTerminal(root, sessionId)
+      // A newer start/stop may have occurred while IPC was pending.
+      if (this.terminalStartingSessionId !== sessionId || this.terminalSessionId !== sessionId) {
+        void window.editor.stopTerminal(sessionId)
+        return
+      }
+      this.terminalStartingSessionId = null
+      this.terminalSessionId = sessionId
+      this.terminalPanel.setRunning(true)
+      this.statusSelection.textContent = this.settings.locale === 'zh-CN' ? '项目终端已启动' : 'Project terminal started'
+    } catch (error) {
+      if (this.terminalStartingSessionId === sessionId || this.terminalSessionId === sessionId) {
+        this.terminalStartingSessionId = null
+        this.terminalSessionId = null
+        this.terminalPanel.setRunning(false)
+        this.showError(this.settings.locale === 'zh-CN' ? '终端无法启动。' : 'The terminal could not be started.', error)
+      }
+    }
+  }
+
+  private async writeTerminal(text: string): Promise<void> {
+    const sessionId = this.terminalSessionId
+    if (!sessionId) {
+      this.showError(this.settings.locale === 'zh-CN' ? '终端尚未启动。' : 'The terminal is not running.')
+      return
+    }
+    try {
+      await window.editor.writeTerminal(sessionId, text)
+    } catch (error) {
+      this.terminalSessionId = null
+      this.terminalPanel.setRunning(false)
+      this.showError(this.settings.locale === 'zh-CN' ? '无法向终端发送输入。' : 'Could not send input to the terminal.', error)
+    }
+  }
+
+  private async stopTerminal(): Promise<void> {
+    const sessionId = this.terminalSessionId ?? this.terminalStartingSessionId
+    if (!sessionId) {
+      this.terminalPanel.setRunning(false)
+      return
+    }
+    // Clear local state first; late output from this session is ignored.
+    this.terminalSessionId = null
+    this.terminalStartingSessionId = null
+    this.terminalPanel.setRunning(false)
+    try {
+      await window.editor.stopTerminal(sessionId)
+      this.statusSelection.textContent = this.settings.locale === 'zh-CN' ? '项目终端已停止' : 'Project terminal stopped'
+    } catch (error) {
+      this.showError(this.settings.locale === 'zh-CN' ? '终端无法停止。' : 'The terminal could not be stopped.', error)
+    }
+  }
+
+  private handleTerminalOutput(output: import('../../shared/ipc.js').TerminalOutput): void {
+    if (output.sessionId !== this.terminalSessionId) return
+    this.terminalPanel.append(output)
+    if (output.kind === 'exit') {
+      this.terminalSessionId = null
+      this.terminalStartingSessionId = null
+      this.terminalPanel.setRunning(false)
+      this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+        ? `终端已退出${output.code === 0 ? '' : `（代码 ${output.code ?? '未知'}）`}`
+        : `Terminal exited${output.code === 0 ? '' : ` (code ${output.code ?? 'unknown'})`}`
+    }
+  }
+
   private parseBuildProblems(): BuildProblem[] {
     const root = this.folder
     if (!root) return []
@@ -3238,6 +3360,7 @@ class App {
     if (this.findResults) this.findResults.setLocale(locale)
     if (this.searchPanel) this.searchPanel.setLocale(locale)
     if (this.jsonView) this.jsonView.setLocale(locale)
+    if (this.terminalPanel) this.terminalPanel.setLocale(locale)
     this.jsonFormatBtn.textContent = locale === 'zh-CN' ? '格式化' : 'Format'
     this.jsonCompactBtn.textContent = locale === 'zh-CN' ? '压缩' : 'Compact'
     this.jsonViewBtn.textContent = locale === 'zh-CN' ? '视图' : 'View'

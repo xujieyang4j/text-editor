@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, type WebContents } from 'electron'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { authorizePathForRenderer, clearWindowSessionId, listWindowSessionIds, registerFileHandlers, setWindowSessionId } from './files.js'
+import { authorizePathForRenderer, authorizeWorkspaceForRenderer, clearWindowSessionId, listWindowSessionIds, registerFileHandlers, setWindowSessionId } from './files.js'
 import { buildMenu } from './menu.js'
 import { IPC, type MenuEvent } from '../shared/ipc.js'
 
@@ -126,15 +126,60 @@ function createWindow(sessionId = newSessionId()): void {
   if (process.env['LUMEN_SMOKE'] === '1') {
     win.webContents.once('did-finish-load', async () => {
       try {
+        const smokeRoot = process.cwd()
+        authorizeWorkspaceForRenderer(win.webContents.id, smokeRoot)
         const result = await win.webContents.executeJavaScript(`(() => {
           const editor = document.querySelector('.cm-content')
           if (!(editor instanceof HTMLElement)) throw new Error('CodeMirror content did not mount')
           editor.focus()
           document.execCommand('insertText', false, 'smoke')
-          return editor.textContent?.includes('smoke') === true
+          const terminalCommand = [...document.querySelectorAll('button')].find((button) =>
+            /^(启动|Start)$/.test(button.textContent?.trim() ?? '')
+          )
+          const terminalPanel = document.querySelector('.terminal-panel')
+          return {
+            editorAcceptedInput: editor.textContent?.includes('smoke') === true,
+            terminalPanelMounted: terminalPanel instanceof HTMLElement && terminalPanel.classList.contains('hidden'),
+            terminalStartDisabledInitially: terminalCommand instanceof HTMLButtonElement && terminalCommand.disabled
+          }
         })()`, true)
-        if (!result) throw new Error('CodeMirror did not receive smoke input')
-        console.log('[smoke] renderer loaded and accepted editor input')
+        if (!result.editorAcceptedInput) throw new Error('CodeMirror did not receive smoke input')
+        if (!result.terminalPanelMounted || !result.terminalStartDisabledInitially) {
+          throw new Error('Terminal panel did not mount with its safe initial state')
+        }
+        const terminalSmokeScript = [
+          '(() => {',
+          '  const api = window.editor',
+          "  const sessionId = 'terminal-smoke-session-0001'",
+          "  const marker = 'LUMEN_TERMINAL_SMOKE_OK'",
+          '  return new Promise((resolve, reject) => {',
+          '    let unsubscribe = () => {}',
+          '    const timeout = window.setTimeout(() => {',
+          '      unsubscribe()',
+          "      void api.stopTerminal(sessionId).finally(() => reject(new Error('Timed out waiting for terminal output')))",
+          '    }, 5000)',
+          '    unsubscribe = api.onTerminalOutput((output) => {',
+          '      if (output.sessionId !== sessionId || !output.text.includes(marker)) return',
+          '      window.clearTimeout(timeout)',
+          '      unsubscribe()',
+          '      void api.stopTerminal(sessionId).then(() => resolve(true), reject)',
+          '    })',
+          '    void (async () => {',
+          '      try {',
+          '        await api.startTerminal(' + JSON.stringify(smokeRoot) + ', sessionId)',
+          '        await api.writeTerminal(sessionId, "echo " + marker + String.fromCharCode(10))',
+          '      } catch (error) {',
+          '        window.clearTimeout(timeout)',
+          '        unsubscribe()',
+          '        reject(error)',
+          '      }',
+          '    })()',
+          '  })',
+          '})()'
+        ].join('\n')
+        const terminalResult = await win.webContents.executeJavaScript(terminalSmokeScript, true)
+        if (!terminalResult) throw new Error('Terminal did not echo its smoke marker')
+        console.log('[smoke] renderer, editor, and controlled terminal passed')
         setTimeout(() => app.quit(), 250)
       } catch (error) {
         console.error('[smoke] GUI interaction failed:', error)

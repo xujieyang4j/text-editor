@@ -45,6 +45,10 @@ export const IPC = {
   buildCancel: 'build:cancel',
   buildImportSublime: 'build:import-sublime',
   buildOutput: 'build:output',
+  terminalStart: 'terminal:start',
+  terminalWrite: 'terminal:write',
+  terminalStop: 'terminal:stop',
+  terminalOutput: 'terminal:output',
   projectRead: 'project:read',
   projectWrite: 'project:write',
   projectImportSublime: 'project:import-sublime',
@@ -205,6 +209,15 @@ export interface BuildOutput {
   text: string
   code?: number | null
   systemName?: string
+}
+
+/** Main-to-renderer output of a project-scoped integrated shell session. */
+export interface TerminalOutput {
+  /** Renderer-generated opaque ID used to discard late output from prior shells. */
+  sessionId: string
+  kind: 'stdout' | 'stderr' | 'exit'
+  text: string
+  code?: number | null
 }
 
 export interface BuildSystem {
@@ -733,6 +746,7 @@ export type MenuEvent =
   | 'import-sublime-snippet'
   | 'import-sublime-keymap'
   | 'import-sublime-build'
+  | 'toggle-terminal'
   | 'lsp-hover'
   | 'lsp-definition'
   | 'lsp-references'

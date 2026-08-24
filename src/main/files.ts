@@ -29,6 +29,7 @@ import {
   type WorkspaceSymbol,
   type BuildRequest,
   type BuildOutput,
+  type TerminalOutput,
   type BuildSystem,
   type KeyBindingRule,
   type PluginManifest,
@@ -86,6 +87,14 @@ const IGNORED_ENTRIES = new Set([
 const writeQueues = new Map<string, Promise<void>>()
 const workspaceWatchers = new Map<number, Map<string, FSWatcher>>()
 const builds = new Map<number, ChildProcessWithoutNullStreams>()
+/** The main process owns terminal child processes; the renderer only sees text I/O. */
+interface TerminalProcess {
+  child: ChildProcessWithoutNullStreams
+  sessionId: string
+}
+const terminals = new Map<number, TerminalProcess>()
+const terminalCleanupBound = new Set<number>()
+const MAX_TERMINAL_OUTPUT_CHUNK_BYTES = 256 * 1024
 interface PersistentLanguageServer {
   child: ChildProcessWithoutNullStreams
   root: string
@@ -175,10 +184,53 @@ function closeWorkspaceWatchers(senderId: number): void {
   workspaceWatchers.delete(senderId)
 }
 
+/**
+ * Stop a shell we started, including its POSIX process group where possible.
+ * A normal child.kill() can otherwise leave a build started from the shell
+ * alive after its owning editor window has gone away.
+ */
+function stopTerminalProcess(terminal: TerminalProcess | undefined): void {
+  if (!terminal || terminal.child.killed) return
+  const { child } = terminal
+  if (process.platform !== 'win32' && child.pid) {
+    try {
+      process.kill(-child.pid, 'SIGTERM')
+      return
+    } catch {
+      // The process may have already exited, or group termination may not be
+      // available on this platform. Fall back to killing the direct child.
+    }
+  }
+  child.kill()
+}
+
+function stopTerminalForSender(senderId: number): void {
+  const terminal = terminals.get(senderId)
+  terminals.delete(senderId)
+  stopTerminalProcess(terminal)
+}
+
+function terminalChunk(data: Buffer): string {
+  if (data.byteLength <= MAX_TERMINAL_OUTPUT_CHUNK_BYTES) return data.toString()
+  return `${data.subarray(0, MAX_TERMINAL_OUTPUT_CHUNK_BYTES).toString()}\n[Terminal output truncated]\n`
+}
+
+function assertTerminalSessionId(value: unknown): asserts value is string {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(value)) {
+    throw new Error('Invalid terminal session.')
+  }
+}
+
 /** Grant a user-selected OS-level path to a renderer (file associations / CLI opens). */
 export function authorizePathForRenderer(senderId: number, target: string): void {
   if (!path.isAbsolute(target)) return
   grantFile(senderId, target)
+}
+
+/** Grant a user-selected (or main-process initiated) workspace root to one renderer. */
+export function authorizeWorkspaceForRenderer(senderId: number, root: string): void {
+  if (!path.isAbsolute(root)) return
+  grantRoot(senderId, root)
 }
 
 /** Assign a durable session key to a window from the main-process window manager. */
@@ -2030,6 +2082,67 @@ export function registerFileHandlers(): void {
     const child = builds.get(event.sender.id)
     child?.kill()
     builds.delete(event.sender.id)
+  })
+
+  ipcMain.handle(IPC.terminalStart, async (event, root: unknown, sessionId: unknown): Promise<void> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    assertTerminalSessionId(sessionId)
+    const senderId = event.sender.id
+    stopTerminalForSender(senderId)
+    const shell = process.platform === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/sh')
+    const args = process.platform === 'win32' ? [] : ['-i']
+    const child = spawn(shell, args, {
+      cwd: root,
+      env: { ...process.env, TERM: 'dumb' },
+      stdio: 'pipe',
+      // On POSIX this lets the stop handler terminate commands launched by
+      // the shell as one known process group.
+      detached: process.platform !== 'win32'
+    })
+    const terminal: TerminalProcess = { child, sessionId }
+    terminals.set(senderId, terminal)
+    const send = (payload: Omit<TerminalOutput, 'sessionId'>): void => {
+      // A new terminal replaces the old one. Ignore late output from the old
+      // shell so an exit event cannot make the new panel look stopped.
+      if (terminals.get(senderId) === terminal && !event.sender.isDestroyed()) {
+        event.sender.send(IPC.terminalOutput, { ...payload, sessionId: terminal.sessionId })
+      }
+    }
+    child.stdout.on('data', (data: Buffer) => send({ kind: 'stdout', text: terminalChunk(data) }))
+    child.stderr.on('data', (data: Buffer) => send({ kind: 'stderr', text: terminalChunk(data) }))
+    child.on('error', (error) => send({ kind: 'stderr', text: `${error.message}\n` }))
+    child.on('close', (code) => {
+      if (terminals.get(senderId) !== terminal) return
+      send({ kind: 'exit', text: code === 0 ? 'Terminal exited.\n' : `Terminal exited with code ${code}.\n`, code })
+      terminals.delete(senderId)
+    })
+    if (!terminalCleanupBound.has(senderId)) {
+      terminalCleanupBound.add(senderId)
+      event.sender.once('destroyed', () => {
+        stopTerminalForSender(senderId)
+        terminalCleanupBound.delete(senderId)
+      })
+    }
+  })
+
+  ipcMain.handle(IPC.terminalWrite, async (event, sessionId: unknown, text: unknown): Promise<void> => {
+    assertTrustedSender(event)
+    assertTerminalSessionId(sessionId)
+    if (typeof text !== 'string' || text.length === 0 || text.length > 64 * 1024) throw new Error('Invalid terminal input.')
+    const terminal = terminals.get(event.sender.id)?.child
+    if (!terminal || terminals.get(event.sender.id)?.sessionId !== sessionId || terminal.killed || !terminal.stdin.writable) {
+      throw new Error('No active terminal session.')
+    }
+    terminal.stdin.write(text)
+  })
+
+  ipcMain.handle(IPC.terminalStop, async (event, sessionId: unknown): Promise<void> => {
+    assertTrustedSender(event)
+    assertTerminalSessionId(sessionId)
+    const terminal = terminals.get(event.sender.id)
+    if (terminal?.sessionId === sessionId) stopTerminalForSender(event.sender.id)
   })
 
   ipcMain.handle(IPC.buildImportSublime, async (event): Promise<SublimeBuildImport | null> => {

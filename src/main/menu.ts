@@ -188,6 +188,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
       label: t('tools'),
       submenu: [
         item('Build', 'build', 'CmdOrCtrl+Shift+B'),
+        item('Toggle Terminal', 'toggle-terminal', 'CmdOrCtrl+Alt+T'),
         item('Format Document', 'format-document'),
         item('Show Hover', 'lsp-hover', 'CmdOrCtrl+Shift+Space'),
         item('Rename Symbol', 'lsp-rename', 'F2'),
