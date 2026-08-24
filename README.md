@@ -25,6 +25,11 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **File tree sidebar** — starts collapsed (`Ctrl/Cmd+B` to show), opens a folder as a
   workspace, and lazily expands directories
 - **Find & replace**, **undo/redo**, **multi-cursor**, rectangular selection, bracket matching
+- **Find / Replace in Files** with regex, case/word filters and include/exclude globs
+- **Split editing**, per-tab undo/selection preservation, bookmarks, macros and reusable snippets
+- **Workspace tools**: file create/rename/trash/reveal, external-change refresh, project build output
+- **Language tooling**: optional standard LSP formatting/diagnostics plus stdin/stdout formatters
+- **Local declarative plugins**: project-scoped snippets and command-palette text commands
 - **Autocompletion**, code folding, active-line highlight, selection-match highlight
 - **Hot exit / session restore** — reopens your tabs + folder on next launch and **preserves
   unsaved edits** (even untitled buffers) across an unexpected quit; **Reopen Closed Tab**
@@ -105,7 +110,15 @@ you want to repair without launching.
 ```bash
 npm run typecheck    # tsc for both the node and web tsconfigs
 npm run build        # bundles main, preload, and renderer into out/
+npm test             # shared tests + typecheck + production bundle
 ```
+
+## Project configuration
+
+Opening a folder can create a portable `.lumen-project.json` through **Project → Configure Project…**.
+It holds workspace excludes, build command, key overrides, enabled plugins, language tools and language servers.
+Commands from this file require a one-time approval per app session before Lumen starts them. Local declarative
+plugins live in `.lumen-plugins/<id>/plugin.json` and may contribute snippets or insert-text commands only.
 
 ## Packaging installers
 

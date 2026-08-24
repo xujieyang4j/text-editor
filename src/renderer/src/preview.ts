@@ -24,6 +24,19 @@ export class MarkdownPreview {
 
     this.root.appendChild(this.body)
     parent.appendChild(this.root)
+
+    // Never let Markdown drive the Electron app window to a remote URL. Links
+    // are handled by the validated preload bridge and open in the system browser.
+    this.body.addEventListener('click', (event) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      const link = target.closest('a[href]')
+      if (!(link instanceof HTMLAnchorElement)) return
+      event.preventDefault()
+      void window.editor.openExternal(link.href).catch((error: unknown) => {
+        console.warn('Unable to open preview link:', error)
+      })
+    })
   }
 
   /** Whether the preview pane is currently shown. */

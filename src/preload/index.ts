@@ -8,7 +8,22 @@ import {
   type BrowserOpenRequest,
   type Settings,
   type Session,
-  type MenuEvent
+  type MenuEvent,
+  type FileWriteOptions,
+  type WorkspaceMatch,
+  type WorkspaceSearchRequest,
+  type WorkspaceReplaceRequest,
+  type WorkspaceReplaceResult,
+  type FileChangeEvent,
+  type BuildRequest,
+  type BuildOutput,
+  type ProjectSettings,
+  type PluginManifest,
+  type LanguageToolRequest,
+  type LanguageToolResult,
+  type LanguageServerRequest,
+  type LanguageServerResult,
+  type PluginInstallRequest
 } from '../shared/ipc.js'
 
 /**
@@ -37,12 +52,12 @@ const api = {
     ipcRenderer.invoke(IPC.openInBrowser, request),
 
   /** Save content to a path; passing null triggers a save-as dialog. */
-  save: (filePath: string | null, content: string): Promise<SaveResult> =>
-    ipcRenderer.invoke(IPC.fileSave, filePath, content),
+  save: (filePath: string | null, content: string, options: FileWriteOptions): Promise<SaveResult> =>
+    ipcRenderer.invoke(IPC.fileSave, filePath, content, options),
 
   /** Always prompt for a destination, then write content. */
-  saveAs: (content: string, suggestedName?: string): Promise<SaveResult> =>
-    ipcRenderer.invoke(IPC.fileSaveAs, content, suggestedName),
+  saveAs: (content: string, suggestedName: string | undefined, options: FileWriteOptions): Promise<SaveResult> =>
+    ipcRenderer.invoke(IPC.fileSaveAs, content, suggestedName, options),
 
   /** Read persisted user settings (merged over defaults). */
   readSettings: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsRead),
@@ -57,6 +72,73 @@ const api = {
   /** Persist the session. */
   writeSession: (session: Session): Promise<void> =>
     ipcRenderer.invoke(IPC.sessionWrite, session),
+
+  /** Confirm to the main process that a close-time session flush has completed. */
+  sessionFlushed: (): Promise<void> => ipcRenderer.invoke(IPC.sessionFlushed),
+
+  /** Open only a validated external http(s)/mailto link in the system browser. */
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke(IPC.openExternal, url),
+
+  /** Search files in the current workspace without exposing Node to the renderer. */
+  searchWorkspace: (request: WorkspaceSearchRequest): Promise<WorkspaceMatch[]> =>
+    ipcRenderer.invoke(IPC.workspaceSearch, request),
+
+  /** Apply a controlled workspace-wide replacement. */
+  replaceWorkspace: (request: WorkspaceReplaceRequest): Promise<WorkspaceReplaceResult> =>
+    ipcRenderer.invoke(IPC.workspaceReplace, request),
+
+  createPath: (target: string, isDirectory: boolean): Promise<DirEntry> =>
+    ipcRenderer.invoke(IPC.fileCreate, target, isDirectory),
+
+  renamePath: (source: string, target: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.fileRename, source, target),
+
+  deletePath: (target: string): Promise<void> => ipcRenderer.invoke(IPC.fileDelete, target),
+
+  revealInFolder: (target: string): Promise<void> => ipcRenderer.invoke(IPC.revealInFolder, target),
+
+  watchWorkspace: (root: string): Promise<void> => ipcRenderer.invoke(IPC.fileWatch, root),
+
+  onFileChange: (handler: (event: FileChangeEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, change: FileChangeEvent): void => handler(change)
+    ipcRenderer.on(IPC.fileWatch, listener)
+    return () => ipcRenderer.removeListener(IPC.fileWatch, listener)
+  },
+
+  runBuild: (request: BuildRequest): Promise<void> => ipcRenderer.invoke(IPC.buildRun, request),
+
+  cancelBuild: (): Promise<void> => ipcRenderer.invoke(IPC.buildCancel),
+
+  onBuildOutput: (handler: (output: BuildOutput) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, output: BuildOutput): void => handler(output)
+    ipcRenderer.on(IPC.buildOutput, listener)
+    return () => ipcRenderer.removeListener(IPC.buildOutput, listener)
+  },
+
+  readProject: (root: string): Promise<ProjectSettings | undefined> =>
+    ipcRenderer.invoke(IPC.projectRead, root),
+
+  writeProject: (root: string, project: ProjectSettings): Promise<void> =>
+    ipcRenderer.invoke(IPC.projectWrite, root, project),
+
+  listPlugins: (root: string): Promise<PluginManifest[]> => ipcRenderer.invoke(IPC.pluginList, root),
+
+  installPlugin: (request: PluginInstallRequest): Promise<PluginManifest> =>
+    ipcRenderer.invoke(IPC.pluginInstall, request),
+
+  removePlugin: (root: string, id: string): Promise<void> => ipcRenderer.invoke(IPC.pluginRemove, root, id),
+
+  runLanguageTool: (request: LanguageToolRequest): Promise<LanguageToolResult> =>
+    ipcRenderer.invoke(IPC.languageToolRun, request),
+
+  runLanguageServer: (request: LanguageServerRequest): Promise<LanguageServerResult> =>
+    ipcRenderer.invoke(IPC.languageServerRun, request),
+
+  onOpenPathRequested: (handler: (filePath: string) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, filePath: string): void => handler(filePath)
+    ipcRenderer.on(IPC.openPathRequested, listener)
+    return () => ipcRenderer.removeListener(IPC.openPathRequested, listener)
+  },
 
   /** Subscribe to menu / accelerator events. Returns an unsubscribe fn. */
   onMenu: (handler: (event: MenuEvent) => void): (() => void) => {

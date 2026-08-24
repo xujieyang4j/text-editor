@@ -1,0 +1,202 @@
+import type { WorkspaceMatch, WorkspaceReplaceRequest, WorkspaceSearchRequest } from '../../shared/ipc.js'
+import { baseName } from './documents.js'
+
+export interface WorkspaceSearchCallbacks {
+  getRoot: () => string | null
+  getProjectExclude: () => string[]
+  openMatch: (match: WorkspaceMatch) => void
+  notify: (message: string, error?: unknown) => void
+  afterReplace: () => void
+}
+
+/**
+ * A deliberately focused Find in Files panel. It keeps the familiar Sublime
+ * workflow (query, filters, results, optional replace) without coupling search
+ * state to the editor view or exposing filesystem access to the renderer.
+ */
+export class WorkspaceSearchPanel {
+  private readonly root: HTMLDivElement
+  private readonly query: HTMLInputElement
+  private readonly replacement: HTMLInputElement
+  private readonly include: HTMLInputElement
+  private readonly exclude: HTMLInputElement
+  private readonly caseSensitive: HTMLInputElement
+  private readonly wholeWord: HTMLInputElement
+  private readonly regex: HTMLInputElement
+  private readonly results: HTMLUListElement
+  private readonly summary: HTMLDivElement
+  private replaceVisible = false
+  private searchToken = 0
+
+  constructor(private readonly callbacks: WorkspaceSearchCallbacks) {
+    this.root = document.createElement('div')
+    this.root.className = 'workspace-search hidden'
+
+    const header = document.createElement('div')
+    header.className = 'workspace-search-header'
+    const title = document.createElement('strong')
+    title.textContent = 'Find in Files'
+    const close = document.createElement('button')
+    close.className = 'panel-button'
+    close.textContent = '×'
+    close.title = 'Close'
+    close.addEventListener('click', () => this.hide())
+    header.append(title, close)
+
+    this.query = this.input('Find')
+    this.replacement = this.input('Replace')
+    this.include = this.input('Include: e.g. **/*.ts')
+    this.exclude = this.input('Exclude: e.g. **/node_modules/**')
+
+    const options = document.createElement('div')
+    options.className = 'workspace-search-options'
+    this.caseSensitive = this.checkbox('Case')
+    this.wholeWord = this.checkbox('Word')
+    this.regex = this.checkbox('Regex')
+    options.append(this.caseSensitive.parentElement!, this.wholeWord.parentElement!, this.regex.parentElement!)
+
+    const actions = document.createElement('div')
+    actions.className = 'workspace-search-actions'
+    const find = this.button('Find All', () => void this.search())
+    const replace = this.button('Replace All', () => void this.replace())
+    actions.append(find, replace)
+
+    this.summary = document.createElement('div')
+    this.summary.className = 'workspace-search-summary'
+    this.results = document.createElement('ul')
+    this.results.className = 'workspace-search-results'
+
+    this.root.append(header, this.query, this.replacement, this.include, this.exclude, options, actions, this.summary, this.results)
+    document.body.appendChild(this.root)
+
+    this.query.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        void this.search()
+      } else if (event.key === 'Escape') {
+        this.hide()
+      }
+    })
+    this.root.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') this.hide()
+    })
+  }
+
+  show(withReplace: boolean): void {
+    if (!this.callbacks.getRoot()) {
+      this.callbacks.notify('Open a folder before searching across files.')
+      return
+    }
+    this.replaceVisible = withReplace
+    this.root.classList.remove('hidden')
+    this.root.classList.toggle('replace-mode', withReplace)
+    this.replacement.hidden = !withReplace
+    this.query.focus()
+    this.query.select()
+  }
+
+  hide(): void {
+    this.root.classList.add('hidden')
+  }
+
+  private input(placeholder: string): HTMLInputElement {
+    const input = document.createElement('input')
+    input.className = 'workspace-search-input'
+    input.placeholder = placeholder
+    input.spellcheck = false
+    return input
+  }
+
+  private checkbox(label: string): HTMLInputElement {
+    const labelEl = document.createElement('label')
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    labelEl.append(input, document.createTextNode(label))
+    return input
+  }
+
+  private button(label: string, onClick: () => void): HTMLButtonElement {
+    const button = document.createElement('button')
+    button.className = 'panel-button'
+    button.textContent = label
+    button.addEventListener('click', onClick)
+    return button
+  }
+
+  private request(): WorkspaceSearchRequest | null {
+    const root = this.callbacks.getRoot()
+    const query = this.query.value
+    if (!root || !query) return null
+    const excludes = [this.exclude.value, ...this.callbacks.getProjectExclude()].filter(Boolean).join(',')
+    return {
+      root,
+      query,
+      caseSensitive: this.caseSensitive.checked,
+      wholeWord: this.wholeWord.checked,
+      useRegex: this.regex.checked,
+      include: this.include.value,
+      exclude: excludes
+    }
+  }
+
+  private async search(): Promise<void> {
+    const request = this.request()
+    if (!request) {
+      this.callbacks.notify('Enter a search term first.')
+      return
+    }
+    const token = ++this.searchToken
+    this.summary.textContent = 'Searching…'
+    this.results.replaceChildren()
+    try {
+      const matches = await window.editor.searchWorkspace(request)
+      if (token !== this.searchToken) return
+      this.renderResults(matches)
+    } catch (error) {
+      if (token === this.searchToken) this.callbacks.notify('Find in Files could not complete.', error)
+    }
+  }
+
+  private renderResults(matches: WorkspaceMatch[]): void {
+    this.summary.textContent = `${matches.length} match${matches.length === 1 ? '' : 'es'}`
+    this.results.replaceChildren()
+    for (const match of matches) {
+      const item = document.createElement('li')
+      item.className = 'workspace-search-result'
+      const location = document.createElement('div')
+      location.className = 'workspace-search-location'
+      location.textContent = `${baseName(match.path)}:${match.line}:${match.column}`
+      location.title = match.path
+      const source = document.createElement('code')
+      source.textContent = match.lineText
+      item.append(location, source)
+      item.addEventListener('click', () => {
+        this.callbacks.openMatch(match)
+        this.hide()
+      })
+      this.results.appendChild(item)
+    }
+  }
+
+  private async replace(): Promise<void> {
+    if (!this.replaceVisible) {
+      this.show(true)
+      return
+    }
+    const search = this.request()
+    if (!search) {
+      this.callbacks.notify('Enter a search term first.')
+      return
+    }
+    if (!window.confirm(`Replace every match of “${search.query}” in the workspace?`)) return
+    const request: WorkspaceReplaceRequest = { ...search, replacement: this.replacement.value }
+    try {
+      const result = await window.editor.replaceWorkspace(request)
+      this.summary.textContent = `Replaced ${result.replacements} match${result.replacements === 1 ? '' : 'es'} in ${result.files} file${result.files === 1 ? '' : 's'}.`
+      this.results.replaceChildren()
+      this.callbacks.afterReplace()
+    } catch (error) {
+      this.callbacks.notify('Replace in Files could not complete.', error)
+    }
+  }
+}

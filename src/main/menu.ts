@@ -79,7 +79,9 @@ export function buildMenu(): void {
         item('Sort Lines', 'sort-lines'),
         { type: 'separator' },
         item('Find', 'find', 'CmdOrCtrl+F'),
-        item('Replace', 'replace', 'CmdOrCtrl+H')
+        item('Replace', 'replace', 'CmdOrCtrl+H'),
+        item('Find in Files…', 'find-in-files', 'CmdOrCtrl+Shift+F'),
+        item('Replace in Files…', 'replace-in-files', 'CmdOrCtrl+Shift+H')
       ]
     },
     {
@@ -99,7 +101,11 @@ export function buildMenu(): void {
         item('Goto Line…', 'go-to-line', 'CmdOrCtrl+G'),
         { type: 'separator' },
         item('Next Tab', 'next-tab', 'CmdOrCtrl+Alt+Right'),
-        item('Previous Tab', 'prev-tab', 'CmdOrCtrl+Alt+Left')
+        item('Previous Tab', 'prev-tab', 'CmdOrCtrl+Alt+Left'),
+        { type: 'separator' },
+        item('Toggle Bookmark', 'toggle-bookmark', 'CmdOrCtrl+F2'),
+        item('Next Bookmark', 'next-bookmark', 'F2'),
+        item('Previous Bookmark', 'prev-bookmark', 'Shift+F2')
       ]
     },
     {
@@ -112,6 +118,7 @@ export function buildMenu(): void {
         item('Open in Browser', 'open-in-browser'),
         { type: 'separator' },
         item('Toggle Sidebar', 'toggle-sidebar', 'CmdOrCtrl+B'),
+        item('Toggle Split Editor', 'split-editor', 'CmdOrCtrl+Alt+2'),
         item('Toggle Minimap', 'toggle-minimap'),
         item('Toggle Word Wrap', 'toggle-word-wrap', 'Alt+Z'),
         item('Toggle Theme', 'toggle-theme', 'CmdOrCtrl+K'),
@@ -123,6 +130,25 @@ export function buildMenu(): void {
         { role: 'togglefullscreen' },
         { role: 'toggleDevTools' }
       ]
+    },
+    {
+      label: 'Tools',
+      submenu: [
+        item('Build', 'build', 'CmdOrCtrl+Shift+B'),
+        item('Format Document', 'format-document'),
+        item('Toggle Build Output', 'toggle-problems'),
+        item('Configure Language Tool…', 'language-tools'),
+        item('Install Local Plugin…', 'install-plugin'),
+        item('Manage Plugins…', 'manage-plugins'),
+        { type: 'separator' },
+        item('Start / Stop Macro Recording', 'record-macro'),
+        item('Run Last Macro', 'run-macro'),
+        item('Insert Snippet…', 'insert-snippet')
+      ]
+    },
+    {
+      label: 'Project',
+      submenu: [item('Configure Project…', 'project-settings')]
     },
     {
       label: 'Window',

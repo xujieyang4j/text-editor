@@ -18,6 +18,26 @@ export const IPC = {
   settingsWrite: 'settings:write',
   sessionRead: 'session:read',
   sessionWrite: 'session:write',
+  sessionFlushed: 'session:flushed',
+  openExternal: 'shell:open-external',
+  workspaceSearch: 'workspace:search',
+  workspaceReplace: 'workspace:replace',
+  fileCreate: 'file:create',
+  fileRename: 'file:rename',
+  fileDelete: 'file:delete',
+  revealInFolder: 'shell:reveal-in-folder',
+  fileWatch: 'file:watch',
+  buildRun: 'build:run',
+  buildCancel: 'build:cancel',
+  buildOutput: 'build:output',
+  projectRead: 'project:read',
+  projectWrite: 'project:write',
+  pluginList: 'plugin:list',
+  pluginInstall: 'plugin:install',
+  pluginRemove: 'plugin:remove',
+  languageToolRun: 'language-tool:run',
+  languageServerRun: 'language-server:run',
+  openPathRequested: 'app:open-path-requested',
   // main -> renderer notifications (menu / accelerator driven)
   menuEvent: 'menu:event'
 } as const
@@ -28,6 +48,27 @@ export interface OpenedFile {
   path: string
   /** UTF-8 text content. */
   content: string
+  /** Encoding detected on read and used when the file is saved again. */
+  encoding: TextEncoding
+  /** Original line-ending convention. CodeMirror internally normalises to LF. */
+  eol: LineEnding
+  /** Size on disk, in bytes. */
+  byteLength: number
+  /** True when the file is binary and must not be opened as text. */
+  isBinary: boolean
+  /** True when the file is intentionally not loaded because it exceeds the safe editor limit. */
+  isTooLarge: boolean
+}
+
+/** Text encodings the built-in reader/writer can preserve without native add-ons. */
+export type TextEncoding = 'utf8' | 'utf8bom' | 'utf16le' | 'utf16be'
+
+/** Physical newline convention used when a document is saved. */
+export type LineEnding = 'LF' | 'CRLF' | 'CR'
+
+export interface FileWriteOptions {
+  encoding: TextEncoding
+  eol: LineEnding
 }
 
 /** Result of a save operation. */
@@ -46,6 +87,67 @@ export interface BrowserOpenRequest {
   content: string
   /** True when content differs from the version on disk. */
   dirty: boolean
+}
+
+/** A file match returned by workspace Find in Files. */
+export interface WorkspaceMatch {
+  path: string
+  line: number
+  column: number
+  lineText: string
+  matchText: string
+}
+
+export interface WorkspaceSearchRequest {
+  root: string
+  query: string
+  caseSensitive: boolean
+  wholeWord: boolean
+  useRegex: boolean
+  include?: string
+  exclude?: string
+  maxResults?: number
+}
+
+export interface WorkspaceReplaceRequest extends WorkspaceSearchRequest {
+  replacement: string
+}
+
+export interface WorkspaceReplaceResult {
+  files: number
+  replacements: number
+}
+
+export interface FileChangeEvent {
+  kind: 'changed' | 'renamed' | 'deleted'
+  path: string
+}
+
+export interface BuildRequest {
+  root: string
+  command: string
+  args?: string[]
+}
+
+export interface BuildOutput {
+  kind: 'stdout' | 'stderr' | 'exit'
+  text: string
+  code?: number | null
+}
+
+/** A declarative local plugin manifest. Plugins register commands/snippets, not Node access. */
+export interface PluginManifest {
+  id: string
+  name: string
+  version: string
+  enabled: boolean
+  commands: Array<{ id: string; title: string; insertText?: string }>
+  snippets: Array<{ label: string; text: string }>
+}
+
+export interface PluginInstallRequest {
+  root: string
+  source: string
 }
 
 /** A single entry inside a directory listing. */
@@ -79,6 +181,10 @@ export interface Settings {
   highlightTrailingWhitespace: boolean
   /** Column positions to draw vertical rulers at (empty = none). */
   rulers: number[]
+  /** Hard cap for editable text files. Larger files remain protected from accidental UI stalls. */
+  maxFileSizeMB: number
+  /** Optional project-specific command used by Build. */
+  buildCommand: string
 }
 
 /** Built-in defaults, used when no settings file exists yet. */
@@ -91,7 +197,9 @@ export const DEFAULT_SETTINGS: Settings = {
   showMinimap: true,
   showIndentGuides: true,
   highlightTrailingWhitespace: true,
-  rulers: []
+  rulers: [],
+  maxFileSizeMB: 20,
+  buildCommand: ''
 }
 
 /**
@@ -115,6 +223,8 @@ export interface SessionFile {
    * small in the common case.
    */
   draft?: string
+  encoding?: TextEncoding
+  eol?: LineEnding
 }
 
 /** Editor state persisted across restarts (open tabs + workspace). */
@@ -125,13 +235,77 @@ export interface Session {
   activeIndex: number
   /** Root of the workspace folder that was open, if any. */
   folder: string | null
+  /** User-created project settings live alongside the workspace session. */
+  project?: ProjectSettings
+}
+
+/** Project settings intentionally kept small and portable in session.json for now. */
+export interface ProjectSettings {
+  exclude: string[]
+  buildCommand: string
+  keyBindings: Record<string, string>
+  plugins: string[]
+  languageTools: Record<string, LanguageToolConfig>
+  languageServers: Record<string, LanguageServerConfig>
+}
+
+/** Configurable LSP server command, keyed by language name in project settings. */
+export interface LanguageServerConfig {
+  command: string
+  args: string[]
+}
+
+/** Configurable stdin/stdout formatter or diagnostics adapter. */
+export interface LanguageToolConfig {
+  command: string
+  args: string[]
+}
+
+export interface LanguageToolRequest {
+  root: string
+  command: string
+  content: string
+  filePath: string | null
+}
+
+export interface LanguageToolResult {
+  /** A formatter returns replacement text; diagnostics-only tools omit this. */
+  content?: string
+  diagnostics: Array<{
+    line: number
+    column: number
+    endLine?: number
+    endColumn?: number
+    severity: 'error' | 'warning' | 'info'
+    message: string
+  }>
+}
+
+export interface LanguageServerRequest {
+  root: string
+  config: LanguageServerConfig
+  content: string
+  filePath: string
+  languageId: string
+}
+
+export interface LanguageServerResult {
+  edits: Array<{
+    startLine: number
+    startCharacter: number
+    endLine: number
+    endCharacter: number
+    newText: string
+  }>
+  diagnostics: LanguageToolResult['diagnostics']
 }
 
 /** Empty session used on first launch. */
 export const EMPTY_SESSION: Session = {
   openFiles: [],
   activeIndex: 0,
-  folder: null
+  folder: null,
+  project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {} }
 }
 
 /**
@@ -172,4 +346,20 @@ export type MenuEvent =
   | 'font-zoom-reset'
   | 'toggle-preview'
   | 'open-in-browser'
+  | 'find-in-files'
+  | 'replace-in-files'
+  | 'split-editor'
+  | 'toggle-bookmark'
+  | 'next-bookmark'
+  | 'prev-bookmark'
+  | 'record-macro'
+  | 'run-macro'
+  | 'insert-snippet'
+  | 'build'
+  | 'format-document'
+  | 'toggle-problems'
+  | 'project-settings'
+  | 'language-tools'
+  | 'install-plugin'
+  | 'manage-plugins'
   | 'persist-session'

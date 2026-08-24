@@ -17,6 +17,14 @@ export interface Doc {
   language: string
   /** True when the user manually picked a language (skip auto-detect). */
   languageLocked: boolean
+  /** Original physical file encoding, preserved on save. */
+  encoding: import('../../shared/ipc.js').TextEncoding
+  /** Original physical newline convention, preserved on save. */
+  eol: import('../../shared/ipc.js').LineEnding
+  /** Per-tab CodeMirror state preserves undo history, selection and folds. */
+  editorState?: import('@codemirror/state').EditorState
+  /** Bookmarked 1-based line numbers for quick navigation. */
+  bookmarks: number[]
 }
 
 let counter = 0
@@ -31,12 +39,20 @@ export function createUntitled(): Doc {
     content: '',
     savedContent: '',
     language: 'Plain Text',
-    languageLocked: false
+    languageLocked: false,
+    encoding: 'utf8',
+    eol: 'LF',
+    bookmarks: []
   }
 }
 
 /** Create a document from a file loaded off disk. */
-export function createFromFile(path: string, content: string): Doc {
+export function createFromFile(
+  path: string,
+  content: string,
+  encoding: import('../../shared/ipc.js').TextEncoding = 'utf8',
+  eol: import('../../shared/ipc.js').LineEnding = 'LF'
+): Doc {
   counter += 1
   return {
     id: `doc-${counter}`,
@@ -45,7 +61,10 @@ export function createFromFile(path: string, content: string): Doc {
     content,
     savedContent: content,
     language: 'Plain Text',
-    languageLocked: false
+    languageLocked: false,
+    encoding,
+    eol,
+    bookmarks: []
   }
 }
 
@@ -67,6 +86,8 @@ export function createFromSession(
     language: string
     languageLocked: boolean
     draft?: string
+    encoding?: import('../../shared/ipc.js').TextEncoding
+    eol?: import('../../shared/ipc.js').LineEnding
   }
 ): Doc {
   counter += 1
@@ -78,7 +99,10 @@ export function createFromSession(
     content: hasDraft ? sf.draft! : diskContent,
     savedContent: diskContent,
     language: sf.language,
-    languageLocked: sf.languageLocked
+    languageLocked: sf.languageLocked,
+    encoding: sf.encoding ?? 'utf8',
+    eol: sf.eol ?? 'LF',
+    bookmarks: []
   }
 }
 

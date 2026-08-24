@@ -1,4 +1,4 @@
-import { EditorState, Compartment, EditorSelection, type Extension } from '@codemirror/state'
+import { EditorState, Compartment, EditorSelection, type Extension, type SelectionRange } from '@codemirror/state'
 import {
   EditorView,
   keymap,
@@ -40,7 +40,10 @@ import {
   searchKeymap,
   highlightSelectionMatches,
   openSearchPanel,
-  gotoLine
+  gotoLine,
+  getSearchQuery,
+  setSearchQuery,
+  SearchQuery
 } from '@codemirror/search'
 import {
   autocompletion,
@@ -50,6 +53,7 @@ import {
 } from '@codemirror/autocomplete'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { showMinimap } from '@replit/codemirror-minimap'
+import { setDiagnostics, lintGutter, type Diagnostic } from '@codemirror/lint'
 import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { rulers } from './extensions/rulers.js'
 import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
@@ -136,6 +140,8 @@ export class Editor {
   readonly view: EditorView
   private callbacks: EditorCallbacks
   private settings: Settings
+  /** In-flight language loads are versioned so stale tabs cannot reconfigure the active view. */
+  private languageRequest = 0
 
   constructor(parent: HTMLElement, callbacks: EditorCallbacks, settings: Settings) {
     this.callbacks = callbacks
@@ -162,14 +168,26 @@ export class Editor {
         indentGuideConf.of(s.showIndentGuides ? indentationMarkers() : []),
         trailingWsConf.of(s.highlightTrailingWhitespace ? highlightTrailingWhitespace() : []),
         rulerConf.of(rulers(s.rulers)),
-        fontThemeConf.of(fontTheme(s.fontSize))
+        fontThemeConf.of(fontTheme(s.fontSize)),
+        lintGutter()
       ]
     })
   }
 
   /** Replace the entire document (used when switching tabs). */
-  setDocument(doc: string): void {
-    this.view.setState(this.makeState(doc))
+  setDocument(doc: string, state?: EditorState): void {
+    this.view.setState(state ?? this.makeState(doc))
+  }
+
+  /** Replace document text without discarding extensions, undo history or folds. */
+  replaceContent(doc: string): void {
+    const state = this.view.state
+    this.view.dispatch({ changes: { from: 0, to: state.doc.length, insert: doc }, userEvent: 'input.replace' })
+  }
+
+  /** Snapshot the complete CM state so a tab keeps undo, selection and folds. */
+  getState(): EditorState {
+    return this.view.state
   }
 
   /** Current document text. */
@@ -192,11 +210,13 @@ export class Editor {
 
   /** Load + install a language description (or clear it). Returns display name. */
   private async applyLanguage(desc: LanguageDescription | null): Promise<string> {
+    const request = ++this.languageRequest
     if (!desc) {
       this.view.dispatch({ effects: languageConf.reconfigure([]) })
       return 'Plain Text'
     }
     const support: LanguageSupport = await desc.load()
+    if (request !== this.languageRequest) return desc.name
     this.view.dispatch({ effects: languageConf.reconfigure(support) })
     return desc.name
   }
@@ -286,7 +306,31 @@ export class Editor {
 
   /** Duplicate the current selection (or line if empty) in place. */
   duplicateSelection(): void {
-    copyLineDown(this.view)
+    const { state } = this.view
+    const ranges = state.selection.ranges
+    if (ranges.every((range) => range.empty)) {
+      copyLineDown(this.view)
+      return
+    }
+
+    const changes = ranges
+      .filter((range) => !range.empty)
+      .map((range) => ({ from: range.to, insert: state.sliceDoc(range.from, range.to) }))
+      .sort((a, b) => b.from - a.from)
+    const changeSet = state.changes(changes)
+    const selections: SelectionRange[] = ranges.map((range) =>
+      range.empty
+        ? range
+        : EditorSelection.range(
+            changeSet.mapPos(range.from, 1),
+            changeSet.mapPos(range.to, 1)
+          )
+    )
+    this.view.dispatch({
+      changes: changeSet,
+      selection: EditorSelection.create(selections, state.selection.mainIndex),
+      userEvent: 'input.duplicate'
+    })
   }
 
   /** Sort the selected lines (or the whole document) alphabetically. */
@@ -312,6 +356,23 @@ export class Editor {
   openSearch(): void {
     openSearchPanel(this.view)
   }
+
+  openReplace(): void {
+    openSearchPanel(this.view)
+    const query = getSearchQuery(this.view.state)
+    this.view.dispatch({
+      effects: setSearchQuery.of(
+        new SearchQuery({
+          search: query.search,
+          replace: query.replace,
+          caseSensitive: query.caseSensitive,
+          regexp: query.regexp,
+          wholeWord: query.wholeWord
+        })
+      )
+    })
+    this.view.dom.querySelector<HTMLInputElement>('input[name=replace]')?.focus()
+  }
   goToLine(): void {
     gotoLine(this.view)
   }
@@ -335,6 +396,25 @@ export class Editor {
       scrollIntoView: true
     })
     this.view.focus()
+  }
+
+  /** Current 1-based line number, used by bookmarks and status-driven actions. */
+  currentLine(): number {
+    return this.view.state.doc.lineAt(this.view.state.selection.main.head).number
+  }
+
+  /** Insert reusable text at every selection, retaining normal multi-cursor semantics. */
+  insertText(text: string): void {
+    const { state } = this.view
+    const changes = state.selection.ranges
+      .map((range) => ({ from: range.from, to: range.to, insert: text }))
+      .sort((a, b) => b.from - a.from)
+    this.view.dispatch({ changes, userEvent: 'input.snippet' })
+  }
+
+  /** Replace diagnostics supplied by a configured language tool. */
+  setDiagnostics(diagnostics: Diagnostic[]): void {
+    this.view.dispatch(setDiagnostics(this.view.state, diagnostics))
   }
 
   focus(): void {
