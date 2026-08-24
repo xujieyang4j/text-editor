@@ -88,6 +88,7 @@ export class GitPanel {
       item.className = 'git-change-item'
       item.textContent = `${entry.indexStatus}${entry.worktreeStatus}  ${entry.path}`
       item.addEventListener('click', (event) => {
+        this.activePath = entry.path
         if (event.ctrlKey || event.metaKey) {
           if (this.selected.has(entry.path)) this.selected.delete(entry.path)
           else this.selected.add(entry.path)

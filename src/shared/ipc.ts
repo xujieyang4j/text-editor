@@ -384,6 +384,9 @@ export interface Settings {
   colorScheme: ColorScheme
   /** Uses Chromium's native spell checker for prose-oriented files. */
   spellCheck: boolean
+  /** Controlled automatic save for already-named buffers only. */
+  autoSave: 'off' | 'after_delay' | 'on_focus_change'
+  autoSaveDelayMs: number
   /** Hide surrounding chrome and center the editor, like Sublime's Distraction Free Mode. */
   distractionFree: boolean
   searchHistory: string[]
@@ -405,6 +408,8 @@ export const DEFAULT_SETTINGS: Settings = {
   buildCommand: '',
   colorScheme: 'dark',
   spellCheck: false,
+  autoSave: 'off',
+  autoSaveDelayMs: 1_000,
   distractionFree: false,
   searchHistory: [],
   replaceHistory: []
@@ -635,6 +640,7 @@ export type MenuEvent =
   | 'toggle-theme'
   | 'toggle-minimap'
   | 'toggle-distraction-free'
+  | 'cycle-auto-save'
   | 'command-palette'
   | 'goto-anything'
   | 'goto-symbol'

@@ -55,6 +55,7 @@ export function buildMenu(): void {
         item('Save', 'save', 'CmdOrCtrl+S'),
         item('Save As…', 'save-as', 'CmdOrCtrl+Shift+S'),
         item('Save All', 'save-all', 'CmdOrCtrl+Alt+S'),
+        item('Cycle Auto Save Mode', 'cycle-auto-save'),
         { type: 'separator' },
         item('Close Tab', 'close-tab', 'CmdOrCtrl+W'),
         item('Close Other Tabs', 'close-other-tabs'),

@@ -450,6 +450,8 @@ function sanitizeSettings(value: unknown): Settings {
       ? raw.colorScheme
       : 'dark',
     spellCheck: typeof raw.spellCheck === 'boolean' ? raw.spellCheck : DEFAULT_SETTINGS.spellCheck,
+    autoSave: raw.autoSave === 'after_delay' || raw.autoSave === 'on_focus_change' ? raw.autoSave : 'off',
+    autoSaveDelayMs: asFiniteInt(raw.autoSaveDelayMs, DEFAULT_SETTINGS.autoSaveDelayMs, 250, 60_000),
     distractionFree: typeof raw.distractionFree === 'boolean' ? raw.distractionFree : DEFAULT_SETTINGS.distractionFree,
     searchHistory: Array.isArray(raw.searchHistory)
       ? raw.searchHistory.filter((item): item is string => typeof item === 'string').map((item) => item.slice(0, 2_000)).slice(0, 50)
@@ -504,6 +506,8 @@ function convertSublimeSettings(value: unknown): Partial<Settings> {
     ...(typeof raw.draw_white_space === 'string' ? { highlightTrailingWhitespace: raw.draw_white_space === 'all' || raw.draw_white_space === 'selection' } : {}),
     ...(Array.isArray(raw.rulers) ? { rulers: raw.rulers } : {}),
     ...(typeof raw.spell_check === 'boolean' ? { spellCheck: raw.spell_check } : {}),
+    ...(raw.auto_save === 'after_delay' || raw.auto_save === 'on_focus_change' ? { autoSave: raw.auto_save } : {}),
+    ...(typeof raw.auto_save_delay === 'number' ? { autoSaveDelayMs: raw.auto_save_delay } : {}),
     ...(sourceScheme.includes('solarized') ? { colorScheme: 'solarized-dark' as const } : sourceScheme.includes('dracula') ? { colorScheme: 'dracula' as const } : sourceScheme.includes('light') ? { colorScheme: 'light' as const } : {})
   }
 }

@@ -89,6 +89,8 @@ class App {
   private closedStack: string[] = []
   /** Debounce handle for session persistence. */
   private saveSessionTimer: number | null = null
+  private autoSaveTimer: number | null = null
+  private autoSaveInFlight = new Set<string>()
   /** Invalidates late language-loader completions after a tab changes. */
   private languageActivation = 0
   /** Commands executed while recording become the replayable macro. */
@@ -226,6 +228,9 @@ class App {
 
     this.bindMenu()
     this.bindShortcuts()
+    window.addEventListener('blur', () => {
+      if (this.settings.autoSave === 'on_focus_change') void this.autoSaveDirtyDocuments()
+    })
     window.editor.onFileChange((change) => {
       if (this.folder) void this.reloadWorkspaceTree()
       this.projectSymbols = []
@@ -434,6 +439,9 @@ class App {
         break
       case 'save-all':
         void this.saveAll()
+        break
+      case 'cycle-auto-save':
+        this.cycleAutoSave()
         break
       case 'close-tab':
         this.closeActive()
@@ -1323,6 +1331,7 @@ class App {
     group.editor.focus()
     this.scheduleSessionSave()
     this.scheduleLanguageServerSync(doc)
+    this.scheduleAutoSave()
     // Run again because a manually-selected HTML/Markdown language can reveal
     // an action even when the filename has no recognised extension.
     this.syncEditorChrome()
@@ -2375,6 +2384,50 @@ class App {
       }
     }
     this.statusSelection.textContent = `Saved ${dirty.length} file${dirty.length === 1 ? '' : 's'}`
+  }
+
+  private cycleAutoSave(): void {
+    const modes: Settings['autoSave'][] = ['off', 'after_delay', 'on_focus_change']
+    const next = modes[(modes.indexOf(this.settings.autoSave) + 1) % modes.length]
+    this.settings.autoSave = next
+    if (next !== 'after_delay' && this.autoSaveTimer !== null) {
+      window.clearTimeout(this.autoSaveTimer)
+      this.autoSaveTimer = null
+    }
+    this.persistSettings()
+    this.statusSelection.textContent = `Auto Save: ${next.replaceAll('_', ' ')}`
+    if (next === 'after_delay') this.scheduleAutoSave()
+  }
+
+  private scheduleAutoSave(): void {
+    if (this.settings.autoSave !== 'after_delay') return
+    if (this.autoSaveTimer !== null) window.clearTimeout(this.autoSaveTimer)
+    this.autoSaveTimer = window.setTimeout(() => {
+      this.autoSaveTimer = null
+      if (this.settings.autoSave === 'after_delay') void this.autoSaveDirtyDocuments()
+    }, this.settings.autoSaveDelayMs)
+  }
+
+  /** Never prompts for a destination: untitled files remain protected hot-exit drafts. */
+  private async autoSaveDirtyDocuments(): Promise<void> {
+    for (const doc of this.docs.filter((item) => !!item.path && isDirty(item) && !this.autoSaveInFlight.has(item.id))) {
+      this.autoSaveInFlight.add(doc.id)
+      const snapshot = doc.content
+      try {
+        const result = await window.editor.save(doc.path, snapshot, { encoding: doc.encoding, eol: doc.eol })
+        if (result.saved) {
+          doc.savedContent = snapshot
+          doc.externalChange = undefined
+          doc.ignoredExternalContent = undefined
+        }
+      } catch (error) {
+        this.showError(`Auto Save could not save “${doc.name}”.`, error)
+      } finally {
+        this.autoSaveInFlight.delete(doc.id)
+      }
+    }
+    this.renderTabs()
+    this.scheduleSessionSave()
   }
 
   private async closeTabs(mode: 'others' | 'right' | 'all'): Promise<void> {
