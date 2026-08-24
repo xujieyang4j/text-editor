@@ -117,6 +117,8 @@ class App {
   /** External formatter/LSP commands from project config require per-session consent. */
   private approvedExternalTools = new Set<string>()
   private booted = false
+  /** Menu events can arrive while hot-exit restoration is still loading. */
+  private pendingMenuEvents: MenuEvent[] = []
   private pendingLaunchPaths: string[] = []
   private workspacePollTimer: number | null = null
   private conflictBar: HTMLDivElement | null = null
@@ -338,12 +340,14 @@ class App {
       await this.restoreSession()
       this.booted = true
       for (const filePath of this.pendingLaunchPaths.splice(0)) await this.openPath(filePath)
+      for (const event of this.pendingMenuEvents.splice(0)) this.run(event)
       this.startWorkspacePolling()
     } catch (error) {
       this.showError('The previous session could not be restored.', error)
       this.docs = [createUntitled()]
       await this.activate(this.docs[0].id)
       this.booted = true
+      for (const event of this.pendingMenuEvents.splice(0)) this.run(event)
       this.startWorkspacePolling()
     }
   }
@@ -426,6 +430,10 @@ class App {
    * command palette all funnel through here so behaviour stays consistent.
    */
   run(event: MenuEvent): void {
+    if (!this.booted && event !== 'persist-session') {
+      this.pendingMenuEvents.push(event)
+      return
+    }
     if (this.recordingMacro && !this.isReplayingMacro && this.isRecordableMacroEvent(event)) {
       this.lastMacro.push(event)
       this.macroSteps.push({ kind: 'command', command: event })
@@ -1897,9 +1905,15 @@ class App {
       this.folders = [folder.root]
       await this.loadProject(folder.root)
       this.workspaceName.textContent = baseName(folder.root).toUpperCase()
-      this.tree.render(folder.entries)
+      await this.renderProjectRoots()
+      if (!this.settings.distractionFree) this.sidebar.classList.remove('hidden')
       void window.editor.watchWorkspace(folder.root)
       void window.editor.addRecentProject(folder.root)
+      this.projectSymbols = []
+      this.workspaceWords = []
+      this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+        ? `已打开文件夹：${folder.root}`
+        : `Opened folder: ${folder.root}`
       this.scheduleSessionSave()
     } catch (error) {
       this.showError('The selected folder could not be opened.', error)
@@ -2071,9 +2085,13 @@ class App {
       this.folders = [folder.root]
       await this.loadProject(folder.root)
       this.workspaceName.textContent = baseName(folder.root).toUpperCase()
-      this.tree.render(folder.entries)
+      await this.renderProjectRoots()
+      if (!this.settings.distractionFree) this.sidebar.classList.remove('hidden')
       void window.editor.watchWorkspace(folder.root)
       void window.editor.addRecentProject(folder.root)
+      this.projectSymbols = []
+      this.workspaceWords = []
+      this.scheduleSessionSave()
     } catch (error) {
       this.showError('The recent project could not be opened.', error)
     }
