@@ -102,4 +102,6 @@ export const COMMANDS: Command[] = [
   { id: 'focus-next-group', title: 'View: Focus Next Group', hint: 'Ctrl/Cmd+Alt+]' },
   { id: 'focus-prev-group', title: 'View: Focus Previous Group', hint: 'Ctrl/Cmd+Alt+[' },
   { id: 'new-window', title: 'File: New Window' }
+  , { id: 'add-folder-to-project', title: 'Project: Add Folder to Project…' }
+  , { id: 'open-recent-project', title: 'Project: Open Recent Project…' }
 ]

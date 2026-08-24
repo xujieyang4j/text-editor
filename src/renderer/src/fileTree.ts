@@ -12,6 +12,10 @@ export interface FileTreeHandlers {
   onError: (message: string, error: unknown) => void
 }
 
+export interface TreeEntry extends DirEntry {
+  children?: DirEntry[]
+}
+
 /**
  * Lazy, collapsible file tree rendered from the opened workspace folder.
  * Directory children are fetched on first expand via the preload API.
@@ -22,7 +26,7 @@ export class FileTree {
   /** Tracks which directory paths are currently expanded. */
   private expanded = new Set<string>()
 
-  private rootEntries: DirEntry[] = []
+  private rootEntries: TreeEntry[] = []
   /** Invalidates async expansion restores when the workspace changes. */
   private renderVersion = 0
 
@@ -35,7 +39,7 @@ export class FileTree {
    * Render workspace entries. A true `preserveExpansion` keeps the user's
    * expanded folders open across watcher/poll refreshes.
    */
-  render(entries: DirEntry[], preserveExpansion = false): void {
+  render(entries: TreeEntry[], preserveExpansion = false): void {
     const version = ++this.renderVersion
     if (!preserveExpansion) this.expanded.clear()
     this.rootEntries = entries
@@ -58,7 +62,7 @@ export class FileTree {
   }
 
   /** Build a <ul> for a set of sibling entries at the given depth. */
-  private buildList(entries: DirEntry[], depth: number): HTMLElement {
+  private buildList(entries: TreeEntry[], depth: number): HTMLElement {
     const ul = document.createElement('ul')
     ul.className = 'tree-list'
     for (const entry of entries) {
@@ -68,7 +72,7 @@ export class FileTree {
   }
 
   /** Build a single <li> row plus (for expanded dirs) its child list. */
-  private buildItem(entry: DirEntry, depth: number): HTMLElement {
+  private buildItem(entry: TreeEntry, depth: number): HTMLElement {
     const li = document.createElement('li')
     li.className = 'tree-item'
     li.dataset.treePath = entry.path
@@ -165,7 +169,7 @@ export class FileTree {
 
   /** Expand or collapse a directory row, loading children on demand. */
   private async toggleDir(
-    entry: DirEntry,
+    entry: TreeEntry,
     li: HTMLElement,
     twisty: HTMLElement,
     depth: number
@@ -179,7 +183,8 @@ export class FileTree {
     }
 
     try {
-      const children = await window.editor.readDir(entry.path)
+      const children = entry.children ?? await window.editor.readDir(entry.path)
+      entry.children = children
       li.appendChild(this.buildList(children, depth + 1))
       twisty.textContent = '▾'
       this.expanded.add(entry.path)

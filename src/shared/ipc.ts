@@ -19,6 +19,9 @@ export const IPC = {
   sessionRead: 'session:read',
   sessionWrite: 'session:write',
   sessionFlushed: 'session:flushed',
+  recentProjectsRead: 'recent-projects:read',
+  recentProjectsAdd: 'recent-projects:add',
+  recentProjectOpen: 'recent-project:open',
   openExternal: 'shell:open-external',
   workspaceSearch: 'workspace:search',
   workspaceReplace: 'workspace:replace',
@@ -249,6 +252,11 @@ export interface OpenedFolder {
   entries: DirEntry[]
 }
 
+export interface RecentProject {
+  path: string
+  lastOpened: number
+}
+
 /**
  * User-configurable settings, persisted as JSON in the app's userData dir.
  * Mirrors the subset of Sublime's Preferences that we support.
@@ -321,6 +329,8 @@ export interface Session {
   activeIndex: number
   /** Root of the workspace folder that was open, if any. */
   folder: string | null
+  /** All project roots; `folder` remains as the primary-root compatibility field. */
+  folders?: string[]
   /** User-created project settings live alongside the workspace session. */
   project?: ProjectSettings
   /** Saved pane arrangement and group-local tab order. */
@@ -422,6 +432,7 @@ export const EMPTY_SESSION: Session = {
   openFiles: [],
   activeIndex: 0,
   folder: null,
+  folders: [],
   project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] },
   layout: { kind: 'single', activeGroup: 0, groups: [{ docIndexes: [], activeIndex: 0 }] }
 }
@@ -480,6 +491,8 @@ export type MenuEvent =
   | 'focus-next-group'
   | 'focus-prev-group'
   | 'new-window'
+  | 'add-folder-to-project'
+  | 'open-recent-project'
   | 'select-color-scheme'
   | 'open-marketplace'
   | 'toggle-git'

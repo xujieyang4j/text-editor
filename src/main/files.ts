@@ -40,6 +40,7 @@ import {
   , type MarketplaceInstallRequest
   , type GitStatus
   , type GitDiff
+  , type RecentProject
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -76,6 +77,7 @@ interface PersistentLanguageServer {
 }
 const languageServers = new Map<string, PersistentLanguageServer>()
 const execFileAsync = promisify(execFile)
+const windowSessionIds = new Map<number, string>()
 const grantedFiles = new Map<number, Set<string>>()
 const grantedRoots = new Map<number, Set<string>>()
 
@@ -141,6 +143,15 @@ function cleanupGrants(senderId: number): void {
 export function authorizePathForRenderer(senderId: number, target: string): void {
   if (!path.isAbsolute(target)) return
   grantFile(senderId, target)
+}
+
+/** Assign a durable session key to a window from the main-process window manager. */
+export function setWindowSessionId(senderId: number, sessionId: string): void {
+  windowSessionIds.set(senderId, sessionId)
+}
+
+export function clearWindowSessionId(senderId: number): void {
+  windowSessionIds.delete(senderId)
 }
 
 /** Add a base URL so relative assets still work in a temporary HTML snapshot. */
@@ -263,6 +274,12 @@ function userDataFile(name: string): string {
   return path.join(app.getPath('userData'), name)
 }
 
+function windowSessionFile(senderId: number): string {
+  const id = windowSessionIds.get(senderId) ?? String(senderId)
+  // Preserve session.json as a migration source for the first legacy window.
+  return id === 'legacy' ? userDataFile('session.json') : userDataFile(`session-${id}.json`)
+}
+
 /** Settings are read at open time so a changed large-file limit applies immediately. */
 async function readSettings(): Promise<Settings> {
   return sanitizeSettings(await readJson<unknown>(userDataFile('settings.json'), DEFAULT_SETTINGS))
@@ -378,6 +395,9 @@ function sanitizeSession(value: unknown): Session {
     openFiles,
     activeIndex: asFiniteInt(raw.activeIndex, 0, 0, Math.max(0, openFiles.length - 1)),
     folder: typeof raw.folder === 'string' && path.isAbsolute(raw.folder) ? raw.folder : null,
+    folders: Array.isArray(raw.folders)
+      ? raw.folders.filter((folder): folder is string => typeof folder === 'string' && path.isAbsolute(folder)).slice(0, 20)
+      : typeof raw.folder === 'string' && path.isAbsolute(raw.folder) ? [raw.folder] : [],
     project: {
       exclude: Array.isArray(project.exclude)
         ? project.exclude.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.slice(0, 200)).slice(0, 100)
@@ -1097,14 +1117,46 @@ export function registerFileHandlers(): void {
   })
   ipcMain.handle(IPC.sessionRead, async (event): Promise<Session> => {
     assertTrustedSender(event)
-    const session = sanitizeSession(await readJson<unknown>(userDataFile('session.json'), EMPTY_SESSION))
+    const session = sanitizeSession(await readJson<unknown>(windowSessionFile(event.sender.id), EMPTY_SESSION))
+    for (const folder of session.folders ?? []) grantRoot(event.sender.id, folder)
     if (session.folder) grantRoot(event.sender.id, session.folder)
     for (const file of session.openFiles) if (file.path) grantFile(event.sender.id, file.path)
     return session
   })
   ipcMain.handle(IPC.sessionWrite, async (event, session: unknown): Promise<void> => {
     assertTrustedSender(event)
-    await writeJson(userDataFile('session.json'), sanitizeSession(session))
+    await writeJson(windowSessionFile(event.sender.id), sanitizeSession(session))
+  })
+
+  ipcMain.handle(IPC.recentProjectsRead, async (event): Promise<RecentProject[]> => {
+    assertTrustedSender(event)
+    const raw = await readJson<unknown>(userDataFile('recent-projects.json'), [])
+    return Array.isArray(raw)
+      ? raw
+          .flatMap((entry) => entry && typeof entry === 'object' && typeof (entry as { path?: unknown }).path === 'string' && path.isAbsolute((entry as { path: string }).path)
+            ? [{ path: (entry as { path: string }).path, lastOpened: typeof (entry as { lastOpened?: unknown }).lastOpened === 'number' ? (entry as { lastOpened: number }).lastOpened : 0 }]
+            : [])
+          .sort((a, b) => b.lastOpened - a.lastOpened)
+          .slice(0, 30)
+      : []
+  })
+
+  ipcMain.handle(IPC.recentProjectsAdd, async (event, root: unknown): Promise<void> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    const existing = await readJson<RecentProject[]>(userDataFile('recent-projects.json'), [])
+    const entries = [{ path: root, lastOpened: Date.now() }, ...existing.filter((entry) => entry.path !== root)].slice(0, 30)
+    await writeJson(userDataFile('recent-projects.json'), entries)
+  })
+
+  ipcMain.handle(IPC.recentProjectOpen, async (event, root: unknown): Promise<OpenedFolder> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    const recent = await readJson<RecentProject[]>(userDataFile('recent-projects.json'), [])
+    if (!recent.some((entry) => entry.path === root)) throw new Error('This project is not in the recent-projects list.')
+    grantRoot(event.sender.id, root)
+    return { root, entries: await readDirectory(root) }
   })
 
   ipcMain.handle(IPC.workspaceSearch, async (event, request: WorkspaceSearchRequest): Promise<WorkspaceMatch[]> => {

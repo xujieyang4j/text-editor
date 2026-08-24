@@ -31,6 +31,7 @@ import {
   , type MarketplaceInstallRequest
   , type GitStatus
   , type GitDiff
+  , type RecentProject
 } from '../shared/ipc.js'
 
 /**
@@ -79,6 +80,12 @@ const api = {
   /** Persist the session. */
   writeSession: (session: Session): Promise<void> =>
     ipcRenderer.invoke(IPC.sessionWrite, session),
+
+  readRecentProjects: (): Promise<RecentProject[]> => ipcRenderer.invoke(IPC.recentProjectsRead),
+
+  addRecentProject: (root: string): Promise<void> => ipcRenderer.invoke(IPC.recentProjectsAdd, root),
+
+  openRecentProject: (root: string): Promise<OpenedFolder> => ipcRenderer.invoke(IPC.recentProjectOpen, root),
 
   /** Confirm to the main process that a close-time session flush has completed. */
   sessionFlushed: (): Promise<void> => ipcRenderer.invoke(IPC.sessionFlushed),

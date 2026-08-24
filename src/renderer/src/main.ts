@@ -74,6 +74,7 @@ class App {
   private layoutKind: LayoutKind = 'single'
   private settings: Settings = { ...DEFAULT_SETTINGS }
   private folder: string | null = null
+  private folders: string[] = []
   private project: ProjectSettings = { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] }
   private plugins: PluginManifest[] = []
   /** Recently-closed file paths, for Reopen Closed Tab (LIFO). */
@@ -267,8 +268,9 @@ class App {
       session = { openFiles: [], activeIndex: 0, folder: null }
     }
 
-    if (session.folder) {
-      await this.openFolderPath(session.folder)
+    const sessionFolders = session.folders?.length ? session.folders : session.folder ? [session.folder] : []
+    if (sessionFolders.length > 0) {
+      for (const root of sessionFolders) await this.addFolderPath(root, this.folders.length === 0)
     }
 
     for (const sf of session.openFiles) {
@@ -344,6 +346,12 @@ class App {
         break
       case 'new-window':
         void window.editor.newWindow()
+        break
+      case 'add-folder-to-project':
+        void this.addFolderToProject()
+        break
+      case 'open-recent-project':
+        void this.openRecentProject()
         break
       case 'open-file':
         void this.openViaDialog()
@@ -1245,27 +1253,86 @@ class App {
       const folder = await window.editor.openFolder()
       if (!folder) return
       this.folder = folder.root
+      this.folders = [folder.root]
       await this.loadProject(folder.root)
       this.workspaceName.textContent = baseName(folder.root).toUpperCase()
       this.tree.render(folder.entries)
       void window.editor.watchWorkspace(folder.root)
+      void window.editor.addRecentProject(folder.root)
       this.scheduleSessionSave()
     } catch (error) {
       this.showError('The selected folder could not be opened.', error)
     }
   }
 
-  /** Open a workspace folder by a known path (session restore). */
-  private async openFolderPath(root: string): Promise<void> {
+  /** Add a folder to the active project without discarding its existing roots. */
+  private async addFolderPath(root: string, primary = false): Promise<void> {
+    if (this.folders.includes(root)) return
     try {
-      const entries = await window.editor.readDir(root)
-      this.folder = root
-      await this.loadProject(root)
-      this.workspaceName.textContent = baseName(root).toUpperCase()
-      this.tree.render(entries)
+      await window.editor.readDir(root)
+      if (primary || !this.folder) {
+        this.folder = root
+        await this.loadProject(root)
+      }
+      this.folders.push(root)
+      this.workspaceName.textContent = this.folders.length === 1 ? baseName(root).toUpperCase() : `${this.folders.length} FOLDERS`
+      await this.renderProjectRoots()
       void window.editor.watchWorkspace(root)
-    } catch {
-      // Folder gone since last run — ignore.
+      void window.editor.addRecentProject(root)
+    } catch (error) {
+      this.showError(`Could not add folder “${baseName(root)}”.`, error)
+    }
+  }
+
+  private async renderProjectRoots(): Promise<void> {
+    if (this.folders.length === 0) {
+      this.tree.clear()
+      return
+    }
+    try {
+      const roots = await Promise.all(this.folders.map(async (root) => ({
+        name: baseName(root),
+        path: root,
+        isDirectory: true,
+        children: await window.editor.readDir(root)
+      })))
+      if (roots.length === 1) this.tree.render(roots[0].children, true)
+      else this.tree.render(roots.map((root) => ({ name: root.name, path: root.path, isDirectory: true, children: root.children })), true)
+    } catch (error) {
+      this.showError('Project folders could not be rendered.', error)
+    }
+  }
+
+  private async addFolderToProject(): Promise<void> {
+    const folder = await window.editor.openFolder()
+    if (folder) await this.addFolderPath(folder.root)
+  }
+
+  private async openRecentProject(): Promise<void> {
+    const projects = await window.editor.readRecentProjects()
+    if (projects.length === 0) {
+      this.showError('No recent projects are available.')
+      return
+    }
+    this.palette.open({
+      placeholder: 'Open Recent Project',
+      items: projects.map((project) => ({ label: baseName(project.path), detail: project.path, value: project.path })),
+      onAccept: (item) => { void this.openRecentProjectPath(item.value as string) }
+    })
+  }
+
+  private async openRecentProjectPath(root: string): Promise<void> {
+    try {
+      const folder = await window.editor.openRecentProject(root)
+      this.folder = folder.root
+      this.folders = [folder.root]
+      await this.loadProject(folder.root)
+      this.workspaceName.textContent = baseName(folder.root).toUpperCase()
+      this.tree.render(folder.entries)
+      void window.editor.watchWorkspace(folder.root)
+      void window.editor.addRecentProject(folder.root)
+    } catch (error) {
+      this.showError('The recent project could not be opened.', error)
     }
   }
 
@@ -1443,12 +1510,7 @@ class App {
   }
 
   private async reloadWorkspaceTree(): Promise<void> {
-    if (!this.folder) return
-    try {
-      this.tree.render(await window.editor.readDir(this.folder), true)
-    } catch (error) {
-      this.showError('The workspace tree could not be refreshed.', error)
-    }
+    await this.renderProjectRoots()
   }
 
   /**
@@ -2010,9 +2072,9 @@ class App {
   /** Ctrl/Cmd+P — fuzzy list of workspace files, with :line and @symbol modes. */
   private async openGotoAnything(): Promise<void> {
     let files: string[] = []
-    if (this.folder) {
+    if (this.folders.length > 0) {
       try {
-        files = (await window.editor.listFiles(this.folder)).filter((file) => !this.isProjectExcluded(file))
+        files = (await Promise.all(this.folders.map((root) => window.editor.listFiles(root)))).flat().filter((file) => !this.isProjectExcluded(file))
       } catch {
         files = []
       }
@@ -2026,8 +2088,9 @@ class App {
   }
 
   private isProjectExcluded(file: string): boolean {
-    if (!this.folder) return false
-    const relative = file.slice(this.folder.length + 1).replaceAll('\\', '/')
+    const root = this.folders.find((candidate) => file === candidate || file.startsWith(`${candidate}/`) || file.startsWith(`${candidate}\\`))
+    if (!root) return false
+    const relative = file.slice(root.length + 1).replaceAll('\\', '/')
     return this.project.exclude.some((pattern) => {
       const source = pattern
         .replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -2189,7 +2252,7 @@ class App {
       }))
     }
 
-    const session: Session = { openFiles, activeIndex, folder: this.folder, layout }
+    const session: Session = { openFiles, activeIndex, folder: this.folder, folders: this.folders, layout }
     try {
       await window.editor.writeSession(session)
     } catch (error) {

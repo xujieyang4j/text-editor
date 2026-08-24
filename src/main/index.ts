@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, type WebContents } from 'electron'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { authorizePathForRenderer, registerFileHandlers } from './files.js'
+import { authorizePathForRenderer, clearWindowSessionId, registerFileHandlers, setWindowSessionId } from './files.js'
 import { buildMenu } from './menu.js'
 import { IPC, type MenuEvent } from '../shared/ipc.js'
 
@@ -13,6 +13,13 @@ const flushingWindows = new Set<WebContents>()
 let quitRequested = false
 let quitting = false
 const pendingOpenPaths: string[] = []
+const windowSessionIds = new Map<number, string>()
+let windowCounter = 0
+
+function newSessionId(): string {
+  windowCounter += 1
+  return `${Date.now().toString(36)}-${windowCounter.toString(36)}`
+}
 
 function sendOpenPath(filePath: string): void {
   if (!path.isAbsolute(filePath)) return
@@ -69,7 +76,7 @@ function allowAppNavigation(win: BrowserWindow): void {
 }
 
 /** Create the main application window and load the renderer. */
-function createWindow(): void {
+function createWindow(sessionId = newSessionId()): void {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -88,6 +95,8 @@ function createWindow(): void {
   })
 
   allowAppNavigation(win)
+  windowSessionIds.set(win.webContents.id, sessionId)
+  setWindowSessionId(win.webContents.id, sessionId)
 
   // A direct window close bypasses `before-quit` on some platform paths.
   // Flush the renderer session here and only then let Electron destroy it.
@@ -101,6 +110,10 @@ function createWindow(): void {
   })
 
   win.on('ready-to-show', () => win.show())
+  win.on('closed', () => {
+    windowSessionIds.delete(win.webContents.id)
+    clearWindowSessionId(win.webContents.id)
+  })
   win.webContents.once('did-finish-load', () => {
     for (const filePath of pendingOpenPaths.splice(0)) {
       authorizePathForRenderer(win.webContents.id, filePath)
@@ -161,7 +174,7 @@ app.whenReady().then(() => {
     pendingSessionFlushes.delete(event.sender)
   })
   buildMenu()
-  createWindow()
+  createWindow('legacy')
   const initialPath = filePathFromArgv(process.argv)
   if (initialPath) sendOpenPath(initialPath)
 

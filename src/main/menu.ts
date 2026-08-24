@@ -50,6 +50,7 @@ export function buildMenu(): void {
         item('New Window', 'new-window', 'CmdOrCtrl+Shift+N'),
         item('Open File…', 'open-file', 'CmdOrCtrl+O'),
         item('Open Folder…', 'open-folder', 'CmdOrCtrl+Shift+O'),
+        item('Open Recent Project…', 'open-recent-project'),
         { type: 'separator' },
         item('Save', 'save', 'CmdOrCtrl+S'),
         item('Save As…', 'save-as', 'CmdOrCtrl+Shift+S'),
@@ -176,7 +177,11 @@ export function buildMenu(): void {
     },
     {
       label: 'Project',
-      submenu: [item('Configure Project…', 'project-settings')]
+      submenu: [
+        item('Add Folder to Project…', 'add-folder-to-project'),
+        item('Open Recent Project…', 'open-recent-project'),
+        item('Configure Project…', 'project-settings')
+      ]
     },
     {
       label: 'Git',
