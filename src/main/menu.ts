@@ -50,6 +50,7 @@ export function buildMenu(): void {
         item('New Window', 'new-window', 'CmdOrCtrl+Shift+N'),
         item('Open File…', 'open-file', 'CmdOrCtrl+O'),
         item('Open Folder…', 'open-folder', 'CmdOrCtrl+Shift+O'),
+        item('Open Recent File…', 'open-recent-file'),
         item('Open Recent Project…', 'open-recent-project'),
         { type: 'separator' },
         item('Save', 'save', 'CmdOrCtrl+S'),

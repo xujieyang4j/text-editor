@@ -23,6 +23,8 @@ export const IPC = {
   recentProjectsRead: 'recent-projects:read',
   recentProjectsAdd: 'recent-projects:add',
   recentProjectOpen: 'recent-project:open',
+  recentFilesRead: 'recent-files:read',
+  recentFileOpen: 'recent-file:open',
   windowSessionRegister: 'window-session:register',
   windowSessionList: 'window-session:list',
   openExternal: 'shell:open-external',
@@ -34,6 +36,7 @@ export const IPC = {
   workspaceWords: 'workspace:words',
   fileCreate: 'file:create',
   fileRename: 'file:rename',
+  fileMove: 'file:move',
   fileDelete: 'file:delete',
   revealInFolder: 'shell:reveal-in-folder',
   fileWatch: 'file:watch',
@@ -345,6 +348,11 @@ export interface OpenedFolder {
 }
 
 export interface RecentProject {
+  path: string
+  lastOpened: number
+}
+
+export interface RecentFile {
   path: string
   lastOpened: number
 }
@@ -700,6 +708,7 @@ export type MenuEvent =
   | 'new-window'
   | 'add-folder-to-project'
   | 'open-recent-project'
+  | 'open-recent-file'
   | 'import-sublime-project'
   | 'import-sublime-settings'
   | 'import-sublime-snippet'

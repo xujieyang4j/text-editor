@@ -7,6 +7,7 @@ export interface FileTreeHandlers {
   onOpenFile: FileOpenHandler
   onCreate: (parent: string, isDirectory: boolean) => void
   onRename: (path: string) => void
+  onMove: (path: string) => void
   onDelete: (path: string) => void
   onReveal: (path: string) => void
   onError: (message: string, error: unknown) => void
@@ -158,6 +159,7 @@ export class FileTree {
       action('New Folder…', () => this.handlers.onCreate(entry.path, true))
     }
     action('Rename…', () => this.handlers.onRename(entry.path))
+    action('Move To…', () => this.handlers.onMove(entry.path))
     action('Move to Trash', () => this.handlers.onDelete(entry.path))
     action('Reveal in Folder', () => this.handlers.onReveal(entry.path))
     document.body.appendChild(menu)

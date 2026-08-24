@@ -43,6 +43,7 @@ import {
   , type GitConflict
   , type UpdateInfo
   , type RecentProject
+  , type RecentFile
   , type WindowSessionMeta
   , type SavedMacro
 } from '../shared/ipc.js'
@@ -103,6 +104,10 @@ const api = {
 
   openRecentProject: (root: string): Promise<OpenedFolder> => ipcRenderer.invoke(IPC.recentProjectOpen, root),
 
+  readRecentFiles: (): Promise<RecentFile[]> => ipcRenderer.invoke(IPC.recentFilesRead),
+
+  openRecentFile: (file: string): Promise<OpenedFile> => ipcRenderer.invoke(IPC.recentFileOpen, file),
+
   registerWindowSession: (id: string): Promise<void> => ipcRenderer.invoke(IPC.windowSessionRegister, id),
 
   listWindowSessions: (): Promise<WindowSessionMeta[]> => ipcRenderer.invoke(IPC.windowSessionList),
@@ -138,6 +143,8 @@ const api = {
 
   renamePath: (source: string, target: string): Promise<void> =>
     ipcRenderer.invoke(IPC.fileRename, source, target),
+
+  movePath: (source: string): Promise<string | null> => ipcRenderer.invoke(IPC.fileMove, source),
 
   deletePath: (target: string): Promise<void> => ipcRenderer.invoke(IPC.fileDelete, target),
 

@@ -54,6 +54,7 @@ import {
   , type GitActionRequest
   , type GitConflict
   , type RecentProject
+  , type RecentFile
   , type WindowSessionMeta
   , type UpdateInfo
   , type SavedMacro
@@ -134,6 +135,12 @@ function grantRoot(senderId: number, root: string): void {
   const roots = grantedRoots.get(senderId) ?? new Set<string>()
   roots.add(path.resolve(root))
   grantedRoots.set(senderId, roots)
+}
+
+async function rememberRecentFile(file: string): Promise<void> {
+  const existing = await readJson<RecentFile[]>(userDataFile('recent-files.json'), [])
+  const entries = [{ path: file, lastOpened: Date.now() }, ...existing.filter((entry) => entry.path !== file)].slice(0, 50)
+  await writeJson(userDataFile('recent-files.json'), entries)
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -1645,6 +1652,7 @@ export function registerFileHandlers(): void {
     const result = await dialog.showOpenDialog(win!, { properties: ['openFile'], title: 'Open File' })
     if (result.canceled || result.filePaths.length === 0) return null
     grantFile(event.sender.id, result.filePaths[0])
+    await rememberRecentFile(result.filePaths[0])
     return readFile(result.filePaths[0])
   })
 
@@ -1652,6 +1660,7 @@ export function registerFileHandlers(): void {
     assertTrustedSender(event)
     assertAbsolutePath(filePath)
     assertGrantedFile(event, filePath)
+    await rememberRecentFile(filePath)
     return readFile(filePath)
   })
 
@@ -1798,6 +1807,26 @@ export function registerFileHandlers(): void {
     return { root, entries: await readDirectory(root) }
   })
 
+  ipcMain.handle(IPC.recentFilesRead, async (event): Promise<RecentFile[]> => {
+    assertTrustedSender(event)
+    const raw = await readJson<unknown>(userDataFile('recent-files.json'), [])
+    return Array.isArray(raw)
+      ? raw.flatMap((entry) => entry && typeof entry === 'object' && typeof (entry as { path?: unknown }).path === 'string' && path.isAbsolute((entry as { path: string }).path)
+        ? [{ path: (entry as { path: string }).path, lastOpened: typeof (entry as { lastOpened?: unknown }).lastOpened === 'number' ? (entry as { lastOpened: number }).lastOpened : 0 }]
+        : []).sort((a, b) => b.lastOpened - a.lastOpened).slice(0, 50)
+      : []
+  })
+
+  ipcMain.handle(IPC.recentFileOpen, async (event, file: unknown): Promise<OpenedFile> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(file, 'recent file')
+    const recent = await readJson<RecentFile[]>(userDataFile('recent-files.json'), [])
+    if (!recent.some((entry) => entry.path === file)) throw new Error('This file is not in the recent-files list.')
+    grantFile(event.sender.id, file)
+    await rememberRecentFile(file)
+    return readFile(file)
+  })
+
   ipcMain.handle(IPC.windowSessionRegister, async (event, id: unknown): Promise<void> => {
     assertTrustedSender(event)
     if (typeof id !== 'string' || !/^[a-z0-9-]+$/i.test(id)) throw new Error('Invalid window session ID.')
@@ -1872,6 +1901,22 @@ export function registerFileHandlers(): void {
     assertGrantedFile(event, path.dirname(target))
     if (path.dirname(source) !== path.dirname(target)) throw new Error('Moving files across folders is not supported here.')
     await fs.rename(source, target)
+  })
+
+  ipcMain.handle(IPC.fileMove, async (event, source: unknown): Promise<string | null> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(source, 'source path')
+    assertGrantedFile(event, source)
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, { title: 'Move To', properties: ['openDirectory', 'createDirectory'] })
+    if (result.canceled || !result.filePaths[0]) return null
+    const target = path.join(result.filePaths[0], path.basename(source))
+    if (path.resolve(target) === path.resolve(source)) return source
+    try { await fs.access(target); throw new Error(`A file named “${path.basename(source)}” already exists in the destination.`) }
+    catch (error) { if (!(error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')) throw error }
+    await fs.rename(source, target)
+    grantFile(event.sender.id, target)
+    return target
   })
 
   ipcMain.handle(IPC.fileDelete, async (event, target: unknown): Promise<void> => {

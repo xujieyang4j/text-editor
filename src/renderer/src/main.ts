@@ -187,6 +187,7 @@ class App {
       onOpenFile: (path) => this.openPath(path),
       onCreate: (parent, isDirectory) => { void this.createPath(parent, isDirectory) },
       onRename: (path) => { void this.renamePath(path) },
+      onMove: (path) => { void this.movePath(path) },
       onDelete: (path) => { void this.deletePath(path) },
       onReveal: (path) => { void window.editor.revealInFolder(path).catch((error: unknown) => this.showError('Could not reveal the item.', error)) },
       onError: (message, error) => this.showError(message, error),
@@ -421,6 +422,9 @@ class App {
         break
       case 'open-recent-project':
         void this.openRecentProject()
+        break
+      case 'open-recent-file':
+        void this.openRecentFile()
         break
       case 'import-sublime-project':
         void this.importSublimeProject()
@@ -1933,6 +1937,25 @@ class App {
     })
   }
 
+  private async openRecentFile(): Promise<void> {
+    try {
+      const files = await window.editor.readRecentFiles()
+      if (files.length === 0) {
+        this.showError('No recent files are available.')
+        return
+      }
+      this.palette.open({
+        placeholder: 'Open Recent File',
+        items: files.map((file) => ({ label: baseName(file.path), detail: file.path, value: file.path })),
+        onAccept: (item) => {
+          void window.editor.openRecentFile(item.value as string).then((file) => this.openLoadedFile(file)).catch((error: unknown) => this.showError('The recent file could not be opened.', error))
+        }
+      })
+    } catch (error) {
+      this.showError('Recent files could not be loaded.', error)
+    }
+  }
+
   private async openRecentProjectPath(root: string): Promise<void> {
     try {
       const folder = await window.editor.openRecentProject(root)
@@ -2338,6 +2361,25 @@ class App {
       await this.reloadWorkspaceTree()
     } catch (error) {
       this.showError('The item could not be renamed.', error)
+    }
+  }
+
+  private async movePath(source: string): Promise<void> {
+    if (!window.confirm(`Choose a destination folder for “${baseName(source)}”?`)) return
+    try {
+      const target = await window.editor.movePath(source)
+      if (!target || target === source) return
+      for (const doc of this.docs) {
+        if (doc.path === source || (doc.path !== null && (doc.path.startsWith(`${source}/`) || doc.path.startsWith(`${source}\\`)))) {
+          doc.path = doc.path === source ? target : `${target}${doc.path.slice(source.length)}`
+          doc.name = baseName(doc.path)
+        }
+      }
+      await this.reloadWorkspaceTree()
+      this.renderTabs()
+      this.statusSelection.textContent = `Moved to ${target}`
+    } catch (error) {
+      this.showError('The item could not be moved.', error)
     }
   }
 
