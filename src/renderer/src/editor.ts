@@ -348,6 +348,13 @@ export class Editor {
     })
   }
 
+  /** Apply per-document indentation inferred from its existing non-empty lines. */
+  setIndentation(tabSize: number, insertSpaces: boolean): void {
+    const width = Math.max(1, Math.min(16, Math.round(tabSize)))
+    const indent = insertSpaces ? ' '.repeat(width) : '\t'
+    this.view.dispatch({ effects: tabConf.reconfigure([indentUnit.of(indent), EditorState.tabSize.of(width)]) })
+  }
+
   /** Current settings snapshot the editor is rendering with. */
   getSettings(): Settings {
     return this.settings

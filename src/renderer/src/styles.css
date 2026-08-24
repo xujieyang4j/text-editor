@@ -75,6 +75,24 @@ body {
   width: 100vw;
 }
 
+body.distraction-free #sidebar,
+body.distraction-free #status-bar,
+body.distraction-free .tab-bar {
+  display: none;
+}
+
+body.distraction-free #main {
+  align-items: center;
+  background: var(--bg);
+}
+
+body.distraction-free .layout-root {
+  flex: 0 1 1100px;
+  width: min(1100px, 100vw);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
 /* ---------- Sidebar / file tree ---------- */
 #sidebar {
   width: 240px;

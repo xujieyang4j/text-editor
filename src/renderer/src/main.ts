@@ -123,6 +123,7 @@ class App {
   private syncingGroupContent = false
   /** Ctrl/Cmd-click tab selection mirrors Sublime's tab multi-select. */
   private selectedTabIds = new Set<string>()
+  private sidebarVisibleBeforeDistractionFree = false
 
   // Cached DOM references.
   private primaryTabBar = document.getElementById('tab-bar')!
@@ -247,6 +248,7 @@ class App {
       this.settings = { ...DEFAULT_SETTINGS }
     }
     document.documentElement.dataset.colorScheme = this.settings.colorScheme
+    this.applyDistractionFreeMode(this.settings.distractionFree)
 
     this.primaryEditor = new Editor(
       this.primaryHost,
@@ -624,6 +626,11 @@ class App {
         this.persistSettings()
         this.syncEditorChrome()
         break
+      case 'toggle-distraction-free':
+        this.settings.distractionFree = !this.settings.distractionFree
+        this.applyDistractionFreeMode(this.settings.distractionFree)
+        this.persistSettings()
+        break
       case 'command-palette':
         this.openCommandPalette()
         break
@@ -702,6 +709,12 @@ class App {
   /** Renderer-owned keyboard shortcuts not expressible as menu accelerators. */
   private bindShortcuts(): void {
     window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.settings.distractionFree && !this.palette.isOpen) {
+        this.settings.distractionFree = false
+        this.applyDistractionFreeMode(false)
+        this.persistSettings()
+        return
+      }
       if (this.dispatchKeyBindingRule(e)) return
       const override = this.project.keyBindings[this.shortcutString(e)]
       if (override && this.isMenuEvent(override)) {
@@ -824,6 +837,7 @@ class App {
     root.dataset.groupId = String(id)
     const tabBar = document.createElement('div')
     tabBar.className = 'tab-bar'
+    tabBar.classList.toggle('hidden', this.settings.distractionFree)
     const area = document.createElement('div')
     area.className = 'editor-area'
     const host = document.createElement('div')
@@ -981,15 +995,35 @@ class App {
 
   private async requestLspCompletions(context: CompletionContext): Promise<Completion[] | null> {
     const doc = this.active
-    if (!doc?.path || !this.workspaceRootForPath(doc.path) || !this.project.languageServers[doc.language]) return null
+    if (!doc?.path || !this.workspaceRootForPath(doc.path) || !this.project.languageServers[doc.language]) {
+      return this.workspaceWordCompletions(context)
+    }
     const line = context.state.doc.lineAt(context.pos)
     const result = await this.requestLspAt('completion', line.number - 1, context.pos - line.from)
-    return result?.completions?.map((item) => ({
+    const lsp = result?.completions?.map((item) => ({
       label: item.label,
       ...(item.detail ? { detail: item.detail } : {}),
       ...(item.documentation ? { info: item.documentation } : {}),
       ...(item.insertText ? { apply: item.insertText } : {})
-    })) ?? null
+    })) ?? []
+    return lsp.length > 0 ? lsp : this.workspaceWordCompletions(context)
+  }
+
+  /** Sublime-like word completions when a project does not configure an LSP. */
+  private workspaceWordCompletions(context: CompletionContext): Completion[] | null {
+    const token = context.matchBefore(/[A-Za-z_$][\w$]*/)?.text ?? ''
+    if (token.length < 2) return null
+    const words = new Set<string>()
+    const addWords = (text: string): void => {
+      for (const word of text.match(/[A-Za-z_$][\w$]{1,80}/g) ?? []) {
+        if (word !== token && word.toLowerCase().startsWith(token.toLowerCase())) words.add(word)
+        if (words.size >= 300) return
+      }
+    }
+    for (const doc of this.docs) addWords(doc.content)
+    if (words.size < 300) addWords(context.state.doc.toString())
+    const ordered = [...words].sort((a, b) => a.localeCompare(b)).slice(0, 100)
+    return ordered.length > 0 ? ordered.map((label) => ({ label, type: 'text', detail: 'workspace word' })) : null
   }
 
   private async requestLspAt(
@@ -1032,6 +1066,12 @@ class App {
   }
 
   private async runLspLocations(method: 'definition' | 'references'): Promise<void> {
+    const doc = this.active
+    const hasLsp = !!doc?.path && !!this.workspaceRootForPath(doc.path) && !!this.project.languageServers[doc.language]
+    if (!hasLsp) {
+      await this.runIndexedLocations(method)
+      return
+    }
     const result = await this.requestLsp(method)
     const locations = result?.locations ?? []
     if (locations.length === 0) {
@@ -1057,6 +1097,59 @@ class App {
       matchText: method
     }))
     this.showFindResults(method === 'definition' ? 'Definitions' : 'References', matches)
+  }
+
+  /** Fast symbol-index fallback for projects that do not run an LSP server. */
+  private async runIndexedLocations(method: 'definition' | 'references'): Promise<void> {
+    const doc = this.active
+    if (!doc?.path || this.folders.length === 0) {
+      this.showError('Open a saved file in a project before using symbol navigation.')
+      return
+    }
+    const selection = this.editor.view.state.selection.main
+    const source = this.editor.getContent()
+    const left = source.slice(0, selection.head)
+    const right = source.slice(selection.head)
+    const word = /[A-Za-z_$][\w$]*$/.exec(left)?.[0] ?? /^[A-Za-z_$][\w$]*/.exec(right)?.[0]
+    if (!word) {
+      this.statusSelection.textContent = 'Place the cursor on a symbol name'
+      return
+    }
+    try {
+      await this.ensureProjectSymbols()
+      const exact = this.projectSymbols.filter((symbol) => symbol.label === word)
+      if (method === 'definition') {
+        const local = extractSymbols(source).find((symbol) => symbol.label === word)
+        if (local) {
+          await this.openWorkspaceMatch({ path: doc.path, line: local.line, column: 1, lineText: '', matchText: word })
+          return
+        }
+        const target = exact[0]
+        if (!target) {
+          this.statusSelection.textContent = `No indexed definition found for ${word}`
+          return
+        }
+        await this.openWorkspaceMatch({ path: target.path, line: target.line, column: target.column, lineText: '', matchText: word })
+        return
+      }
+      const matches = await window.editor.searchWorkspace({
+        root: this.folder!,
+        roots: this.folders,
+        query: word,
+        caseSensitive: /[A-Z]/.test(word),
+        wholeWord: true,
+        useRegex: false,
+        exclude: this.project.exclude.join(','),
+        maxResults: 5_000
+      })
+      if (matches.length === 0) {
+        this.statusSelection.textContent = `No references found for ${word}`
+        return
+      }
+      this.showFindResults(`References: ${word}`, matches)
+    } catch (error) {
+      this.showError('Project symbol index could not be queried.', error)
+    }
   }
 
   private async renameLspSymbol(): Promise<void> {
@@ -1161,6 +1254,8 @@ class App {
     this.hideFindResults()
     const activation = ++this.languageActivation
     group.editor.setDocument(doc.content, doc.groupStates.get(groupIndex) ?? doc.editorState)
+    const indentation = this.detectIndentation(doc.content)
+    group.editor.setIndentation(indentation.tabSize, indentation.insertSpaces)
     this.refreshIncrementalDiff(doc, group.editor)
     group.editor.setDiagnostics((doc.diagnostics ?? []).map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
 
@@ -1212,6 +1307,8 @@ class App {
       }
     }
     this.renderTabs()
+    this.projectSymbols = []
+    this.projectSymbolIndexAt = 0
     this.refreshIncrementalDiff(doc, group.editor)
     // Live-update the markdown preview if it's showing this doc.
     if (this.preview.isVisible && this.isMarkdownDoc(doc)) {
@@ -1230,6 +1327,24 @@ class App {
    */
   private isMarkdownDoc(doc: Doc): boolean {
     return isMarkdown(doc.name) || doc.language === 'Markdown'
+  }
+
+  /** Match Sublime's practical indentation detection without overriding user defaults on sparse files. */
+  private detectIndentation(content: string): { tabSize: number; insertSpaces: boolean } {
+    let tabs = 0
+    const widths = new Map<number, number>()
+    for (const line of content.split('\n').slice(0, 2_000)) {
+      const prefix = /^[ \t]+/.exec(line)?.[0] ?? ''
+      if (!prefix) continue
+      if (prefix.includes('\t')) tabs += 1
+      else {
+        const width = prefix.length
+        if (width > 0 && width <= 16) widths.set(width, (widths.get(width) ?? 0) + 1)
+      }
+    }
+    const [bestWidth, count] = [...widths.entries()].sort((a, b) => b[1] - a[1])[0] ?? [this.settings.tabSize, 0]
+    if (tabs === 0 && count === 0) return { tabSize: this.settings.tabSize, insertSpaces: this.settings.insertSpaces }
+    return { tabSize: bestWidth, insertSpaces: tabs < count }
   }
 
   /** Compute Sublime-style change markers against the last saved/disk version. */
@@ -1527,16 +1642,11 @@ class App {
       this.showError('Open a folder before searching project symbols.')
       return
     }
-    if (this.projectSymbols.length === 0 || Date.now() - this.projectSymbolIndexAt > 30_000) {
-      try {
-        this.projectSymbols = (await Promise.all(this.folders.map((root) => window.editor.listWorkspaceSymbols(root))))
-          .flat()
-          .filter((symbol) => !this.isProjectExcluded(symbol.path))
-        this.projectSymbolIndexAt = Date.now()
-      } catch (error) {
-        this.showError('Project symbols could not be indexed.', error)
-        return
-      }
+    try {
+      await this.ensureProjectSymbols()
+    } catch (error) {
+      this.showError('Project symbols could not be indexed.', error)
+      return
     }
     const symbols = this.projectSymbols
     this.palette.open({
@@ -2201,6 +2311,17 @@ class App {
     this.sidebar.classList.toggle('hidden')
   }
 
+  private applyDistractionFreeMode(enabled: boolean): void {
+    document.body.classList.toggle('distraction-free', enabled)
+    if (enabled) {
+      this.sidebarVisibleBeforeDistractionFree = !this.sidebar.classList.contains('hidden')
+      this.sidebar.classList.add('hidden')
+    } else if (this.sidebarVisibleBeforeDistractionFree) {
+      this.sidebar.classList.remove('hidden')
+    }
+    for (const group of this.groups) group.tabBar.classList.toggle('hidden', enabled)
+  }
+
   /** Legacy split shortcut now toggles a proper two-column editor group layout. */
   private toggleSplitEditor(): void {
     this.setLayout(this.layoutKind === 'columns2' ? 'single' : 'columns2')
@@ -2655,7 +2776,7 @@ class App {
     })
   }
 
-  /** Ctrl/Cmd+P — fuzzy list of workspace files, with :line and @symbol modes. */
+  /** Ctrl/Cmd+P — fuzzy list of workspace files, with :line, @symbol and #project-symbol modes. */
   private async openGotoAnything(): Promise<void> {
     let files: string[] = []
     if (this.folders.length > 0) {
@@ -2667,10 +2788,21 @@ class App {
     }
     const root = this.folder
     this.palette.open({
-      placeholder: 'Goto Anything — file, :line, @symbol',
-      onQuery: (query) => this.gotoAnythingItems(query, files, root),
+      placeholder: 'Goto Anything — file, :line, @symbol, #project symbol',
+      onQuery: async (query) => {
+        if (query.startsWith('#')) await this.ensureProjectSymbols()
+        return this.gotoAnythingItems(query, files, root)
+      },
       onAccept: (item) => this.acceptGoto(item)
     })
+  }
+
+  private async ensureProjectSymbols(): Promise<void> {
+    if (this.folders.length === 0 || (this.projectSymbols.length > 0 && Date.now() - this.projectSymbolIndexAt <= 30_000)) return
+    this.projectSymbols = (await Promise.all(this.folders.map((root) => window.editor.listWorkspaceSymbols(root))))
+      .flat()
+      .filter((symbol) => !this.isProjectExcluded(symbol.path))
+    this.projectSymbolIndexAt = Date.now()
   }
 
   private isProjectExcluded(file: string): boolean {
@@ -2704,6 +2836,28 @@ class App {
     // "@sym" → symbols in the current file.
     if (query.startsWith('@')) {
       return this.symbolItems(query.slice(1))
+    }
+    if (query.startsWith('#')) {
+      const symbols = this.projectSymbols
+      const source = query.length > 1
+        ? fuzzyFilter(query.slice(1), symbols, (symbol) => `${symbol.label} ${symbol.path}`)
+        : symbols.map((item) => ({ item }))
+      return source.slice(0, 200).map(({ item }) => ({
+        label: item.label,
+        detail: `${item.path}:${item.line}`,
+        value: { kind: 'file-line', path: item.path, line: item.line }
+      }))
+    }
+    // "path/to/file:42" opens a fuzzy-matched file at the requested line.
+    const fileLine = /^(.*):(\d+)$/.exec(query)
+    if (fileLine && fileLine[1].trim()) {
+      const line = Number(fileLine[2])
+      const relForLine = (p: string): string => root && p.startsWith(root) ? p.slice(root.length + 1) : p
+      return fuzzyFilter(fileLine[1], files, relForLine).slice(0, 200).map(({ item }) => ({
+        label: baseName(item),
+        detail: `${relForLine(item)}:${line}`,
+        value: { kind: 'file-line', path: item, line }
+      }))
     }
     // Otherwise fuzzy-match file paths relative to the workspace root.
     const rel = (p: string): string =>
@@ -2743,11 +2897,14 @@ class App {
     const v = item.value as
       | { kind: 'file'; path: string }
       | { kind: 'line'; line: number }
+      | { kind: 'file-line'; path: string; line: number }
       | { kind: 'pos'; pos: number }
     if (v.kind === 'file') {
       void this.openPath(v.path)
     } else if (v.kind === 'line') {
       if (Number.isFinite(v.line) && v.line > 0) this.editor.gotoLineNumber(v.line)
+    } else if (v.kind === 'file-line') {
+      void this.openPath(v.path).then(() => this.editor.gotoLineNumber(v.line))
     } else {
       this.editor.gotoPos(v.pos)
     }

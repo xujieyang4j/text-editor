@@ -352,6 +352,8 @@ export interface Settings {
   /** Optional project-specific command used by Build. */
   buildCommand: string
   colorScheme: ColorScheme
+  /** Hide surrounding chrome and center the editor, like Sublime's Distraction Free Mode. */
+  distractionFree: boolean
   searchHistory: string[]
   replaceHistory: string[]
 }
@@ -370,6 +372,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxFileSizeMB: 20,
   buildCommand: '',
   colorScheme: 'dark',
+  distractionFree: false,
   searchHistory: [],
   replaceHistory: []
 }
@@ -583,6 +586,7 @@ export type MenuEvent =
   | 'toggle-word-wrap'
   | 'toggle-theme'
   | 'toggle-minimap'
+  | 'toggle-distraction-free'
   | 'command-palette'
   | 'goto-anything'
   | 'goto-symbol'

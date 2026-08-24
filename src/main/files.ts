@@ -379,6 +379,7 @@ function sanitizeSettings(value: unknown): Settings {
     colorScheme: raw.colorScheme === 'light' || raw.colorScheme === 'solarized-dark' || raw.colorScheme === 'dracula'
       ? raw.colorScheme
       : 'dark',
+    distractionFree: typeof raw.distractionFree === 'boolean' ? raw.distractionFree : DEFAULT_SETTINGS.distractionFree,
     searchHistory: Array.isArray(raw.searchHistory)
       ? raw.searchHistory.filter((item): item is string => typeof item === 'string').map((item) => item.slice(0, 2_000)).slice(0, 50)
       : [],
