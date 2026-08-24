@@ -1335,6 +1335,7 @@ class App {
       // tab. Do not let that request overwrite the active editor configuration.
       if (activation !== this.languageActivation || this.activeGroup !== groupIndex || group.activeId !== id) return
       doc.language = language
+      group.editor.setSpellCheck(this.settings.spellCheck && (this.isMarkdownDoc(doc) || language === 'Plain Text'))
       doc.editorState = group.editor.getState()
       doc.groupStates.set(groupIndex, group.editor.getState())
     } catch (error) {
@@ -2425,7 +2426,7 @@ class App {
 
   /** Never prompts for a destination: untitled files remain protected hot-exit drafts. */
   private async autoSaveDirtyDocuments(): Promise<void> {
-    for (const doc of this.docs.filter((item) => !!item.path && isDirty(item) && !this.autoSaveInFlight.has(item.id))) {
+    for (const doc of this.docs.filter((item) => !!item.path && isDirty(item) && !item.externalChange && !this.autoSaveInFlight.has(item.id))) {
       this.autoSaveInFlight.add(doc.id)
       const snapshot = doc.content
       try {
@@ -3151,6 +3152,7 @@ class App {
           if (this.activeId !== id || activation !== this.languageActivation) return
           doc.language = language
           doc.languageLocked = name !== 'Plain Text'
+          this.editor.setSpellCheck(this.settings.spellCheck && (this.isMarkdownDoc(doc) || language === 'Plain Text'))
           this.updateStatus()
         } catch (error) {
           this.showError(`Syntax support for “${name}” could not be loaded.`, error)

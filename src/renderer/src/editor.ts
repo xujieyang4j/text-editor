@@ -357,6 +357,10 @@ export class Editor {
     this.view.dispatch({ effects: tabConf.reconfigure([indentUnit.of(indent), EditorState.tabSize.of(width)]) })
   }
 
+  setSpellCheck(enabled: boolean): void {
+    this.view.dispatch({ effects: spellCheckConf.reconfigure(EditorView.contentAttributes.of({ spellcheck: enabled ? 'true' : 'false' })) })
+  }
+
   /** Current settings snapshot the editor is rendering with. */
   getSettings(): Settings {
     return this.settings
