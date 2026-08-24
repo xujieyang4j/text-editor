@@ -25,6 +25,8 @@ export interface Doc {
   editorState?: import('@codemirror/state').EditorState
   /** Per-editor-group view states for cloned tabs (selection/history/folds are group-local). */
   groupStates: Map<number, import('@codemirror/state').EditorState>
+  /** Serializable selection and scroll snapshots used by hot-exit restore. */
+  viewStates: Map<number, import('../../shared/ipc.js').SessionViewState>
   /** Bookmarked 1-based line numbers for quick navigation. */
   bookmarks: number[]
   /** New on-disk version held while local unsaved edits need a conflict decision. */
@@ -62,7 +64,8 @@ export function createUntitled(): Doc {
     encoding: 'utf8',
     eol: 'LF',
     bookmarks: [],
-    groupStates: new Map()
+    groupStates: new Map(),
+    viewStates: new Map()
   }
 }
 
@@ -85,7 +88,8 @@ export function createFromFile(
     encoding,
     eol,
     bookmarks: [],
-    groupStates: new Map()
+    groupStates: new Map(),
+    viewStates: new Map()
   }
 }
 
@@ -110,6 +114,7 @@ export function createFromSession(
     encoding?: import('../../shared/ipc.js').TextEncoding
     eol?: import('../../shared/ipc.js').LineEnding
     bookmarks?: number[]
+    views?: import('../../shared/ipc.js').SessionViewState[]
   }
 ): Doc {
   counter += 1
@@ -125,7 +130,8 @@ export function createFromSession(
     encoding: sf.encoding ?? 'utf8',
     eol: sf.eol ?? 'LF',
     bookmarks: Array.isArray(sf.bookmarks) ? sf.bookmarks.filter((line) => Number.isInteger(line) && line > 0).slice(0, 10_000) : [],
-    groupStates: new Map()
+    groupStates: new Map(),
+    viewStates: new Map((sf.views ?? []).map((view) => [view.group, view]))
   }
 }
 

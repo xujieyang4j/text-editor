@@ -62,6 +62,7 @@ import {
   , type UpdateInfo
   , type SavedMacro
   , type MacroStep
+  , type SessionViewState
   , type SublimeProjectImport
   , type SublimeSnippetImport
   , type SublimeBuildImport
@@ -705,18 +706,22 @@ function sanitizeSession(value: unknown): Session {
     ? raw.openFiles
         .filter((item): item is Session['openFiles'][number] => !!item && typeof item === 'object')
         .slice(0, 100)
-        .map((file) => ({
-          path: typeof file.path === 'string' && path.isAbsolute(file.path) ? file.path : null,
-          name: typeof file.name === 'string' ? file.name.slice(0, 255) : 'Untitled',
-          language: typeof file.language === 'string' ? file.language.slice(0, 100) : 'Plain Text',
-          languageLocked: file.languageLocked === true,
-          ...(typeof file.draft === 'string' && file.draft.length <= 20 * 1024 * 1024 ? { draft: file.draft } : {}),
-          ...(file.encoding === 'utf8' || file.encoding === 'utf8bom' || file.encoding === 'utf16le' || file.encoding === 'utf16be' ? { encoding: file.encoding } : {}),
-          ...(file.eol === 'LF' || file.eol === 'CRLF' || file.eol === 'CR' ? { eol: file.eol } : {}),
-          ...(Array.isArray(file.bookmarks)
-            ? { bookmarks: file.bookmarks.filter((line): line is number => typeof line === 'number' && Number.isInteger(line) && line > 0 && line <= 10_000_000).slice(0, 10_000) }
-            : {})
-        }))
+        .map((file) => {
+          const views = sanitizeSessionViewStates(file.views)
+          return {
+            path: typeof file.path === 'string' && path.isAbsolute(file.path) ? file.path : null,
+            name: typeof file.name === 'string' ? file.name.slice(0, 255) : 'Untitled',
+            language: typeof file.language === 'string' ? file.language.slice(0, 100) : 'Plain Text',
+            languageLocked: file.languageLocked === true,
+            ...(typeof file.draft === 'string' && file.draft.length <= 20 * 1024 * 1024 ? { draft: file.draft } : {}),
+            ...(file.encoding === 'utf8' || file.encoding === 'utf8bom' || file.encoding === 'utf16le' || file.encoding === 'utf16be' ? { encoding: file.encoding } : {}),
+            ...(file.eol === 'LF' || file.eol === 'CRLF' || file.eol === 'CR' ? { eol: file.eol } : {}),
+            ...(Array.isArray(file.bookmarks)
+              ? { bookmarks: file.bookmarks.filter((line): line is number => typeof line === 'number' && Number.isInteger(line) && line > 0 && line <= 10_000_000).slice(0, 10_000) }
+              : {}),
+            ...(views.length > 0 ? { views } : {})
+          }
+        })
     : []
   const project = raw.project && typeof raw.project === 'object' ? raw.project : EMPTY_SESSION.project!
   const rawLayout = raw.layout && typeof raw.layout === 'object' ? raw.layout : undefined
@@ -1068,6 +1073,36 @@ function sanitizeMacroSteps(value: unknown): MacroStep[] {
     if (steps.length >= 1_000) break
   }
   return steps
+}
+
+function sanitizeSessionViewStates(value: unknown): SessionViewState[] {
+  if (!Array.isArray(value)) return []
+  const views: SessionViewState[] = []
+  const seenGroups = new Set<number>()
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const source = item as { group?: unknown; selections?: unknown; mainIndex?: unknown; scrollTop?: unknown; scrollLeft?: unknown }
+    if (typeof source.group !== 'number' || !Number.isInteger(source.group) || source.group < 0 || source.group > 3 || seenGroups.has(source.group)) continue
+    const selections = Array.isArray(source.selections)
+      ? source.selections.flatMap((selection) => {
+          if (!selection || typeof selection !== 'object') return []
+          const range = selection as { anchor?: unknown; head?: unknown }
+          if (typeof range.anchor !== 'number' || !Number.isInteger(range.anchor) || range.anchor < 0 || range.anchor > 200_000_000) return []
+          if (typeof range.head !== 'number' || !Number.isInteger(range.head) || range.head < 0 || range.head > 200_000_000) return []
+          return [{ anchor: range.anchor, head: range.head }]
+        }).slice(0, 100)
+      : []
+    if (selections.length === 0) continue
+    views.push({
+      group: source.group,
+      selections,
+      mainIndex: asFiniteInt(source.mainIndex, 0, 0, selections.length - 1),
+      scrollTop: asFiniteInt(source.scrollTop, 0, 0, 100_000_000),
+      scrollLeft: asFiniteInt(source.scrollLeft, 0, 0, 100_000_000)
+    })
+    seenGroups.add(source.group)
+  }
+  return views
 }
 
 /** Index symbols across a bounded workspace scan for Project Symbol navigation. */

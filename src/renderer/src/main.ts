@@ -325,7 +325,11 @@ class App {
       {
         onDocChange: () => this.handleDocChange(),
         onTextEdits: (edits) => this.recordTextEdits(edits),
-        onCursorChange: (state) => this.updatePositionStatus(state),
+        onCursorChange: (state) => {
+          this.updatePositionStatus(state)
+          this.captureActiveViewState()
+        },
+        onViewChange: () => this.captureActiveViewState(),
         onCompletion: (context) => this.requestLspCompletions(context),
         onTab: () => this.expandSnippetTrigger()
       },
@@ -1059,7 +1063,9 @@ class App {
         onTextEdits: (edits) => this.recordTextEdits(edits),
         onCursorChange: (state) => {
           if (this.activeGroup === id) this.updatePositionStatus(state)
+          this.captureViewState(id)
         },
+        onViewChange: () => this.captureViewState(id),
         onCompletion: (context) => this.requestLspCompletions(context),
         onTab: () => this.expandSnippetTrigger()
       },
@@ -1445,6 +1451,19 @@ class App {
     return this.docs.find((d) => d.id === this.activeId)
   }
 
+  private captureActiveViewState(): void {
+    this.captureViewState(this.activeGroup)
+  }
+
+  /** Persist only serialisable selection/scroll data; undo/folds stay in memory. */
+  private captureViewState(groupId: number): void {
+    const group = this.groups[groupId]
+    const doc = group?.activeId ? this.docs.find((candidate) => candidate.id === group.activeId) : undefined
+    if (!group || !doc) return
+    doc.viewStates.set(groupId, group.editor.getViewState(groupId))
+    this.scheduleSessionSave()
+  }
+
   /** Switch a group to a document, preserving the previous group's editor state. */
   private async activate(id: string, groupIndex = this.activeGroup): Promise<void> {
     const previousGroup = this.groups[this.activeGroup]
@@ -1454,6 +1473,7 @@ class App {
       previous.content = previousGroup.editor.getContent()
       previous.editorState = previousGroup.editor.getState()
       previous.groupStates.set(previousGroup.id, previousGroup.editor.getState())
+      previous.viewStates.set(previousGroup.id, previousGroup.editor.getViewState(previousGroup.id))
     }
 
     const group = this.groups[groupIndex]
@@ -1465,6 +1485,7 @@ class App {
     this.hideFindResults()
     const activation = ++this.languageActivation
     group.editor.setDocument(doc.content, doc.groupStates.get(groupIndex) ?? doc.editorState)
+    group.editor.restoreViewState(doc.viewStates.get(groupIndex))
     const indentation = this.detectIndentation(doc.content)
     group.editor.setIndentation(indentation.tabSize, indentation.insertSpaces)
     this.refreshIncrementalDiff(doc, group.editor)
@@ -1487,6 +1508,7 @@ class App {
       group.editor.setSpellCheck(this.settings.spellCheck && (this.isMarkdownDoc(doc) || language === 'Plain Text'))
       doc.editorState = group.editor.getState()
       doc.groupStates.set(groupIndex, group.editor.getState())
+      doc.viewStates.set(groupIndex, group.editor.getViewState(groupIndex))
     } catch (error) {
       console.error(`Failed to load syntax support for ${doc.name}:`, error)
     }
@@ -1510,6 +1532,7 @@ class App {
     doc.content = group.editor.getContent()
     doc.editorState = group.editor.getState()
     doc.groupStates.set(groupIndex, group.editor.getState())
+    doc.viewStates.set(groupIndex, group.editor.getViewState(groupIndex))
     for (const sibling of this.groups) {
       if (sibling.id !== groupIndex && sibling.activeId === doc.id && sibling.editor.getContent() !== doc.content) {
         this.syncingGroupContent = true
@@ -3793,6 +3816,7 @@ class App {
         doc.content = group.editor.getContent()
         doc.editorState = group.editor.getState()
         doc.groupStates.set(group.id, group.editor.getState())
+        doc.viewStates.set(group.id, group.editor.getViewState(group.id))
       }
     }
 
@@ -3809,6 +3833,7 @@ class App {
           encoding: d.encoding,
           eol: d.eol,
           ...(d.bookmarks.length > 0 ? { bookmarks: d.bookmarks } : {}),
+          ...(d.viewStates.size > 0 ? { views: [...d.viewStates.values()] } : {}),
           ...(keepDraft ? { draft: d.content } : {})
         }
       })

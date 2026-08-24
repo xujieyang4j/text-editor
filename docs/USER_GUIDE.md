@@ -286,6 +286,8 @@ unexpected quit or a machine crash (Sublime's "hot exit").
 - On restore, clean file-backed buffers are re-read from disk (so external changes show up),
   while dirty buffers keep your draft layered on top. If a file was deleted/moved but you had
   unsaved edits, the draft is kept as an untitled buffer rather than lost.
+- Each editor group restores its active document's selections (including multi-cursor) and scroll
+  position. Undo history and folded ranges remain session-local rather than being serialised.
 
 Use `Ctrl/Cmd+Shift+T` to reopen the most recently closed tab. Session data lives next to your
 settings as `session.json` (see [Settings Reference](#en-settings)).

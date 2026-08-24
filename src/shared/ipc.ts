@@ -488,6 +488,17 @@ export interface SessionFile {
   eol?: LineEnding
   /** 1-based bookmark lines restored with the session. */
   bookmarks?: number[]
+  /** Per-editor-group selection and scroll state, restored without undo history. */
+  views?: SessionViewState[]
+}
+
+/** A bounded, serialisable snapshot of one editor group's view of a document. */
+export interface SessionViewState {
+  group: number
+  selections: Array<{ anchor: number; head: number }>
+  mainIndex: number
+  scrollTop: number
+  scrollLeft: number
 }
 
 /** Editor state persisted across restarts (open tabs + workspace). */

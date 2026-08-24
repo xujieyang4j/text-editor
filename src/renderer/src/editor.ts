@@ -69,7 +69,7 @@ import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { rulers } from './extensions/rulers.js'
 import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
 import type { IncrementalChange } from './incrementalDiff.js'
-import type { Settings, ColorScheme } from '../../shared/ipc.js'
+import type { Settings, ColorScheme, SessionViewState } from '../../shared/ipc.js'
 
 /** Callbacks the editor emits so the shell can update tabs/status bar. */
 export interface EditorCallbacks {
@@ -79,6 +79,8 @@ export interface EditorCallbacks {
   onCursorChange: (state: EditorState) => void
   onCompletion?: (context: CompletionContext) => Promise<Completion[] | null>
   onTab?: () => boolean
+  /** Scroll changes are view state, not document changes, but belong in hot exit. */
+  onViewChange?: () => void
 }
 
 /** Compartments allow reconfiguring parts of the editor without a full reset. */
@@ -227,6 +229,7 @@ export class Editor {
   private snippetFinalPos: number | null = null
   private applyingSnippetMirror = false
   private incrementalChanges: IncrementalChange[] = []
+  private viewRestoreToken = 0
 
   constructor(parent: HTMLElement, callbacks: EditorCallbacks, settings: Settings) {
     this.callbacks = callbacks
@@ -244,6 +247,7 @@ export class Editor {
         event.preventDefault()
       }
     }, true)
+    this.view.scrollDOM.addEventListener('scroll', () => this.callbacks.onViewChange?.(), { passive: true })
   }
 
   /** Build a fresh EditorState for the given document text. */
@@ -272,6 +276,7 @@ export class Editor {
 
   /** Replace the entire document (used when switching tabs). */
   setDocument(doc: string, state?: EditorState): void {
+    this.viewRestoreToken += 1
     this.clearSnippet()
     this.view.setState(state ?? this.makeState(doc))
   }
@@ -296,6 +301,38 @@ export class Editor {
   /** Snapshot the complete CM state so a tab keeps undo, selection and folds. */
   getState(): EditorState {
     return this.view.state
+  }
+
+  /** Capture the part of a view state that remains safe and compact to persist. */
+  getViewState(group: number): SessionViewState {
+    const selection = this.view.state.selection
+    return {
+      group,
+      selections: selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head })),
+      mainIndex: selection.mainIndex,
+      scrollTop: Math.max(0, Math.round(this.view.scrollDOM.scrollTop)),
+      scrollLeft: Math.max(0, Math.round(this.view.scrollDOM.scrollLeft))
+    }
+  }
+
+  /** Restore selections immediately and scroll after layout has stabilised. */
+  restoreViewState(snapshot: SessionViewState | undefined): void {
+    if (!snapshot) return
+    const length = this.view.state.doc.length
+    const ranges = snapshot.selections
+      .slice(0, 100)
+      .map((range) => EditorSelection.range(
+        Math.max(0, Math.min(length, range.anchor)),
+        Math.max(0, Math.min(length, range.head))
+      ))
+    if (ranges.length === 0) return
+    this.view.dispatch({ selection: EditorSelection.create(ranges, Math.max(0, Math.min(ranges.length - 1, snapshot.mainIndex))) })
+    const token = ++this.viewRestoreToken
+    requestAnimationFrame(() => {
+      if (token !== this.viewRestoreToken) return
+      this.view.scrollDOM.scrollTop = Math.max(0, snapshot.scrollTop)
+      this.view.scrollDOM.scrollLeft = Math.max(0, snapshot.scrollLeft)
+    })
   }
 
   /** Current document text. */
