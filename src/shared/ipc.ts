@@ -125,7 +125,10 @@ export interface WorkspaceMatch {
 }
 
 export interface WorkspaceSearchRequest {
+  /** Primary root, retained for compatibility with one-folder workspaces. */
   root: string
+  /** Every selected project root. Searches and replaces are scoped to these roots only. */
+  roots?: string[]
   query: string
   caseSensitive: boolean
   wholeWord: boolean
@@ -252,7 +255,15 @@ export interface PluginManifest {
   enabled: boolean
   commands: Array<{ id: string; title: string; insertText?: string }>
   snippets: Array<{ label: string; text: string; trigger?: string; scope?: string }>
-  extension?: { worker: string; permissions?: PluginPermission[] }
+  extension?: {
+    /** Relative worker path after installation; never an executable path. */
+    worker: string
+    permissions?: PluginPermission[]
+    /** HTTPS asset source accepted only for marketplace installs. */
+    workerUrl?: string
+    /** Required SRI-style SHA-256 digest for a marketplace worker. */
+    workerIntegrity?: string
+  }
 }
 
 export interface PluginInstallRequest {
@@ -306,9 +317,17 @@ export interface WindowSessionMeta {
   updatedAt: number
 }
 
+export type MacroStep =
+  | { kind: 'command'; command: string }
+  | { kind: 'edits'; edits: Array<{ from: number; to: number; insert: string }> }
+
 export interface SavedMacro {
   name: string
   commands: string[]
+  /** Ordered command/edit stream used by newly recorded macros. */
+  steps?: MacroStep[]
+  edits?: Array<{ from: number; to: number; insert: string }>
+  /** Legacy snapshot format retained for macros saved by older versions. */
   text?: string
 }
 

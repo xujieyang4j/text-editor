@@ -2,6 +2,7 @@ import { dialog, ipcMain, BrowserWindow, app, shell, type IpcMainInvokeEvent } f
 import { promises as fs, watch, type FSWatcher } from 'fs'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process'
 import { promisify } from 'util'
+import { createHash } from 'crypto'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { detectLineEnding, encodeText as encodePreservedText } from '../shared/text.js'
@@ -41,6 +42,7 @@ import {
   type LanguageRenameEdit,
   type LanguageCompletionItem,
   type PluginInstallRequest
+  , type PluginPermission
   , type LayoutKind
   , type MarketplaceItem
   , type MarketplaceInstallRequest
@@ -52,6 +54,7 @@ import {
   , type WindowSessionMeta
   , type UpdateInfo
   , type SavedMacro
+  , type MacroStep
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -72,7 +75,7 @@ const IGNORED_ENTRIES = new Set([
 
 /** Prevent concurrent writes from racing through one fixed temporary filename. */
 const writeQueues = new Map<string, Promise<void>>()
-const workspaceWatchers = new Map<number, FSWatcher>()
+const workspaceWatchers = new Map<number, Map<string, FSWatcher>>()
 const builds = new Map<number, ChildProcessWithoutNullStreams>()
 interface PersistentLanguageServer {
   child: ChildProcessWithoutNullStreams
@@ -149,6 +152,11 @@ function assertGrantedRoot(event: IpcMainInvokeEvent, root: string): void {
 function cleanupGrants(senderId: number): void {
   grantedFiles.delete(senderId)
   grantedRoots.delete(senderId)
+}
+
+function closeWorkspaceWatchers(senderId: number): void {
+  for (const watcher of workspaceWatchers.get(senderId)?.values() ?? []) watcher.close()
+  workspaceWatchers.delete(senderId)
 }
 
 /** Grant a user-selected OS-level path to a renderer (file associations / CLI opens). */
@@ -585,87 +593,99 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`${source}$`, 'i')
 }
 
-async function searchWorkspace(request: WorkspaceSearchRequest): Promise<WorkspaceMatch[]> {
+/** Resolve the explicitly-authorised roots for a multi-folder search request. */
+function workspaceRoots(request: WorkspaceSearchRequest): string[] {
   assertAbsolutePath(request.root, 'workspace root')
-  const root = path.resolve(request.root)
+  const candidates = Array.isArray(request.roots) ? [request.root, ...request.roots] : [request.root]
+  if (candidates.length > 12) throw new Error('Too many workspace roots.')
+  const roots = candidates.map((root) => {
+    assertAbsolutePath(root, 'workspace root')
+    return path.resolve(root)
+  })
+  return [...new Set(roots)]
+}
+
+async function searchWorkspace(request: WorkspaceSearchRequest): Promise<WorkspaceMatch[]> {
   const re = makeSearchRegExp(request)
-  const files = await listFilesRecursive(root)
   const limit = Math.max(1, Math.min(request.maxResults ?? MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS))
   const results: WorkspaceMatch[] = []
 
-  for (const file of files) {
-    if (
-      results.length >= limit ||
-      !matchesGlob(file, root, request.include) ||
-      (request.exclude?.trim() ? matchesGlob(file, root, request.exclude) : false)
-    ) continue
-    let stat
-    try {
-      stat = await fs.stat(file)
-      if (stat.size > MAX_SEARCH_FILE_BYTES) continue
-      const opened = await readFile(file)
-      if (opened.isBinary || opened.isTooLarge) continue
-      const content = opened.content
-      re.lastIndex = 0
-      let match: RegExpExecArray | null
-      while ((match = re.exec(content)) && results.length < limit) {
-        const before = content.slice(0, match.index)
-        const line = before.split('\n').length
-        const lineStart = before.lastIndexOf('\n') + 1
-        const lineEnd = content.indexOf('\n', match.index)
-        const sourceLine = content.slice(lineStart, lineEnd < 0 ? content.length : lineEnd)
-        results.push({
-          path: file,
-          line,
-          column: match.index - lineStart + 1,
-          lineText: sourceLine,
-          matchText: match[0]
-        })
-        if (match[0].length === 0) re.lastIndex += 1
+  for (const root of workspaceRoots(request)) {
+    if (results.length >= limit) break
+    const files = await listFilesRecursive(root)
+    for (const file of files) {
+      if (
+        results.length >= limit ||
+        !matchesGlob(file, root, request.include) ||
+        (request.exclude?.trim() ? matchesGlob(file, root, request.exclude) : false)
+      ) continue
+      try {
+        const stat = await fs.stat(file)
+        if (stat.size > MAX_SEARCH_FILE_BYTES) continue
+        const opened = await readFile(file)
+        if (opened.isBinary || opened.isTooLarge) continue
+        const content = opened.content
+        re.lastIndex = 0
+        let match: RegExpExecArray | null
+        while ((match = re.exec(content)) && results.length < limit) {
+          const before = content.slice(0, match.index)
+          const line = before.split('\n').length
+          const lineStart = before.lastIndexOf('\n') + 1
+          const lineEnd = content.indexOf('\n', match.index)
+          const sourceLine = content.slice(lineStart, lineEnd < 0 ? content.length : lineEnd)
+          results.push({
+            path: file,
+            line,
+            column: match.index - lineStart + 1,
+            lineText: sourceLine,
+            matchText: match[0]
+          })
+          if (match[0].length === 0) re.lastIndex += 1
+        }
+      } catch {
+        // Files can disappear or become unreadable while a workspace search runs.
       }
-    } catch {
-      // Files can disappear or become unreadable while a workspace search runs.
     }
   }
   return results
 }
 
 async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<WorkspaceReplaceResult> {
-  assertAbsolutePath(request.root, 'workspace root')
-  const root = path.resolve(request.root)
   const re = makeSearchRegExp(request)
-  const files = await listFilesRecursive(root)
   let changedFiles = 0
   let replacements = 0
   const undoFiles = new Map<string, Buffer>()
 
-  for (const file of files) {
-    if (
-      !matchesGlob(file, root, request.include) ||
-      (request.exclude?.trim() ? matchesGlob(file, root, request.exclude) : false)
-    ) continue
-    try {
-      const stat = await fs.stat(file)
-      if (stat.size > MAX_SEARCH_FILE_BYTES) continue
-      const opened = await readFile(file)
-      if (opened.isBinary || opened.isTooLarge) continue
-      let count = 0
-      const next = opened.content.replace(re, (...args: unknown[]) => {
-        count += 1
-        if (request.useRegex) {
-          const groups = args.slice(1, -2).map((part) => String(part ?? ''))
-          return request.replacement.replace(/\$(\d+|&)/g, (_token, group: string) => group === '&' ? String(args[0]) : (groups[Number(group) - 1] ?? ''))
+  for (const root of workspaceRoots(request)) {
+    const files = await listFilesRecursive(root)
+    for (const file of files) {
+      if (
+        !matchesGlob(file, root, request.include) ||
+        (request.exclude?.trim() ? matchesGlob(file, root, request.exclude) : false)
+      ) continue
+      try {
+        const stat = await fs.stat(file)
+        if (stat.size > MAX_SEARCH_FILE_BYTES) continue
+        const opened = await readFile(file)
+        if (opened.isBinary || opened.isTooLarge) continue
+        let count = 0
+        const next = opened.content.replace(re, (...args: unknown[]) => {
+          count += 1
+          if (request.useRegex) {
+            const groups = args.slice(1, -2).map((part) => String(part ?? ''))
+            return request.replacement.replace(/\$(\d+|&)/g, (_token, group: string) => group === '&' ? String(args[0]) : (groups[Number(group) - 1] ?? ''))
+          }
+          return request.replacement
+        })
+        if (count > 0) {
+          undoFiles.set(file, await fs.readFile(file))
+          await fs.writeFile(file, encodeText(next, { encoding: opened.encoding, eol: opened.eol }))
+          changedFiles += 1
+          replacements += count
         }
-        return request.replacement
-      })
-      if (count > 0) {
-        undoFiles.set(file, await fs.readFile(file))
-        await fs.writeFile(file, encodeText(next, { encoding: opened.encoding, eol: opened.eol }))
-        changedFiles += 1
-        replacements += count
+      } catch {
+        // Preserve a best-effort replace: inaccessible files are skipped, not partially rewritten.
       }
-    } catch {
-      // Preserve a best-effort replace: inaccessible files are skipped, not partially rewritten.
     }
   }
   if (undoFiles.size === 0) return { files: changedFiles, replacements }
@@ -692,6 +712,36 @@ async function undoWorkspaceReplace(token: string): Promise<WorkspaceReplaceResu
   for (const [file, content] of transaction.files) await fs.writeFile(file, content)
   replaceUndoTransactions.delete(token)
   return { files: transaction.files.size, replacements: 0 }
+}
+
+function sanitizeMacroEdits(value: unknown): Array<{ from: number; to: number; insert: string }> {
+  if (!Array.isArray(value)) return []
+  const edits: Array<{ from: number; to: number; insert: string }> = []
+  for (const edit of value) {
+    if (!edit || typeof edit !== 'object') continue
+    const source = edit as { from?: unknown; to?: unknown; insert?: unknown }
+    if (typeof source.from !== 'number' || !Number.isInteger(source.from) || typeof source.to !== 'number' || !Number.isInteger(source.to) || source.from < 0 || source.to < source.from || typeof source.insert !== 'string' || source.insert.length > 2 * 1024 * 1024) continue
+    edits.push({ from: source.from, to: source.to, insert: source.insert })
+    if (edits.length >= 1_000) break
+  }
+  return edits
+}
+
+function sanitizeMacroSteps(value: unknown): MacroStep[] {
+  if (!Array.isArray(value)) return []
+  const steps: MacroStep[] = []
+  for (const step of value) {
+    if (!step || typeof step !== 'object') continue
+    const source = step as { kind?: unknown; command?: unknown; edits?: unknown }
+    if (source.kind === 'command' && typeof source.command === 'string' && source.command.length <= 100) {
+      steps.push({ kind: 'command', command: source.command })
+    } else if (source.kind === 'edits') {
+      const edits = sanitizeMacroEdits(source.edits)
+      if (edits.length > 0) steps.push({ kind: 'edits', edits })
+    }
+    if (steps.length >= 1_000) break
+  }
+  return steps
 }
 
 /** Index symbols across a bounded workspace scan for Project Symbol navigation. */
@@ -750,17 +800,24 @@ function sanitizePlugin(value: unknown): PluginManifest | null {
     enabled: raw.enabled !== false,
     commands,
     snippets,
-    ...(raw.extension && typeof raw.extension === 'object' && typeof raw.extension.worker === 'string' && /^[a-zA-Z0-9._/-]+$/.test(raw.extension.worker) && !raw.extension.worker.includes('..')
-      ? {
-          extension: {
-            worker: raw.extension.worker,
-            ...(Array.isArray(raw.extension.permissions)
-              ? { permissions: raw.extension.permissions.filter((permission): permission is 'document-read' | 'document-edit' => permission === 'document-read' || permission === 'document-edit') }
-              : {})
-          }
-        }
-      : {})
+    ...(sanitizePluginExtension(raw.extension) ? { extension: sanitizePluginExtension(raw.extension)! } : {})
   }
+}
+
+function sanitizePluginExtension(value: unknown): PluginManifest['extension'] | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as { worker?: unknown; permissions?: unknown; workerUrl?: unknown; workerIntegrity?: unknown }
+  if (typeof raw.worker !== 'string' || !/^[a-zA-Z0-9._/-]+$/.test(raw.worker) || raw.worker.includes('..')) return undefined
+  const permissions = Array.isArray(raw.permissions)
+    ? raw.permissions.filter((permission): permission is PluginPermission => permission === 'document-read' || permission === 'document-edit')
+    : []
+  const source = typeof raw.workerUrl === 'string' && /^https:///.test(raw.workerUrl)
+    ? { workerUrl: raw.workerUrl }
+    : {}
+  const integrity = typeof raw.workerIntegrity === 'string' && /^sha256-[A-Za-z0-9+/]{43}=$/.test(raw.workerIntegrity)
+    ? { workerIntegrity: raw.workerIntegrity }
+    : {}
+  return { worker: raw.worker, ...(permissions.length > 0 ? { permissions } : {}), ...source, ...integrity }
 }
 
 async function listPlugins(root: string): Promise<PluginManifest[]> {
@@ -832,11 +889,41 @@ async function listMarketplace(urls: string[]): Promise<MarketplaceItem[]> {
 async function installMarketplacePlugin(request: MarketplaceInstallRequest): Promise<PluginManifest> {
   const response = await fetch(request.manifestUrl, { signal: AbortSignal.timeout(10_000) })
   if (!response.ok) throw new Error(`Could not download plugin manifest (${response.status}).`)
+  if (response.url !== request.manifestUrl) throw new Error('Marketplace plugin manifest redirects are not allowed.')
   const manifest = sanitizePlugin(await response.json())
   if (!manifest) throw new Error('Downloaded plugin manifest is invalid.')
   const target = path.join(request.root, '.lumen-plugins', manifest.id)
   await fs.mkdir(target, { recursive: false })
-  await fs.writeFile(path.join(target, 'plugin.json'), JSON.stringify(manifest, null, 2), 'utf8')
+  try {
+    if (manifest.extension?.workerUrl || manifest.extension?.workerIntegrity) {
+      if (!manifest.extension.workerUrl || !manifest.extension.workerIntegrity) {
+        throw new Error('Marketplace extension workers require both an HTTPS URL and a SHA-256 integrity digest.')
+      }
+      const manifestOrigin = new URL(request.manifestUrl).origin
+      const workerUrl = new URL(manifest.extension.workerUrl)
+      if (workerUrl.protocol !== 'https:' || workerUrl.origin !== manifestOrigin) {
+        throw new Error('Marketplace extension worker must use HTTPS and the same origin as its manifest.')
+      }
+      const workerResponse = await fetch(workerUrl, { signal: AbortSignal.timeout(10_000) })
+      if (!workerResponse.ok) throw new Error(`Could not download extension worker (${workerResponse.status}).`)
+      if (workerResponse.url !== workerUrl.href) throw new Error('Marketplace extension worker redirects are not allowed.')
+      const worker = Buffer.from(await workerResponse.arrayBuffer())
+      if (worker.byteLength === 0 || worker.byteLength > 512 * 1024) throw new Error('Marketplace extension worker must be between 1 byte and 512 KB.')
+      const actualIntegrity = `sha256-${createHash('sha256').update(worker).digest('base64')}`
+      if (actualIntegrity !== manifest.extension.workerIntegrity) throw new Error('Marketplace extension worker failed its SHA-256 integrity check.')
+      const workerPath = path.resolve(target, manifest.extension.worker)
+      if (!isInside(target, workerPath)) throw new Error('Marketplace extension worker must stay inside the plugin directory.')
+      await fs.mkdir(path.dirname(workerPath), { recursive: true })
+      await fs.writeFile(workerPath, worker, { flag: 'wx' })
+    }
+    const installed: PluginManifest = manifest.extension
+      ? { ...manifest, extension: { worker: manifest.extension.worker, ...(manifest.extension.permissions?.length ? { permissions: manifest.extension.permissions } : {}) } }
+      : manifest
+    await fs.writeFile(path.join(target, 'plugin.json'), JSON.stringify(installed, null, 2), { encoding: 'utf8', flag: 'wx' })
+  } catch (error) {
+    await fs.rm(target, { recursive: true, force: true })
+    throw error
+  }
   return manifest
 }
 
@@ -1444,16 +1531,19 @@ export function registerFileHandlers(): void {
   ipcMain.handle(IPC.workspaceSearch, async (event, request: WorkspaceSearchRequest): Promise<WorkspaceMatch[]> => {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
+    for (const root of request.roots ?? []) assertGrantedRoot(event, root)
     return searchWorkspace(request)
   })
   ipcMain.handle(IPC.workspaceReplace, async (event, request: WorkspaceReplaceRequest): Promise<WorkspaceReplaceResult> => {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
+    for (const root of request.roots ?? []) assertGrantedRoot(event, root)
     return replaceWorkspace(request)
   })
   ipcMain.handle(IPC.workspaceReplacePreview, async (event, request: WorkspaceReplaceRequest): Promise<WorkspaceReplacePreview> => {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
+    for (const root of request.roots ?? []) assertGrantedRoot(event, root)
     return previewWorkspaceReplace(request)
   })
   ipcMain.handle(IPC.workspaceReplaceUndo, async (event, token: unknown): Promise<WorkspaceReplaceResult> => {
@@ -1510,17 +1600,19 @@ export function registerFileHandlers(): void {
     assertAbsolutePath(root, 'workspace root')
     assertGrantedRoot(event, root)
     const senderId = event.sender.id
-    workspaceWatchers.get(senderId)?.close()
+    const resolvedRoot = path.resolve(root)
+    const watchers = workspaceWatchers.get(senderId) ?? new Map<string, FSWatcher>()
+    watchers.get(resolvedRoot)?.close()
     try {
-      const watcher = watch(root, { recursive: true }, (_event, fileName) => {
+      const watcher = watch(resolvedRoot, { recursive: true }, (_event, fileName) => {
         if (!fileName) return
-        const changed = path.join(root, fileName.toString())
+        const changed = path.join(resolvedRoot, fileName.toString())
         event.sender.send(IPC.fileWatch, { kind: 'changed', path: changed })
       })
-      workspaceWatchers.set(senderId, watcher)
+      watchers.set(resolvedRoot, watcher)
+      workspaceWatchers.set(senderId, watchers)
       event.sender.once('destroyed', () => {
-        workspaceWatchers.get(senderId)?.close()
-        workspaceWatchers.delete(senderId)
+        closeWorkspaceWatchers(senderId)
         cleanupGrants(senderId)
       })
     } catch {
@@ -1608,11 +1700,15 @@ export function registerFileHandlers(): void {
     return Array.isArray(raw)
       ? raw.flatMap((macro) => {
           if (!macro || typeof macro !== 'object') return []
-          const source = macro as { name?: unknown; commands?: unknown; text?: unknown }
+          const source = macro as { name?: unknown; commands?: unknown; steps?: unknown; edits?: unknown; text?: unknown }
           if (typeof source.name !== 'string' || !Array.isArray(source.commands)) return []
+          const edits = sanitizeMacroEdits(source.edits)
+          const steps = sanitizeMacroSteps(source.steps)
           return [{
             name: source.name.slice(0, 100),
             commands: source.commands.filter((command): command is string => typeof command === 'string').slice(0, 200),
+            ...(steps.length > 0 ? { steps } : {}),
+            ...(edits.length > 0 ? { edits } : {}),
             ...(typeof source.text === 'string' && source.text.length <= 2 * 1024 * 1024 ? { text: source.text } : {})
           }]
         }).slice(0, 100)
@@ -1627,6 +1723,8 @@ export function registerFileHandlers(): void {
     const next: SavedMacro = {
       name: macro.name.slice(0, 100),
       commands: macro.commands.filter((command): command is string => typeof command === 'string').slice(0, 200),
+      ...(sanitizeMacroSteps(macro.steps).length > 0 ? { steps: sanitizeMacroSteps(macro.steps) } : {}),
+      ...(sanitizeMacroEdits(macro.edits).length > 0 ? { edits: sanitizeMacroEdits(macro.edits) } : {}),
       ...(typeof macro.text === 'string' && macro.text.length <= 2 * 1024 * 1024 ? { text: macro.text } : {})
     }
     const existing = await readJson<SavedMacro[]>(path.join(root, '.lumen-macros.json'), [])

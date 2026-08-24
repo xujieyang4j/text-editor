@@ -121,13 +121,25 @@ function createWindow(sessionId = newSessionId()): void {
     }
   })
 
-  // Smoke-test hook: when LUMEN_SMOKE=1 we quit as soon as the renderer has
-  // finished loading. This lets CI/headless environments verify the full boot
-  // path (main → preload → renderer) without a human at the keyboard.
+  // Smoke-test hook: exercise a real CodeMirror edit before quitting, rather
+  // than treating merely loading index.html as a GUI success.
   if (process.env['LUMEN_SMOKE'] === '1') {
-    win.webContents.once('did-finish-load', () => {
-      console.log('[smoke] renderer finished loading')
-      setTimeout(() => app.quit(), 500)
+    win.webContents.once('did-finish-load', async () => {
+      try {
+        const result = await win.webContents.executeJavaScript(`(() => {
+          const editor = document.querySelector('.cm-content')
+          if (!(editor instanceof HTMLElement)) throw new Error('CodeMirror content did not mount')
+          editor.focus()
+          document.execCommand('insertText', false, 'smoke')
+          return editor.textContent?.includes('smoke') === true
+        })()`, true)
+        if (!result) throw new Error('CodeMirror did not receive smoke input')
+        console.log('[smoke] renderer loaded and accepted editor input')
+        setTimeout(() => app.quit(), 250)
+      } catch (error) {
+        console.error('[smoke] GUI interaction failed:', error)
+        process.exit(1)
+      }
     })
     win.webContents.on('render-process-gone', (_e, details) => {
       console.error('[smoke] renderer gone:', details.reason)

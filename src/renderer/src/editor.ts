@@ -66,6 +66,8 @@ import type { Settings, ColorScheme } from '../../shared/ipc.js'
 /** Callbacks the editor emits so the shell can update tabs/status bar. */
 export interface EditorCallbacks {
   onDocChange: () => void
+  /** Exact document transactions for macro recording; absent for programmatic replay. */
+  onTextEdits?: (edits: Array<{ from: number; to: number; insert: string }>) => void
   onCursorChange: (state: EditorState) => void
   onCompletion?: (context: CompletionContext) => Promise<Completion[] | null>
   onTab?: () => boolean
@@ -162,7 +164,12 @@ function baseExtensions(
       indentWithTab
     ]),
     EditorView.updateListener.of((update: ViewUpdate) => {
-      if (update.docChanged) callbacks.onDocChange()
+      if (update.docChanged) {
+        const edits: Array<{ from: number; to: number; insert: string }> = []
+        update.changes.iterChanges((fromA, toA, _fromB, _toB, insert) => edits.push({ from: fromA, to: toA, insert: insert.toString() }))
+        callbacks.onTextEdits?.(edits)
+        callbacks.onDocChange()
+      }
       if (update.selectionSet || update.docChanged) callbacks.onCursorChange(update.state)
       onUpdate(update)
     })
@@ -236,6 +243,16 @@ export class Editor {
     this.clearSnippet()
     const state = this.view.state
     this.view.dispatch({ changes: { from: 0, to: state.doc.length, insert: doc }, userEvent: 'input.replace' })
+  }
+
+  /** Apply recorded edits against the current document in one undoable transaction. */
+  applyEdits(edits: Array<{ from: number; to: number; insert: string }>): void {
+    const length = this.view.state.doc.length
+    const changes = edits
+      .filter((edit) => Number.isInteger(edit.from) && Number.isInteger(edit.to) && edit.from >= 0 && edit.to >= edit.from && edit.to <= length && typeof edit.insert === 'string')
+      .map((edit) => ({ from: edit.from, to: edit.to, insert: edit.insert }))
+      .sort((a, b) => a.from - b.from)
+    if (changes.length > 0) this.view.dispatch({ changes, userEvent: 'input.macro' })
   }
 
   /** Snapshot the complete CM state so a tab keeps undo, selection and folds. */

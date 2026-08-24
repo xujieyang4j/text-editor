@@ -3,6 +3,7 @@ import { baseName } from './documents.js'
 
 export interface WorkspaceSearchCallbacks {
   getRoot: () => string | null
+  getRoots: () => string[]
   getProjectExclude: () => string[]
   openMatch: (match: WorkspaceMatch) => void
   notify: (message: string, error?: unknown) => void
@@ -135,6 +136,7 @@ export class WorkspaceSearchPanel {
     const excludes = [this.exclude.value, ...this.callbacks.getProjectExclude()].filter(Boolean).join(',')
     return {
       root,
+      roots: this.callbacks.getRoots(),
       query,
       caseSensitive: this.caseSensitive.checked,
       wholeWord: this.wholeWord.checked,
