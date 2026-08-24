@@ -12,6 +12,7 @@ import { OutlinePanel } from './outlinePanel.js'
 import { parseLosslessJson, stringifyLosslessJson } from '../../shared/losslessJson.js'
 import { BuildPanel } from './buildPanel.js'
 import { TerminalPanel } from './terminalPanel.js'
+import { SettingsPanel } from './settingsPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS, localizedCommands } from './commands.js'
 import { extractSymbols } from './symbols.js'
@@ -93,6 +94,7 @@ class App {
   private gitPanel: GitPanel
   private buildPanel!: BuildPanel
   private terminalPanel!: TerminalPanel
+  private settingsPanel!: SettingsPanel
   private preview!: MarkdownPreview
   private jsonView!: JsonView
   private outlinePanel!: OutlinePanel
@@ -360,6 +362,9 @@ class App {
       onWrite: (text) => { void this.writeTerminal(text) },
       onStop: () => { void this.stopTerminal() }
     })
+    this.settingsPanel = new SettingsPanel(this.settings, {
+      onChange: (settings) => this.applyUserSettings(settings)
+    })
     this.applyLocale(this.settings.locale)
 
     try {
@@ -533,6 +538,9 @@ class App {
         break
       case 'set-ui-language-en':
         this.setLocale('en-US')
+        break
+      case 'open-settings':
+        this.settingsPanel.toggle(true)
         break
       case 'lsp-hover':
         void this.showLspHover()
@@ -739,8 +747,7 @@ class App {
       case 'toggle-outline':
         this.settings.showOutline = !this.settings.showOutline
         if (this.settings.showOutline && !this.settings.distractionFree) this.sidebar.classList.remove('hidden')
-        this.syncOutline(true)
-        this.persistSettings()
+        this.applyUserSettings(this.settings)
         break
       case 'select-color-scheme':
         this.selectColorScheme()
@@ -780,27 +787,25 @@ class App {
         this.toggleSidebar()
         break
       case 'toggle-word-wrap':
-        this.settings.wordWrap = this.editor.toggleWordWrap()
-        this.persistSettings()
+        this.settings.wordWrap = !this.settings.wordWrap
+        this.applyUserSettings(this.settings)
         break
       case 'toggle-theme':
-        this.settings.theme = this.editor.toggleTheme() ? 'dark' : 'light'
-        this.persistSettings()
+        this.settings.colorScheme = this.settings.colorScheme === 'light' ? 'dark' : 'light'
+        this.settings.theme = this.settings.colorScheme === 'light' ? 'light' : 'dark'
+        this.applyUserSettings(this.settings)
         break
       case 'toggle-minimap':
-        this.settings.showMinimap = this.editor.toggleMinimap()
-        this.persistSettings()
-        this.syncEditorChrome()
+        this.settings.showMinimap = !this.settings.showMinimap
+        this.applyUserSettings(this.settings)
         break
       case 'toggle-distraction-free':
         this.settings.distractionFree = !this.settings.distractionFree
-        this.applyDistractionFreeMode(this.settings.distractionFree)
-        this.persistSettings()
+        this.applyUserSettings(this.settings)
         break
       case 'toggle-spell-check':
         this.settings.spellCheck = !this.settings.spellCheck
-        this.editor.setSpellCheck(this.settings.spellCheck && !!this.active && (this.isMarkdownDoc(this.active) || this.active.language === 'Plain Text'))
-        this.persistSettings()
+        this.applyUserSettings(this.settings)
         this.statusSelection.textContent = `Spell Check: ${this.settings.spellCheck ? 'on' : 'off'}`
         break
       case 'format-json':
@@ -864,16 +869,16 @@ class App {
         this.editor.sortLines()
         break
       case 'font-zoom-in':
-        this.settings.fontSize = this.editor.zoomFont(1)
-        this.persistSettings()
+        this.settings.fontSize = Math.min(40, this.settings.fontSize + 1)
+        this.applyUserSettings(this.settings)
         break
       case 'font-zoom-out':
-        this.settings.fontSize = this.editor.zoomFont(-1)
-        this.persistSettings()
+        this.settings.fontSize = Math.max(8, this.settings.fontSize - 1)
+        this.applyUserSettings(this.settings)
         break
       case 'font-zoom-reset':
-        this.settings.fontSize = this.editor.setFontSize(DEFAULT_SETTINGS.fontSize)
-        this.persistSettings()
+        this.settings.fontSize = DEFAULT_SETTINGS.fontSize
+        this.applyUserSettings(this.settings)
         break
       case 'toggle-preview':
         this.togglePreview()
@@ -2100,14 +2105,36 @@ class App {
       const settings = await window.editor.importSublimeSettings()
       if (!settings) return
       if (!window.confirm('Apply the imported Sublime settings to this Lumen window?')) return
-      this.settings = settings
-      this.persistSettings()
-      document.documentElement.dataset.colorScheme = settings.colorScheme
-      for (const group of this.groups) group.editor.applySettings(settings)
-      this.applyDistractionFreeMode(settings.distractionFree)
+      this.applyUserSettings(settings)
       this.statusSelection.textContent = 'Imported Sublime settings'
     } catch (error) {
       this.showError('Sublime settings could not be imported.', error)
+    }
+  }
+
+  /** Apply and persist user preferences from the settings panel or importer. */
+  private applyUserSettings(settings: Settings): void {
+    const previousLocale = this.settings.locale
+    this.settings = { ...settings, rulers: [...settings.rulers], searchHistory: [...settings.searchHistory], replaceHistory: [...settings.replaceHistory] }
+    document.documentElement.dataset.colorScheme = this.settings.colorScheme
+    for (const group of this.groups) group.editor.applySettings(this.settings)
+    for (const group of this.groups) {
+      const doc = group.activeId ? this.docs.find((candidate) => candidate.id === group.activeId) : undefined
+      group.editor.setSpellCheck(this.settings.spellCheck && !!doc && (this.isMarkdownDoc(doc) || doc.language === 'Plain Text'))
+    }
+    this.applyDistractionFreeMode(this.settings.distractionFree)
+    this.applyLocale(this.settings.locale)
+    this.settingsPanel?.setSettings(this.settings)
+    this.persistSettings()
+    if (previousLocale !== this.settings.locale) {
+      void window.editor.setMenuLocale(this.settings.locale).catch((error: unknown) =>
+        this.showError(this.settings.locale === 'zh-CN' ? '界面语言切换失败。' : 'Could not switch interface language.', error)
+      )
+    }
+    if (this.settings.autoSave === 'after_delay') this.scheduleAutoSave()
+    else if (this.autoSaveTimer !== null) {
+      window.clearTimeout(this.autoSaveTimer)
+      this.autoSaveTimer = null
     }
   }
 
@@ -2312,9 +2339,8 @@ class App {
       onAccept: (item) => {
         const scheme = item.value as Settings['colorScheme']
         this.settings.colorScheme = scheme
-        document.documentElement.dataset.colorScheme = scheme
-        for (const group of this.groups) group.editor.setColorScheme(scheme)
-        this.persistSettings()
+        this.settings.theme = scheme === 'light' ? 'light' : 'dark'
+        this.applyUserSettings(this.settings)
       }
     })
   }
@@ -3452,6 +3478,7 @@ class App {
     if (this.jsonView) this.jsonView.setLocale(locale)
     if (this.outlinePanel) this.outlinePanel.setLocale(locale)
     if (this.terminalPanel) this.terminalPanel.setLocale(locale)
+    if (this.settingsPanel) this.settingsPanel.setLocale(locale)
     this.jsonFormatBtn.textContent = locale === 'zh-CN' ? '格式化' : 'Format'
     this.jsonCompactBtn.textContent = locale === 'zh-CN' ? '压缩' : 'Compact'
     this.jsonViewBtn.textContent = locale === 'zh-CN' ? '视图' : 'View'
@@ -3467,12 +3494,7 @@ class App {
 
   private setLocale(locale: Settings['locale']): void {
     if (this.settings.locale === locale) return
-    this.settings.locale = locale
-    this.applyLocale(locale)
-    this.persistSettings()
-    void window.editor.setMenuLocale(locale).catch((error: unknown) =>
-      this.showError(locale === 'zh-CN' ? '界面语言切换失败。' : 'Could not switch interface language.', error)
-    )
+    this.applyUserSettings({ ...this.settings, locale })
     this.statusSelection.textContent = locale === 'zh-CN' ? '界面语言：简体中文' : 'Interface language: English'
   }
 

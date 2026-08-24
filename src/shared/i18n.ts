@@ -70,7 +70,7 @@ const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
   'record-macro': '开始/停止录制宏', 'run-macro': '运行上次宏', 'save-macro': '保存上次宏…', 'run-saved-macro': '运行已保存宏…',
   'project-settings': '配置项目…', 'add-folder-to-project': '添加文件夹到项目…', 'import-sublime-project': '导入 Sublime 项目…',
   'import-sublime-settings': '导入 Sublime 设置…', 'import-sublime-keymap': '导入 Sublime 快捷键…',
-  'set-ui-language-zh': '切换为简体中文', 'set-ui-language-en': '切换为英文'
+  'set-ui-language-zh': '切换为简体中文', 'set-ui-language-en': '切换为英文', 'open-settings': '打开设置…'
   , 'format-json': '格式化 JSON', 'compact-json': '压缩 JSON', 'toggle-json-view': '切换 JSON 视图'
 }
 

@@ -11,7 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // their transient application data outside a developer's normal profile so a
 // test cannot change their restored tabs, locale or other preferences.
 if (process.env['LUMEN_SMOKE'] === '1') {
-  app.setPath('userData', path.join(app.getPath('temp'), `lumen-editor-smoke-${process.pid}`))
+  app.setPath('userData', path.join(app.getPath('temp'), `lumen-editor-smoke-${process.pid}-${Date.now().toString(36)}`))
 }
 
 /** Graceful closes wait for the renderer to persist hot-exit state. */
@@ -174,6 +174,18 @@ function createWindow(sessionId = newSessionId()): void {
           return panel instanceof HTMLElement && !panel.classList.contains('hidden')
         })()`, true)
         if (!outlineResult) throw new Error('Outline did not open from its menu event')
+        win.webContents.send(IPC.menuEvent, 'open-settings' as MenuEvent)
+        await new Promise<void>((resolve) => setTimeout(resolve, 80))
+        const settingsResult = await win.webContents.executeJavaScript(`(() => {
+          const panel = document.querySelector('.settings-panel')
+          const fontSize = panel?.querySelector('input[data-setting="fontSize"]')
+          const editor = document.querySelector('.cm-editor')
+          if (!(panel instanceof HTMLElement) || panel.classList.contains('hidden') || !(fontSize instanceof HTMLInputElement) || !(editor instanceof HTMLElement)) return false
+          fontSize.value = '17'
+          fontSize.dispatchEvent(new Event('change', { bubbles: true }))
+          return getComputedStyle(editor).fontSize === '17px'
+        })()`, true)
+        if (!settingsResult) throw new Error('Settings panel did not apply a font-size change')
         const terminalSmokeScript = [
           '(() => {',
           '  const api = window.editor',

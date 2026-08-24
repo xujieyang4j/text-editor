@@ -940,6 +940,83 @@ body.distraction-free .layout-root {
   font-size: 13px;
 }
 
+/* ---------- Settings ---------- */
+.settings-panel {
+  position: fixed;
+  top: 10vh;
+  right: 18px;
+  z-index: 1200;
+  display: flex;
+  width: min(440px, calc(100vw - 36px));
+  max-height: 78vh;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.52);
+}
+
+.settings-panel.hidden { display: none; }
+
+.settings-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-panel-header h2 { margin: 0; font-size: 14px; }
+
+.settings-panel-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 12px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.settings-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.settings-field select,
+.settings-field input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  padding: 5px 7px;
+  user-select: text;
+  font: 12px var(--font-ui);
+}
+
+.settings-field input:disabled { opacity: 0.5; }
+
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 27px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.settings-check input { margin: 0; }
+
+@media (max-width: 520px) {
+  .settings-panel-body { grid-template-columns: 1fr; }
+}
+
 .palette-item.active {
   background: var(--accent);
   color: var(--accent-text);

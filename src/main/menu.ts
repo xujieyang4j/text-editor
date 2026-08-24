@@ -216,6 +216,8 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
     {
       label: t('preferences'),
       submenu: [
+        item('Open Settings…', 'open-settings', 'CmdOrCtrl+,'),
+        { type: 'separator' },
         item('Import Sublime Settings…', 'import-sublime-settings'),
         item('Import Sublime Keymap…', 'import-sublime-keymap'),
         { type: 'separator' },

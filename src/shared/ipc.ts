@@ -706,6 +706,7 @@ export type MenuEvent =
   | 'toggle-json-view'
   | 'set-ui-language-zh'
   | 'set-ui-language-en'
+  | 'open-settings'
   | 'command-palette'
   | 'goto-anything'
   | 'goto-symbol'

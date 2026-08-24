@@ -140,6 +140,7 @@ export const COMMANDS: Command[] = [
   , { id: 'import-sublime-keymap', title: 'Preferences: Import Sublime Keymap…' }
   , { id: 'set-ui-language-zh', title: 'Preferences: Switch to Simplified Chinese' }
   , { id: 'set-ui-language-en', title: 'Preferences: Switch to English' }
+  , { id: 'open-settings', title: 'Preferences: Open Settings…' }
   , { id: 'lsp-hover', title: 'LSP: Show Hover', hint: 'Ctrl/Cmd+Shift+Space' }
   , { id: 'lsp-definition', title: 'LSP: Go to Definition', hint: 'F12' }
   , { id: 'lsp-references', title: 'LSP: Find References', hint: 'Shift+F12' }

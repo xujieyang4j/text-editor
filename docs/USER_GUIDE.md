@@ -229,6 +229,9 @@ input, code folding (fold gutter in the margin), bracket matching, and autocompl
 Toggles you flip at runtime (theme, wrap, minimap, font size) are written straight back to the
 settings file, so they persist across restarts.
 
+Use **Preferences: Open Settings…** (`Ctrl/Cmd+,`) for a graphical editor of these preferences;
+changes apply immediately and are saved to the same settings file.
+
 The **View: Toggle Outline** command adds a filtered outline of functions, classes, and Markdown
 headings for the active document to the sidebar. It is local to the open buffer and does not start
 a language server.
