@@ -582,6 +582,9 @@ class App {
       case 'select-build-system':
         this.selectBuildSystem()
         break
+      case 'import-sublime-build':
+        void this.importSublimeBuild()
+        break
       case 'format-document':
         void this.formatDocument()
         break
@@ -2783,6 +2786,26 @@ class App {
         void this.runBuildSystem(this.activeBuildSystem)
       }
     })
+  }
+
+  private async importSublimeBuild(): Promise<void> {
+    if (!this.folder) {
+      this.showError('Open a project before importing a Sublime build system.')
+      return
+    }
+    try {
+      const imported = await window.editor.importSublimeBuild()
+      if (!imported) return
+      const detail = `${imported.system.name}\n${imported.system.command} ${imported.system.args.join(' ')}`.trim()
+      if (!window.confirm(`Import Sublime build system?\n\n${detail}\n\nThe command will still require per-session approval before it runs.`)) return
+      this.project.buildSystems = [imported.system, ...this.project.buildSystems.filter((system) => system.name !== imported.system.name)].slice(0, 30)
+      await this.saveProject()
+      this.activeBuildSystem = imported.system
+      this.buildPanel.setCommand(imported.system.command)
+      this.statusSelection.textContent = `Imported Sublime build system: ${imported.system.name}`
+    } catch (error) {
+      this.showError('Sublime build system could not be imported.', error)
+    }
   }
 
   private async runBuildSystem(system: BuildSystem): Promise<void> {

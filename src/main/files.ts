@@ -29,6 +29,7 @@ import {
   type WorkspaceSymbol,
   type BuildRequest,
   type BuildOutput,
+  type BuildSystem,
   type PluginManifest,
   type LanguageToolRequest,
   type LanguageToolResult,
@@ -59,6 +60,7 @@ import {
   , type MacroStep
   , type SublimeProjectImport
   , type SublimeSnippetImport
+  , type SublimeBuildImport
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -531,6 +533,35 @@ function parseSublimeSnippet(source: string, sourcePath: string): SublimeSnippet
     text,
     ...(trigger && /^[\w-]{1,80}$/.test(trigger) ? { trigger } : {}),
     ...(scope ? { scope: scope.slice(0, 100) } : {})
+  }
+}
+
+function parseSublimeBuild(value: unknown, sourcePath: string): BuildSystem {
+  if (!value || typeof value !== 'object') throw new Error('The selected .sublime-build file must be a JSON object.')
+  const raw = value as { name?: unknown; cmd?: unknown; shell_cmd?: unknown; working_dir?: unknown; file_regex?: unknown; env?: unknown; variants?: unknown }
+  const cmd = Array.isArray(raw.cmd) && raw.cmd.every((part) => typeof part === 'string') ? raw.cmd as string[] : []
+  const shell = typeof raw.shell_cmd === 'string' ? raw.shell_cmd : ''
+  const command = cmd[0] ?? shell
+  if (!command) throw new Error('The Sublime build file requires cmd or shell_cmd.')
+  return {
+    name: typeof raw.name === 'string' ? raw.name.slice(0, 100) : path.basename(sourcePath, '.sublime-build').slice(0, 100),
+    command: command.slice(0, 1_000),
+    args: cmd.slice(1, 51),
+    ...(shell ? { shell: true } : {}),
+    ...(typeof raw.working_dir === 'string' ? { workingDirectory: raw.working_dir.slice(0, 500) } : {}),
+    ...(typeof raw.file_regex === 'string' ? { fileRegex: raw.file_regex.slice(0, 1_000) } : {}),
+    ...(Object.keys(sanitizeBuildEnv(raw.env)).length > 0 ? { env: sanitizeBuildEnv(raw.env) } : {}),
+    variants: Array.isArray(raw.variants)
+      ? raw.variants.flatMap((variant) => {
+          if (!variant || typeof variant !== 'object') return []
+          const item = variant as { name?: unknown; cmd?: unknown; shell_cmd?: unknown; working_dir?: unknown; file_regex?: unknown; env?: unknown }
+          const variantCmd = Array.isArray(item.cmd) && item.cmd.every((part) => typeof part === 'string') ? item.cmd as string[] : []
+          const variantShell = typeof item.shell_cmd === 'string' ? item.shell_cmd : ''
+          const variantCommand = variantCmd[0] ?? variantShell
+          if (!variantCommand || typeof item.name !== 'string') return []
+          return [{ name: item.name.slice(0, 100), command: variantCommand.slice(0, 1_000), args: variantCmd.slice(1, 51), ...(variantShell ? { shell: true } : {}), ...(typeof item.working_dir === 'string' ? { workingDirectory: item.working_dir.slice(0, 500) } : {}), ...(typeof item.file_regex === 'string' ? { fileRegex: item.file_regex.slice(0, 1_000) } : {}), ...(Object.keys(sanitizeBuildEnv(item.env)).length > 0 ? { env: sanitizeBuildEnv(item.env) } : {}) }]
+        }).slice(0, 20)
+      : []
   }
 }
 
@@ -1916,6 +1947,18 @@ export function registerFileHandlers(): void {
     const child = builds.get(event.sender.id)
     child?.kill()
     builds.delete(event.sender.id)
+  })
+
+  ipcMain.handle(IPC.buildImportSublime, async (event): Promise<SublimeBuildImport | null> => {
+    assertTrustedSender(event)
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, { title: 'Import Sublime Build System', properties: ['openFile'], filters: [{ name: 'Sublime Build System', extensions: ['sublime-build'] }] })
+    if (result.canceled || !result.filePaths[0]) return null
+    const sourcePath = result.filePaths[0]
+    let raw: unknown
+    try { raw = JSON.parse(stripJsonComments(await fs.readFile(sourcePath, 'utf8'))) }
+    catch { throw new Error('The selected .sublime-build file is not valid JSON-with-comments.') }
+    return { sourcePath, system: parseSublimeBuild(raw, sourcePath) }
   })
 
   ipcMain.handle(IPC.projectRead, async (event, root: unknown): Promise<Session['project']> => {

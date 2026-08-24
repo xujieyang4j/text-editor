@@ -39,6 +39,7 @@ export const IPC = {
   fileWatch: 'file:watch',
   buildRun: 'build:run',
   buildCancel: 'build:cancel',
+  buildImportSublime: 'build:import-sublime',
   buildOutput: 'build:output',
   projectRead: 'project:read',
   projectWrite: 'project:write',
@@ -218,6 +219,11 @@ export interface BuildVariant {
   fileRegex?: string
   env?: Record<string, string>
   shell?: boolean
+}
+
+export interface SublimeBuildImport {
+  sourcePath: string
+  system: BuildSystem
 }
 
 export interface BuildProblem {
@@ -697,6 +703,7 @@ export type MenuEvent =
   | 'import-sublime-project'
   | 'import-sublime-settings'
   | 'import-sublime-snippet'
+  | 'import-sublime-build'
   | 'lsp-hover'
   | 'lsp-definition'
   | 'lsp-references'
@@ -719,6 +726,7 @@ export type MenuEvent =
   | 'insert-snippet'
   | 'build'
   | 'select-build-system'
+  | 'import-sublime-build'
   | 'trim-trailing-whitespace'
   | 'convert-indent-spaces'
   | 'convert-indent-tabs'

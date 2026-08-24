@@ -19,6 +19,7 @@ import {
   type FileChangeEvent,
   type BuildRequest,
   type BuildOutput,
+  type SublimeBuildImport,
   type ProjectSettings,
   type SublimeProjectImport,
   type SublimeSnippetImport,
@@ -153,6 +154,9 @@ const api = {
   runBuild: (request: BuildRequest): Promise<void> => ipcRenderer.invoke(IPC.buildRun, request),
 
   cancelBuild: (): Promise<void> => ipcRenderer.invoke(IPC.buildCancel),
+
+  importSublimeBuild: (): Promise<SublimeBuildImport | null> =>
+    ipcRenderer.invoke(IPC.buildImportSublime),
 
   onBuildOutput: (handler: (output: BuildOutput) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, output: BuildOutput): void => handler(output)

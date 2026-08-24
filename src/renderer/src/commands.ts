@@ -85,6 +85,7 @@ export const COMMANDS: Command[] = [
   { id: 'font-zoom-out', title: 'View: Zoom Out', hint: 'Ctrl/Cmd+-' },
   { id: 'font-zoom-reset', title: 'View: Reset Zoom', hint: 'Ctrl/Cmd+0' },
   { id: 'build', title: 'Tools: Build', hint: 'Ctrl/Cmd+B' },
+  { id: 'import-sublime-build', title: 'Tools: Import Sublime Build System…' },
   { id: 'format-document', title: 'Tools: Format Document' },
   { id: 'trim-trailing-whitespace', title: 'Edit: Trim Trailing Whitespace' },
   { id: 'convert-indent-spaces', title: 'Edit: Convert Indentation to Spaces' },

@@ -185,6 +185,7 @@ export function buildMenu(): void {
         item('Show Hover', 'lsp-hover', 'CmdOrCtrl+Shift+Space'),
         item('Rename Symbol', 'lsp-rename', 'F2'),
         item('Select Build System…', 'select-build-system'),
+        item('Import Sublime Build System…', 'import-sublime-build'),
         item('Toggle Build Output', 'toggle-problems'),
         item('Configure Language Tool…', 'language-tools'),
         item('Install Local Plugin…', 'install-plugin'),
