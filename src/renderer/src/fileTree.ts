@@ -10,6 +10,7 @@ export interface FileTreeHandlers {
   onDelete: (path: string) => void
   onReveal: (path: string) => void
   onError: (message: string, error: unknown) => void
+  isExcluded?: (path: string, isDirectory: boolean) => boolean
 }
 
 export interface TreeEntry extends DirEntry {
@@ -66,6 +67,7 @@ export class FileTree {
     const ul = document.createElement('ul')
     ul.className = 'tree-list'
     for (const entry of entries) {
+      if (this.handlers.isExcluded?.(entry.path, entry.isDirectory)) continue
       ul.appendChild(this.buildItem(entry, depth))
     }
     return ul
@@ -126,7 +128,7 @@ export class FileTree {
       const twisty = li.querySelector<HTMLElement>(':scope > .tree-row > .tree-twisty')
       if (!twisty) continue
       try {
-        const children = await window.editor.readDir(entry.path)
+        const children = (await window.editor.readDir(entry.path)).filter((child) => !this.handlers.isExcluded?.(child.path, child.isDirectory))
         if (version !== this.renderVersion) return
         const childList = this.buildList(children, depth + 1)
         li.appendChild(childList)
@@ -183,7 +185,7 @@ export class FileTree {
     }
 
     try {
-      const children = entry.children ?? await window.editor.readDir(entry.path)
+      const children = (entry.children ?? await window.editor.readDir(entry.path)).filter((child) => !this.handlers.isExcluded?.(child.path, child.isDirectory))
       entry.children = children
       li.appendChild(this.buildList(children, depth + 1))
       twisty.textContent = '▾'

@@ -48,6 +48,20 @@ import {
 } from '../../shared/ipc.js'
 import './styles.css'
 
+/** Match the compact glob subset shared by project excludes, Goto and the file tree. */
+function globMatches(relativePath: string, pattern: string, isDirectory = false): boolean {
+  const glob = pattern.trim().replaceAll('\\', '/').replace(/^\.\//, '')
+  if (!glob) return false
+  const source = glob
+    .replace(/[.+^${}()|[\]\\]/g, '\$&')
+    .replace(/\*\*\//g, '(?:.*/)?')
+    .replace(/\*\*/g, '.*')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+  const matcher = new RegExp(`^${source}$`, 'i')
+  return matcher.test(relativePath) || (isDirectory && matcher.test(`${relativePath}/`))
+}
+
 interface EditorGroup {
   id: number
   root: HTMLElement
@@ -175,7 +189,8 @@ class App {
       onRename: (path) => { void this.renamePath(path) },
       onDelete: (path) => { void this.deletePath(path) },
       onReveal: (path) => { void window.editor.revealInFolder(path).catch((error: unknown) => this.showError('Could not reveal the item.', error)) },
-      onError: (message, error) => this.showError(message, error)
+      onError: (message, error) => this.showError(message, error),
+      isExcluded: (path, isDirectory) => this.isProjectExcluded(path, isDirectory)
     })
     this.searchPanel = new WorkspaceSearchPanel({
       getRoot: () => this.folder,
@@ -1824,7 +1839,7 @@ class App {
         name: baseName(root),
         path: root,
         isDirectory: true,
-        children: await window.editor.readDir(root)
+        children: (await window.editor.readDir(root)).filter((entry) => !this.isProjectExcluded(entry.path, entry.isDirectory))
       })))
       if (roots.length === 1) this.tree.render(roots[0].children, true)
       else this.tree.render(roots.map((root) => ({ name: root.name, path: root.path, isDirectory: true, children: root.children })), true)
@@ -3017,17 +3032,11 @@ class App {
     this.projectSymbolIndexAt = Date.now()
   }
 
-  private isProjectExcluded(file: string): boolean {
+  private isProjectExcluded(file: string, isDirectory = false): boolean {
     const root = this.folders.find((candidate) => file === candidate || file.startsWith(`${candidate}/`) || file.startsWith(`${candidate}\\`))
     if (!root) return false
     const relative = file.slice(root.length + 1).replaceAll('\\', '/')
-    return this.project.exclude.some((pattern) => {
-      const source = pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replaceAll('**', '.*')
-        .replaceAll('*', '[^/]*')
-      return new RegExp(`^${source}$`).test(relative)
-    })
+    return this.project.exclude.some((pattern) => globMatches(relative, pattern, isDirectory))
   }
 
   /** Returns the most specific authorised root containing a document path. */
