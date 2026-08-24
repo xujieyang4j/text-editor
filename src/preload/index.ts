@@ -20,6 +20,7 @@ import {
   type BuildRequest,
   type BuildOutput,
   type ProjectSettings,
+  type SublimeProjectImport,
   type PluginManifest,
   type LanguageToolRequest,
   type LanguageToolResult,
@@ -34,6 +35,8 @@ import {
   , type MarketplaceInstallRequest
   , type GitStatus
   , type GitDiff
+  , type GitHunk
+  , type GitHistoryEntry
   , type GitActionRequest
   , type GitConflict
   , type UpdateInfo
@@ -82,6 +85,9 @@ const api = {
   writeSettings: (settings: Settings): Promise<void> =>
     ipcRenderer.invoke(IPC.settingsWrite, settings),
 
+  importSublimeSettings: (): Promise<Settings | null> =>
+    ipcRenderer.invoke(IPC.settingsImportSublime),
+
   /** Read the persisted session (open tabs + folder). */
   readSession: (): Promise<Session> => ipcRenderer.invoke(IPC.sessionRead),
 
@@ -122,6 +128,9 @@ const api = {
   listWorkspaceSymbols: (root: string): Promise<WorkspaceSymbol[]> =>
     ipcRenderer.invoke(IPC.workspaceSymbols, root),
 
+  listWorkspaceWords: (root: string): Promise<string[]> =>
+    ipcRenderer.invoke(IPC.workspaceWords, root),
+
   createPath: (target: string, isDirectory: boolean): Promise<DirEntry> =>
     ipcRenderer.invoke(IPC.fileCreate, target, isDirectory),
 
@@ -156,6 +165,12 @@ const api = {
   writeProject: (root: string, project: ProjectSettings): Promise<void> =>
     ipcRenderer.invoke(IPC.projectWrite, root, project),
 
+  importSublimeProject: (): Promise<SublimeProjectImport | null> =>
+    ipcRenderer.invoke(IPC.projectImportSublime),
+
+  acceptSublimeProjectImport: (token: string): Promise<OpenedFolder[]> =>
+    ipcRenderer.invoke(IPC.projectImportSublimeAccept, token),
+
   listPlugins: (root: string): Promise<PluginManifest[]> => ipcRenderer.invoke(IPC.pluginList, root),
 
   installPlugin: (request: PluginInstallRequest): Promise<PluginManifest> =>
@@ -179,6 +194,15 @@ const api = {
 
   gitDiff: (root: string, relativePath: string): Promise<GitDiff> =>
     ipcRenderer.invoke(IPC.gitDiff, root, relativePath),
+
+  gitHunks: (root: string, relativePath: string): Promise<GitHunk[]> =>
+    ipcRenderer.invoke(IPC.gitHunks, root, relativePath),
+
+  gitHistory: (root: string, relativePath: string): Promise<GitHistoryEntry[]> =>
+    ipcRenderer.invoke(IPC.gitHistory, root, relativePath),
+
+  gitBlame: (root: string, relativePath: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.gitBlame, root, relativePath),
 
   gitAction: (request: GitActionRequest): Promise<GitStatus> => ipcRenderer.invoke(IPC.gitAction, request),
 

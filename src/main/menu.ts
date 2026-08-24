@@ -54,8 +54,12 @@ export function buildMenu(): void {
         { type: 'separator' },
         item('Save', 'save', 'CmdOrCtrl+S'),
         item('Save As…', 'save-as', 'CmdOrCtrl+Shift+S'),
+        item('Save All', 'save-all', 'CmdOrCtrl+Alt+S'),
         { type: 'separator' },
         item('Close Tab', 'close-tab', 'CmdOrCtrl+W'),
+        item('Close Other Tabs', 'close-other-tabs'),
+        item('Close Tabs to the Right', 'close-tabs-to-right'),
+        item('Close All Tabs', 'close-all-tabs'),
         item('Reopen Closed Tab', 'reopen-tab', 'CmdOrCtrl+Shift+T'),
         isMac ? { role: 'close' } : { role: 'quit' }
       ]
@@ -107,7 +111,7 @@ export function buildMenu(): void {
         item('Sort Lines', 'sort-lines'),
         item('Split Selection into Lines', 'split-selection-lines')
         , item('Add Next Occurrence', 'select-next-occurrence', 'CmdOrCtrl+D')
-        , item('Select All Occurrences', 'select-all-occurrences', 'CmdOrCtrl+Shift+L')
+        , item('Select All Occurrences', 'select-all-occurrences', 'Alt+F3')
         , item('Add Cursor Above', 'add-cursor-above', 'CmdOrCtrl+Alt+Up')
         , item('Add Cursor Below', 'add-cursor-below', 'CmdOrCtrl+Alt+Down')
       ]
@@ -132,8 +136,8 @@ export function buildMenu(): void {
         item('Next Bookmark', 'next-bookmark', 'F2'),
         item('Previous Bookmark', 'prev-bookmark', 'Shift+F2')
         , { type: 'separator' }
-        , item('Next Change', 'next-change', 'CmdOrCtrl+Alt+Down')
-        , item('Previous Change', 'prev-change', 'CmdOrCtrl+Alt+Up')
+        , item('Next Change', 'next-change', 'CmdOrCtrl+Alt+Shift+Down')
+        , item('Previous Change', 'prev-change', 'CmdOrCtrl+Alt+Shift+Up')
       ]
     },
     {
@@ -194,8 +198,13 @@ export function buildMenu(): void {
       ]
     },
     {
+      label: 'Preferences',
+      submenu: [item('Import Sublime Settings…', 'import-sublime-settings')]
+    },
+    {
       label: 'Project',
       submenu: [
+        item('Import Sublime Project…', 'import-sublime-project'),
         item('Add Folder to Project…', 'add-folder-to-project'),
         item('Open Recent Project…', 'open-recent-project'),
         item('Configure Project…', 'project-settings')

@@ -107,6 +107,8 @@ class App {
   private isNavigatingHistory = false
   private projectSymbols: WorkspaceSymbol[] = []
   private projectSymbolIndexAt = 0
+  private workspaceWords: string[] = []
+  private workspaceWordIndexAt = 0
   private lspSyncTimer: number | null = null
   private lspDocumentVersion = new Map<string, number>()
   private buildOutputText = ''
@@ -203,7 +205,11 @@ class App {
         if (this.folder) void this.openPath(`${this.folder}/${relativePath}`)
       },
       onDiff: (relativePath) => this.folder ? window.editor.gitDiff(this.folder, relativePath) : Promise.reject(new Error('No workspace open.')),
+      onHunks: (relativePath) => this.folder ? window.editor.gitHunks(this.folder, relativePath) : Promise.reject(new Error('No workspace open.')),
+      onHistory: (relativePath) => this.folder ? window.editor.gitHistory(this.folder, relativePath) : Promise.reject(new Error('No workspace open.')),
+      onBlame: (relativePath) => this.folder ? window.editor.gitBlame(this.folder, relativePath) : Promise.reject(new Error('No workspace open.')),
       onAction: (action, paths) => { void this.runGitAction(action, paths) },
+      onHunkAction: (action, hunk) => { void this.runGitHunkAction(action, hunk) },
       onCommit: () => { void this.commitGitChanges() },
       onBranch: (create) => { void this.switchGitBranch(create) }
     })
@@ -223,6 +229,7 @@ class App {
     window.editor.onFileChange((change) => {
       if (this.folder) void this.reloadWorkspaceTree()
       this.projectSymbols = []
+      this.workspaceWords = []
       void this.handleExternalFileChange(change.path)
     })
     window.editor.onOpenPathRequested((filePath) => {
@@ -395,6 +402,12 @@ class App {
       case 'open-recent-project':
         void this.openRecentProject()
         break
+      case 'import-sublime-project':
+        void this.importSublimeProject()
+        break
+      case 'import-sublime-settings':
+        void this.importSublimeSettings()
+        break
       case 'lsp-hover':
         void this.showLspHover()
         break
@@ -419,8 +432,20 @@ class App {
       case 'save-as':
         void this.save(true)
         break
+      case 'save-all':
+        void this.saveAll()
+        break
       case 'close-tab':
         this.closeActive()
+        break
+      case 'close-other-tabs':
+        void this.closeTabs('others')
+        break
+      case 'close-tabs-to-right':
+        void this.closeTabs('right')
+        break
+      case 'close-all-tabs':
+        void this.closeTabs('all')
         break
       case 'reopen-tab':
         void this.reopenClosed()
@@ -1021,9 +1046,24 @@ class App {
       }
     }
     for (const doc of this.docs) addWords(doc.content)
+    for (const word of this.workspaceWords) {
+      if (word !== token && word.toLowerCase().startsWith(token.toLowerCase())) words.add(word)
+      if (words.size >= 300) break
+    }
     if (words.size < 300) addWords(context.state.doc.toString())
+    if (this.workspaceWords.length === 0 || Date.now() - this.workspaceWordIndexAt > 60_000) void this.ensureWorkspaceWords()
     const ordered = [...words].sort((a, b) => a.localeCompare(b)).slice(0, 100)
     return ordered.length > 0 ? ordered.map((label) => ({ label, type: 'text', detail: 'workspace word' })) : null
+  }
+
+  private async ensureWorkspaceWords(): Promise<void> {
+    if (this.folders.length === 0 || (this.workspaceWords.length > 0 && Date.now() - this.workspaceWordIndexAt <= 60_000)) return
+    try {
+      this.workspaceWords = (await Promise.all(this.folders.map((root) => window.editor.listWorkspaceWords(root)))).flat()
+      this.workspaceWordIndexAt = Date.now()
+    } catch {
+      // Open-buffer completion remains useful if the project index is unavailable.
+    }
   }
 
   private async requestLspAt(
@@ -1309,6 +1349,8 @@ class App {
     this.renderTabs()
     this.projectSymbols = []
     this.projectSymbolIndexAt = 0
+    this.workspaceWords = []
+    this.workspaceWordIndexAt = 0
     this.refreshIncrementalDiff(doc, group.editor)
     // Live-update the markdown preview if it's showing this doc.
     if (this.preview.isVisible && this.isMarkdownDoc(doc)) {
@@ -1751,7 +1793,7 @@ class App {
       await window.editor.readDir(root)
       if (primary || !this.folder) {
         this.folder = root
-        await this.loadProject(root)
+        if (this.project.buildSystems.length === 0 && this.project.exclude.length === 0) await this.loadProject(root)
       }
       this.folders.push(root)
       this.workspaceName.textContent = this.folders.length === 1 ? baseName(root).toUpperCase() : `${this.folders.length} FOLDERS`
@@ -1785,6 +1827,48 @@ class App {
   private async addFolderToProject(): Promise<void> {
     const folder = await window.editor.openFolder()
     if (folder) await this.addFolderPath(folder.root)
+  }
+
+  /** Import the portable subset of a `.sublime-project` after user file selection. */
+  private async importSublimeProject(): Promise<void> {
+    try {
+      const imported = await window.editor.importSublimeProject()
+      if (!imported) return
+      const names = imported.roots.map((root) => baseName(root)).join(', ')
+      if (!window.confirm(`Import Sublime project roots: ${names}?\n\nThis converts folders, exclude patterns, and Build Systems only. It will not execute Sublime Python plugins.`)) return
+      const folders = await window.editor.acceptSublimeProjectImport(imported.token)
+      this.folder = null
+      this.folders = []
+      this.project = imported.project
+      this.plugins = []
+      this.extensionHost.dispose()
+      this.extensionCommands.clear()
+      for (const folder of folders) await this.addFolderPath(folder.root, this.folders.length === 0)
+      if (!this.folder) return
+      await this.saveProject()
+      this.buildPanel.setCommand(this.project.buildCommand)
+      await this.renderProjectRoots()
+      this.scheduleSessionSave()
+      this.statusSelection.textContent = `Imported Sublime project: ${baseName(imported.sourcePath)}`
+    } catch (error) {
+      this.showError('Sublime project could not be imported.', error)
+    }
+  }
+
+  private async importSublimeSettings(): Promise<void> {
+    try {
+      const settings = await window.editor.importSublimeSettings()
+      if (!settings) return
+      if (!window.confirm('Apply the imported Sublime settings to this Lumen window?')) return
+      this.settings = settings
+      this.persistSettings()
+      document.documentElement.dataset.colorScheme = settings.colorScheme
+      for (const group of this.groups) group.editor.applySettings(settings)
+      this.applyDistractionFreeMode(settings.distractionFree)
+      this.statusSelection.textContent = 'Imported Sublime settings'
+    } catch (error) {
+      this.showError('Sublime settings could not be imported.', error)
+    }
   }
 
   private async openRecentProject(): Promise<void> {
@@ -1994,6 +2078,19 @@ class App {
     try {
       this.gitPanel.setStatus(await window.editor.gitAction({ root: this.folder, action, paths }))
       await this.reloadWorkspaceTree()
+    } catch (error) {
+      this.showError(`Git ${action} failed.`, error)
+    }
+  }
+
+  private async runGitHunkAction(action: 'stage-hunk' | 'discard-hunk', hunk: import('../../shared/ipc.js').GitHunk): Promise<void> {
+    if (!this.folder) return
+    const label = action === 'stage-hunk' ? 'Stage' : 'Discard'
+    if (!window.confirm(`${label} selected hunk in “${hunk.path}”?`)) return
+    try {
+      this.gitPanel.setStatus(await window.editor.gitAction({ root: this.folder, action, paths: [hunk.path], patch: hunk.patch }))
+      await this.reloadWorkspaceTree()
+      this.statusSelection.textContent = `${label}d selected hunk`
     } catch (error) {
       this.showError(`Git ${action} failed.`, error)
     }
@@ -2258,6 +2355,39 @@ class App {
     this.closeDocFromGroup(doc.id, this.activeGroup, false)
   }
 
+  private async saveAll(): Promise<void> {
+    const dirty = this.docs.filter((doc) => isDirty(doc))
+    if (dirty.length === 0) {
+      this.statusSelection.textContent = 'All files are saved'
+      return
+    }
+    for (const doc of dirty) {
+      const group = this.groups.find((candidate) => candidate.docIds.includes(doc.id))
+      if (!group) continue
+      const previousGroup = this.activeGroup
+      const previousId = this.activeId
+      await this.activate(doc.id, group.id)
+      await this.save(false)
+      if (previousId && this.docs.some((item) => item.id === previousId)) await this.activate(previousId, previousGroup)
+      if (isDirty(doc)) {
+        this.statusSelection.textContent = 'Save All stopped before an unsaved file'
+        return
+      }
+    }
+    this.statusSelection.textContent = `Saved ${dirty.length} file${dirty.length === 1 ? '' : 's'}`
+  }
+
+  private async closeTabs(mode: 'others' | 'right' | 'all'): Promise<void> {
+    const group = this.groups[this.activeGroup]
+    const activeId = group?.activeId
+    if (!group || !activeId) return
+    const activeIndex = group.docIds.indexOf(activeId)
+    const ids = group.docIds.filter((id, index) => mode === 'all' || (mode === 'others' ? id !== activeId : index > activeIndex))
+    const dirty = ids.map((id) => this.docs.find((doc) => doc.id === id)).filter((doc): doc is Doc => !!doc && isDirty(doc))
+    if (dirty.length > 0 && !window.confirm(`Close ${ids.length} tab${ids.length === 1 ? '' : 's'}? ${dirty.length} have unsaved changes.`)) return
+    for (const id of ids) this.closeDocFromGroup(id, group.id, false)
+  }
+
   private closeDocFromGroup(id: string, groupIndex: number, confirmClose = true): void {
     const doc = this.docs.find((candidate) => candidate.id === id)
     const group = this.groups[groupIndex]
@@ -2517,7 +2647,7 @@ class App {
     this.buildOutputText = ''
     this.buildPanel.toggle(true)
     try {
-      await window.editor.runBuild({ root: this.folder, command })
+      await window.editor.runBuild({ root: this.folder, command, shell: true })
     } catch (error) {
       this.showError('The build could not be started.', error)
     }
@@ -2542,7 +2672,9 @@ class App {
             command: variant.command ?? system.command,
             args: variant.args ?? system.args,
             workingDirectory: variant.workingDirectory ?? system.workingDirectory,
-            fileRegex: variant.fileRegex ?? system.fileRegex
+            fileRegex: variant.fileRegex ?? system.fileRegex,
+            env: variant.env ?? system.env,
+            shell: variant.shell ?? system.shell
           } as BuildSystem }
         })
       }
@@ -2571,17 +2703,44 @@ class App {
     this.buildOutputText = ''
     this.buildPanel.toggle(true)
     try {
+      const active = this.active
+      const variables = this.buildVariables(active)
       await window.editor.runBuild({
         root: this.folder,
         name: system.name,
-        command: system.command,
-        args: system.args,
-        workingDirectory: system.workingDirectory,
+        command: this.expandBuildVariables(system.command, variables),
+        args: system.args.map((arg) => this.expandBuildVariables(arg, variables)),
+        workingDirectory: system.workingDirectory ? this.expandBuildVariables(system.workingDirectory, variables) : undefined,
         fileRegex: system.fileRegex
+        , shell: system.shell
+        , env: Object.fromEntries(Object.entries(system.env ?? {}).map(([key, value]) => [key, this.expandBuildVariables(value, variables)]))
       })
     } catch (error) {
       this.showError('The build system could not be started.', error)
     }
+  }
+
+  private buildVariables(doc: Doc | undefined): Record<string, string> {
+    const file = doc?.path ?? ''
+    const slash = Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'))
+    const filePath = slash >= 0 ? file.slice(0, slash) : ''
+    const fileName = slash >= 0 ? file.slice(slash + 1) : file
+    const extension = /.([^.]+)$/.exec(fileName)?.[1] ?? ''
+    const baseName = extension ? fileName.slice(0, -(extension.length + 1)) : fileName
+    return {
+      project_path: this.folder ?? '',
+      folder: this.folder ?? '',
+      file,
+      file_path: filePath,
+      file_name: fileName,
+      file_base_name: baseName,
+      file_extension: extension
+    }
+  }
+
+  /** Substitute the familiar $file/$project_path tokens in a structured build system. */
+  private expandBuildVariables(value: string, variables: Record<string, string>): string {
+    return value.replace(/\$([a-z_][a-z0-9_]*)/gi, (token, name: string) => variables[name.toLowerCase()] ?? token)
   }
 
   private handleBuildOutput(output: BuildOutput): void {
@@ -2985,6 +3144,7 @@ class App {
           languageLocked: d.languageLocked,
           encoding: d.encoding,
           eol: d.eol,
+          ...(d.bookmarks.length > 0 ? { bookmarks: d.bookmarks } : {}),
           ...(keepDraft ? { draft: d.content } : {})
         }
       })

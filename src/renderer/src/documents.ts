@@ -109,6 +109,7 @@ export function createFromSession(
     draft?: string
     encoding?: import('../../shared/ipc.js').TextEncoding
     eol?: import('../../shared/ipc.js').LineEnding
+    bookmarks?: number[]
   }
 ): Doc {
   counter += 1
@@ -123,7 +124,7 @@ export function createFromSession(
     languageLocked: sf.languageLocked,
     encoding: sf.encoding ?? 'utf8',
     eol: sf.eol ?? 'LF',
-    bookmarks: [],
+    bookmarks: Array.isArray(sf.bookmarks) ? sf.bookmarks.filter((line) => Number.isInteger(line) && line > 0).slice(0, 10_000) : [],
     groupStates: new Map()
   }
 }

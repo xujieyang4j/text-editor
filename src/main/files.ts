@@ -48,6 +48,8 @@ import {
   , type MarketplaceInstallRequest
   , type GitStatus
   , type GitDiff
+  , type GitHunk
+  , type GitHistoryEntry
   , type GitActionRequest
   , type GitConflict
   , type RecentProject
@@ -55,6 +57,7 @@ import {
   , type UpdateInfo
   , type SavedMacro
   , type MacroStep
+  , type SublimeProjectImport
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -93,6 +96,7 @@ const languageServers = new Map<string, PersistentLanguageServer>()
 const execFileAsync = promisify(execFile)
 const windowSessionIds = new Map<number, string>()
 const replaceUndoTransactions = new Map<string, { expiresAt: number; files: Map<string, Buffer> }>()
+const pendingSublimeImports = new Map<string, { senderId: number; expiresAt: number; sourcePath: string; roots: string[]; project: Session['project'] }>()
 const grantedFiles = new Map<number, Set<string>>()
 const grantedRoots = new Map<number, Set<string>>()
 
@@ -351,6 +355,72 @@ function resolveBuildCwd(root: string, workingDirectory?: string): string {
   return candidate
 }
 
+function sanitizeBuildEnv(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key, item]) => /^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(key) && typeof item === 'string' && item.length <= 4_000)
+    .slice(0, 50))
+}
+
+function convertSublimeProject(value: unknown, sourcePath: string): { roots: string[]; project: Session['project'] } {
+  const raw = value && typeof value === 'object' ? value as { folders?: unknown; build_systems?: unknown } : {}
+  const base = path.dirname(sourcePath)
+  const roots = Array.isArray(raw.folders)
+    ? raw.folders.flatMap((folder) => {
+        if (!folder || typeof folder !== 'object' || typeof (folder as { path?: unknown }).path !== 'string') return []
+        const candidate = path.resolve(base, (folder as { path: string }).path)
+        return path.isAbsolute(candidate) ? [candidate] : []
+      }).slice(0, 20)
+    : []
+  const first = roots[0] ?? base
+  const project = sanitizeSession({
+    openFiles: [], activeIndex: 0, folder: first,
+    project: {
+      exclude: Array.isArray(raw.folders)
+        ? raw.folders.flatMap((folder) => {
+            if (!folder || typeof folder !== 'object') return []
+            const source = folder as { file_exclude_patterns?: unknown; folder_exclude_patterns?: unknown }
+            const files = Array.isArray(source.file_exclude_patterns) ? source.file_exclude_patterns : []
+            const dirs = Array.isArray(source.folder_exclude_patterns) ? source.folder_exclude_patterns : []
+            return [...files, ...dirs].filter((item): item is string => typeof item === 'string').map((item) => item.includes('*') ? item : `**/${item}/**`)
+          })
+        : [],
+      buildCommand: '', keyBindings: {}, plugins: [], pluginPermissions: {}, languageTools: {}, languageServers: {},
+      buildSystems: Array.isArray(raw.build_systems)
+        ? raw.build_systems.flatMap((system) => {
+            if (!system || typeof system !== 'object') return []
+            const source = system as { name?: unknown; cmd?: unknown; shell_cmd?: unknown; working_dir?: unknown; file_regex?: unknown; env?: unknown; variants?: unknown }
+            const cmd = Array.isArray(source.cmd) && source.cmd.every((part) => typeof part === 'string') ? source.cmd as string[] : []
+            const shell = typeof source.shell_cmd === 'string' ? source.shell_cmd : ''
+            const command = cmd[0] ?? shell
+            if (!command) return []
+            return [{
+              name: typeof source.name === 'string' ? source.name : command,
+              command, args: cmd.slice(1),
+              ...(shell ? { shell: true } : {}),
+              ...(typeof source.working_dir === 'string' ? { workingDirectory: source.working_dir } : {}),
+              ...(typeof source.file_regex === 'string' ? { fileRegex: source.file_regex } : {}),
+              ...(Object.keys(sanitizeBuildEnv(source.env)).length > 0 ? { env: sanitizeBuildEnv(source.env) } : {}),
+              variants: Array.isArray(source.variants)
+                ? source.variants.flatMap((variant) => {
+                    if (!variant || typeof variant !== 'object') return []
+                    const item = variant as { name?: unknown; cmd?: unknown; shell_cmd?: unknown; working_dir?: unknown; file_regex?: unknown; env?: unknown }
+                    const variantCmd = Array.isArray(item.cmd) && item.cmd.every((part) => typeof part === 'string') ? item.cmd as string[] : []
+                    const variantShell = typeof item.shell_cmd === 'string' ? item.shell_cmd : ''
+                    const variantCommand = variantCmd[0] ?? variantShell
+                    if (!variantCommand || typeof item.name !== 'string') return []
+                    return [{ name: item.name, command: variantCommand, args: variantCmd.slice(1), ...(variantShell ? { shell: true } : {}), ...(typeof item.working_dir === 'string' ? { workingDirectory: item.working_dir } : {}), ...(typeof item.file_regex === 'string' ? { fileRegex: item.file_regex } : {}), ...(Object.keys(sanitizeBuildEnv(item.env)).length > 0 ? { env: sanitizeBuildEnv(item.env) } : {}) }]
+                  }).slice(0, 20)
+                : []
+            }]
+          })
+        : [],
+      keyBindingRules: [], marketplaceUrls: []
+    }
+  }).project
+  return { roots: [...new Set(roots)], project }
+}
+
 function asFiniteInt(value: unknown, fallback: number, min: number, max: number): number {
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.max(min, Math.min(max, Math.round(value)))
@@ -379,6 +449,7 @@ function sanitizeSettings(value: unknown): Settings {
     colorScheme: raw.colorScheme === 'light' || raw.colorScheme === 'solarized-dark' || raw.colorScheme === 'dracula'
       ? raw.colorScheme
       : 'dark',
+    spellCheck: typeof raw.spellCheck === 'boolean' ? raw.spellCheck : DEFAULT_SETTINGS.spellCheck,
     distractionFree: typeof raw.distractionFree === 'boolean' ? raw.distractionFree : DEFAULT_SETTINGS.distractionFree,
     searchHistory: Array.isArray(raw.searchHistory)
       ? raw.searchHistory.filter((item): item is string => typeof item === 'string').map((item) => item.slice(0, 2_000)).slice(0, 50)
@@ -386,6 +457,54 @@ function sanitizeSettings(value: unknown): Settings {
     replaceHistory: Array.isArray(raw.replaceHistory)
       ? raw.replaceHistory.filter((item): item is string => typeof item === 'string').map((item) => item.slice(0, 2_000)).slice(0, 50)
       : []
+  }
+}
+
+function stripJsonComments(source: string): string {
+  let output = ''
+  let quote = false
+  let escaped = false
+  let lineComment = false
+  let blockComment = false
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]
+    const next = source[index + 1]
+    if (lineComment) {
+      if (char === '\n') { lineComment = false; output += char }
+      continue
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') { blockComment = false; index += 1 }
+      continue
+    }
+    if (quote) {
+      output += char
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') quote = false
+      continue
+    }
+    if (char === '"') { quote = true; output += char }
+    else if (char === '/' && next === '/') { lineComment = true; index += 1 }
+    else if (char === '/' && next === '*') { blockComment = true; index += 1 }
+    else output += char
+  }
+  return output.replace(/,\s*([}\]])/g, '$1')
+}
+
+function convertSublimeSettings(value: unknown): Partial<Settings> {
+  if (!value || typeof value !== 'object') return {}
+  const raw = value as Record<string, unknown>
+  const sourceScheme = typeof raw.color_scheme === 'string' ? raw.color_scheme.toLowerCase() : ''
+  return {
+    ...(typeof raw.font_size === 'number' ? { fontSize: raw.font_size } : {}),
+    ...(typeof raw.tab_size === 'number' ? { tabSize: raw.tab_size } : {}),
+    ...(typeof raw.translate_tabs_to_spaces === 'boolean' ? { insertSpaces: raw.translate_tabs_to_spaces } : {}),
+    ...(typeof raw.word_wrap === 'boolean' ? { wordWrap: raw.word_wrap } : {}),
+    ...(typeof raw.draw_white_space === 'string' ? { highlightTrailingWhitespace: raw.draw_white_space === 'all' || raw.draw_white_space === 'selection' } : {}),
+    ...(Array.isArray(raw.rulers) ? { rulers: raw.rulers } : {}),
+    ...(typeof raw.spell_check === 'boolean' ? { spellCheck: raw.spell_check } : {}),
+    ...(sourceScheme.includes('solarized') ? { colorScheme: 'solarized-dark' as const } : sourceScheme.includes('dracula') ? { colorScheme: 'dracula' as const } : sourceScheme.includes('light') ? { colorScheme: 'light' as const } : {})
   }
 }
 
@@ -402,7 +521,10 @@ function sanitizeSession(value: unknown): Session {
           languageLocked: file.languageLocked === true,
           ...(typeof file.draft === 'string' && file.draft.length <= 20 * 1024 * 1024 ? { draft: file.draft } : {}),
           ...(file.encoding === 'utf8' || file.encoding === 'utf8bom' || file.encoding === 'utf16le' || file.encoding === 'utf16be' ? { encoding: file.encoding } : {}),
-          ...(file.eol === 'LF' || file.eol === 'CRLF' || file.eol === 'CR' ? { eol: file.eol } : {})
+          ...(file.eol === 'LF' || file.eol === 'CRLF' || file.eol === 'CR' ? { eol: file.eol } : {}),
+          ...(Array.isArray(file.bookmarks)
+            ? { bookmarks: file.bookmarks.filter((line): line is number => typeof line === 'number' && Number.isInteger(line) && line > 0 && line <= 10_000_000).slice(0, 10_000) }
+            : {})
         }))
     : []
   const project = raw.project && typeof raw.project === 'object' ? raw.project : EMPTY_SESSION.project!
@@ -502,7 +624,7 @@ function sanitizeSession(value: unknown): Session {
         ? project.buildSystems
             .flatMap((system) => {
               if (!system || typeof system !== 'object') return []
-              const source = system as { name?: unknown; command?: unknown; args?: unknown; workingDirectory?: unknown; fileRegex?: unknown; saveBeforeBuild?: unknown }
+              const source = system as { name?: unknown; command?: unknown; args?: unknown; workingDirectory?: unknown; fileRegex?: unknown; saveBeforeBuild?: unknown; shell?: unknown; env?: unknown }
               if (typeof source.name !== 'string' || typeof source.command !== 'string') return []
               return [{
                 name: source.name.slice(0, 100),
@@ -511,10 +633,12 @@ function sanitizeSession(value: unknown): Session {
                 ...(typeof source.workingDirectory === 'string' ? { workingDirectory: source.workingDirectory.slice(0, 500) } : {}),
                 ...(typeof source.fileRegex === 'string' ? { fileRegex: source.fileRegex.slice(0, 1_000) } : {}),
                 ...(typeof source.saveBeforeBuild === 'boolean' ? { saveBeforeBuild: source.saveBeforeBuild } : {})
+                , ...(typeof source.shell === 'boolean' ? { shell: source.shell } : {})
+                , ...(Object.keys(sanitizeBuildEnv(source.env)).length > 0 ? { env: sanitizeBuildEnv(source.env) } : {})
                 , variants: Array.isArray((source as { variants?: unknown }).variants)
                   ? (source as { variants: unknown[] }).variants.flatMap((variant) => {
                       if (!variant || typeof variant !== 'object') return []
-                      const rawVariant = variant as { name?: unknown; command?: unknown; args?: unknown; workingDirectory?: unknown; fileRegex?: unknown }
+                      const rawVariant = variant as { name?: unknown; command?: unknown; args?: unknown; workingDirectory?: unknown; fileRegex?: unknown; shell?: unknown; env?: unknown }
                       if (typeof rawVariant.name !== 'string') return []
                       return [{
                         name: rawVariant.name.slice(0, 100),
@@ -522,6 +646,8 @@ function sanitizeSession(value: unknown): Session {
                         ...(Array.isArray(rawVariant.args) ? { args: rawVariant.args.filter((arg): arg is string => typeof arg === 'string').slice(0, 50) } : {}),
                         ...(typeof rawVariant.workingDirectory === 'string' ? { workingDirectory: rawVariant.workingDirectory.slice(0, 500) } : {}),
                         ...(typeof rawVariant.fileRegex === 'string' ? { fileRegex: rawVariant.fileRegex.slice(0, 1_000) } : {})
+                        , ...(typeof rawVariant.shell === 'boolean' ? { shell: rawVariant.shell } : {})
+                        , ...(Object.keys(sanitizeBuildEnv(rawVariant.env)).length > 0 ? { env: sanitizeBuildEnv(rawVariant.env) } : {})
                       }]
                     }).slice(0, 20)
                   : []
@@ -764,6 +890,27 @@ async function indexWorkspaceSymbols(root: string): Promise<WorkspaceSymbol[]> {
   return symbols.slice(0, 20_000)
 }
 
+/** Return a bounded, deduplicated project word list for safe completion fallback. */
+async function indexWorkspaceWords(root: string): Promise<string[]> {
+  const words = new Set<string>()
+  for (const file of await listFilesRecursive(root)) {
+    if (words.size >= 20_000) break
+    try {
+      const stat = await fs.stat(file)
+      if (stat.size > MAX_SEARCH_FILE_BYTES) continue
+      const opened = await readFile(file)
+      if (opened.isBinary || opened.isTooLarge) continue
+      for (const word of opened.content.match(/[A-Za-z_$][\w$]{1,80}/g) ?? []) {
+        words.add(word)
+        if (words.size >= 20_000) break
+      }
+    } catch {
+      // A concurrent file deletion must not fail completion.
+    }
+  }
+  return [...words].sort((a, b) => a.localeCompare(b))
+}
+
 /** Load declarative local plugins. They can contribute text commands/snippets, never Node access. */
 function sanitizePlugin(value: unknown): PluginManifest | null {
   if (!value || typeof value !== 'object') return null
@@ -950,6 +1097,42 @@ async function gitDiff(root: string, relativePath: string): Promise<GitDiff> {
   return { path: relativePath, diff: stdout }
 }
 
+function parseGitHunks(relativePath: string, diff: string): GitHunk[] {
+  const lines = diff.split('\n')
+  const prefix: string[] = []
+  const hunks: GitHunk[] = []
+  let current: string[] | null = null
+  let header = ''
+  for (const line of lines) {
+    if (line.startsWith('@@ ')) {
+      if (current) hunks.push({ path: relativePath, header, patch: [...prefix, ...current].join('\n') })
+      header = line
+      current = [line]
+    } else if (current) current.push(line)
+    else prefix.push(line)
+  }
+  if (current) hunks.push({ path: relativePath, header, patch: [...prefix, ...current].join('\n') })
+  return hunks.filter((hunk) => hunk.patch.includes('@@ ')).slice(0, 200)
+}
+
+async function gitHistory(root: string, relativePath: string): Promise<GitHistoryEntry[]> {
+  if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('..')) throw new Error('Invalid Git history path.')
+  const { stdout } = await execFileAsync('git', ['-C', root, 'log', '-n', '100', '--format=%H%x00%h%x00%an%x00%aI%x00%s%x00', '--', relativePath], { maxBuffer: 2 * 1024 * 1024 })
+  const values = stdout.split('\0')
+  const entries: GitHistoryEntry[] = []
+  for (let index = 0; index + 4 < values.length; index += 5) {
+    const [id, shortId, author, date, subject] = values.slice(index, index + 5)
+    if (id && shortId) entries.push({ id, shortId, author, date, subject })
+  }
+  return entries
+}
+
+async function gitBlame(root: string, relativePath: string): Promise<string> {
+  if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('..')) throw new Error('Invalid Git blame path.')
+  const { stdout } = await execFileAsync('git', ['-C', root, 'blame', '--date=short', '--', relativePath], { maxBuffer: 2 * 1024 * 1024 })
+  return stdout
+}
+
 function validatedGitPaths(paths: unknown): string[] {
   if (!Array.isArray(paths)) return []
   return paths
@@ -968,6 +1151,30 @@ async function gitAction(request: GitActionRequest): Promise<GitStatus> {
   } else if (request.action === 'discard') {
     if (paths.length === 0) throw new Error('Choose at least one file to discard.')
     await execFileAsync('git', ['-C', request.root, 'restore', '--worktree', '--', ...paths])
+  } else if (request.action === 'stage-hunk') {
+    if (paths.length !== 1 || typeof request.patch !== 'string' || request.patch.length === 0 || request.patch.length > 2 * 1024 * 1024) throw new Error('Choose one valid hunk to stage.')
+    const current = await gitDiff(request.root, paths[0])
+    if (!parseGitHunks(paths[0], current.diff).some((hunk) => hunk.patch === request.patch)) throw new Error('The selected hunk is stale or does not belong to this file.')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('git', ['-C', request.root, 'apply', '--cached', '-'], { stdio: ['pipe', 'ignore', 'pipe'] })
+      let stderr = ''
+      child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
+      child.on('error', reject)
+      child.on('close', (code) => code === 0 ? resolve() : reject(new Error(stderr.trim() || 'Git could not stage the selected hunk.')))
+      child.stdin.end(request.patch)
+    })
+  } else if (request.action === 'discard-hunk') {
+    if (paths.length !== 1 || typeof request.patch !== 'string' || request.patch.length === 0 || request.patch.length > 2 * 1024 * 1024) throw new Error('Choose one valid hunk to discard.')
+    const current = await gitDiff(request.root, paths[0])
+    if (!parseGitHunks(paths[0], current.diff).some((hunk) => hunk.patch === request.patch)) throw new Error('The selected hunk is stale or does not belong to this file.')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('git', ['-C', request.root, 'apply', '--reverse', '-'], { stdio: ['pipe', 'ignore', 'pipe'] })
+      let stderr = ''
+      child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
+      child.on('error', reject)
+      child.on('close', (code) => code === 0 ? resolve() : reject(new Error(stderr.trim() || 'Git could not discard the selected hunk.')))
+      child.stdin.end(request.patch)
+    })
   } else if (request.action === 'commit') {
     if (!request.message?.trim()) throw new Error('Commit message is required.')
     await execFileAsync('git', ['-C', request.root, 'commit', '-m', request.message.trim()])
@@ -1468,6 +1675,20 @@ export function registerFileHandlers(): void {
     assertTrustedSender(event)
     await writeJson(userDataFile('settings.json'), sanitizeSettings(settings))
   })
+  ipcMain.handle(IPC.settingsImportSublime, async (event): Promise<Settings | null> => {
+    assertTrustedSender(event)
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, {
+      title: 'Import Sublime Settings',
+      properties: ['openFile'],
+      filters: [{ name: 'Sublime Settings', extensions: ['sublime-settings'] }]
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    let raw: unknown
+    try { raw = JSON.parse(stripJsonComments(await fs.readFile(result.filePaths[0], 'utf8'))) }
+    catch { throw new Error('The selected .sublime-settings file is not valid JSON-with-comments.') }
+    return sanitizeSettings({ ...await readSettings(), ...convertSublimeSettings(raw) })
+  })
   ipcMain.handle(IPC.sessionRead, async (event): Promise<Session> => {
     assertTrustedSender(event)
     const session = sanitizeSession(await readJson<unknown>(windowSessionFile(event.sender.id), EMPTY_SESSION))
@@ -1558,6 +1779,12 @@ export function registerFileHandlers(): void {
     assertGrantedRoot(event, root)
     return indexWorkspaceSymbols(root)
   })
+  ipcMain.handle(IPC.workspaceWords, async (event, root: unknown): Promise<string[]> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    return indexWorkspaceWords(root)
+  })
 
   ipcMain.handle(IPC.fileCreate, async (event, target: unknown, isDirectory = false): Promise<DirEntry> => {
     assertTrustedSender(event)
@@ -1634,7 +1861,8 @@ export function registerFileHandlers(): void {
     const senderId = event.sender.id
     builds.get(senderId)?.kill()
     const cwd = resolveBuildCwd(request.root, request.workingDirectory)
-    const child = spawn(request.command, args, { cwd, shell: true, env: process.env })
+    const env = { ...process.env, ...sanitizeBuildEnv(request.env) }
+    const child = spawn(request.command, args, { cwd, shell: request.shell === true, env })
     builds.set(senderId, child)
     const send = (payload: BuildOutput): void => {
       if (!event.sender.isDestroyed()) event.sender.send(IPC.buildOutput, payload)
@@ -1670,6 +1898,46 @@ export function registerFileHandlers(): void {
     assertGrantedRoot(event, root)
     const clean = sanitizeSession({ openFiles: [], activeIndex: 0, folder: root, project }).project
     await writeJson(path.join(root, '.lumen-project.json'), clean)
+  })
+
+  ipcMain.handle(IPC.projectImportSublime, async (event): Promise<SublimeProjectImport | null> => {
+    assertTrustedSender(event)
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, {
+      title: 'Import Sublime Project',
+      properties: ['openFile'],
+      filters: [{ name: 'Sublime Project', extensions: ['sublime-project'] }]
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    const sourcePath = result.filePaths[0]
+    let parsed: unknown
+    try { parsed = JSON.parse(await fs.readFile(sourcePath, 'utf8')) } catch { throw new Error('The selected .sublime-project file is not valid JSON.') }
+    const converted = convertSublimeProject(parsed, sourcePath)
+    if (converted.roots.length === 0) throw new Error('No folders were declared in the selected .sublime-project.')
+    const token = `${event.sender.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    pendingSublimeImports.set(token, { senderId: event.sender.id, expiresAt: Date.now() + 60_000, sourcePath, roots: converted.roots, project: converted.project })
+    return { token, sourcePath, roots: converted.roots, project: converted.project! }
+  })
+
+  ipcMain.handle(IPC.projectImportSublimeAccept, async (event, token: unknown): Promise<OpenedFolder[]> => {
+    assertTrustedSender(event)
+    if (typeof token !== 'string') throw new Error('Invalid Sublime project import token.')
+    const pending = pendingSublimeImports.get(token)
+    pendingSublimeImports.delete(token)
+    if (!pending || pending.senderId !== event.sender.id || pending.expiresAt < Date.now()) throw new Error('The Sublime project import preview has expired.')
+    const folders: OpenedFolder[] = []
+    for (const root of pending.roots) {
+      try {
+        const stat = await fs.stat(root)
+        if (!stat.isDirectory()) continue
+        grantRoot(event.sender.id, root)
+        folders.push({ root, entries: await readDirectory(root) })
+      } catch {
+        // Missing roots are skipped rather than becoming authorised paths.
+      }
+    }
+    if (folders.length === 0) throw new Error('No existing folders were found in the selected .sublime-project.')
+    return folders
   })
 
   ipcMain.handle(IPC.pluginList, async (event, root: unknown): Promise<PluginManifest[]> => {
@@ -1776,10 +2044,35 @@ export function registerFileHandlers(): void {
     return gitDiff(root, relativePath)
   })
 
+  ipcMain.handle(IPC.gitHunks, async (event, root: unknown, relativePath: unknown): Promise<GitHunk[]> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    if (typeof relativePath !== 'string') throw new Error('Invalid Git diff path.')
+    const diff = await gitDiff(root, relativePath)
+    return parseGitHunks(relativePath, diff.diff)
+  })
+
+  ipcMain.handle(IPC.gitHistory, async (event, root: unknown, relativePath: unknown): Promise<GitHistoryEntry[]> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    if (typeof relativePath !== 'string') throw new Error('Invalid Git history path.')
+    return gitHistory(root, relativePath)
+  })
+
+  ipcMain.handle(IPC.gitBlame, async (event, root: unknown, relativePath: unknown): Promise<string> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    if (typeof relativePath !== 'string') throw new Error('Invalid Git blame path.')
+    return gitBlame(root, relativePath)
+  })
+
   ipcMain.handle(IPC.gitAction, async (event, request: GitActionRequest): Promise<GitStatus> => {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
-    if (!request || !['stage', 'unstage', 'discard', 'commit', 'checkout-branch', 'create-branch'].includes(request.action)) throw new Error('Invalid Git action.')
+    if (!request || !['stage', 'unstage', 'discard', 'stage-hunk', 'discard-hunk', 'commit', 'checkout-branch', 'create-branch'].includes(request.action)) throw new Error('Invalid Git action.')
     return gitAction(request)
   })
 

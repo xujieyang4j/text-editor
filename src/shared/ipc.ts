@@ -16,6 +16,7 @@ export const IPC = {
   openInBrowser: 'shell:open-in-browser',
   settingsRead: 'settings:read',
   settingsWrite: 'settings:write',
+  settingsImportSublime: 'settings:import-sublime',
   sessionRead: 'session:read',
   sessionWrite: 'session:write',
   sessionFlushed: 'session:flushed',
@@ -30,6 +31,7 @@ export const IPC = {
   workspaceReplacePreview: 'workspace:replace-preview',
   workspaceReplaceUndo: 'workspace:replace-undo',
   workspaceSymbols: 'workspace:symbols',
+  workspaceWords: 'workspace:words',
   fileCreate: 'file:create',
   fileRename: 'file:rename',
   fileDelete: 'file:delete',
@@ -40,6 +42,8 @@ export const IPC = {
   buildOutput: 'build:output',
   projectRead: 'project:read',
   projectWrite: 'project:write',
+  projectImportSublime: 'project:import-sublime',
+  projectImportSublimeAccept: 'project:import-sublime-accept',
   pluginList: 'plugin:list',
   pluginInstall: 'plugin:install',
   pluginRemove: 'plugin:remove',
@@ -56,6 +60,9 @@ export const IPC = {
   marketplaceInstall: 'marketplace:install',
   gitStatus: 'git:status',
   gitDiff: 'git:diff',
+  gitHunks: 'git:hunks',
+  gitHistory: 'git:history',
+  gitBlame: 'git:blame',
   gitAction: 'git:action',
   gitConflicts: 'git:conflicts',
   updateCheck: 'update:check',
@@ -177,6 +184,10 @@ export interface BuildRequest {
   workingDirectory?: string
   /** Optional regex with file/line/column/message capture groups. */
   fileRegex?: string
+  /** Build-system commands run directly; free-form command entries may opt into a shell. */
+  shell?: boolean
+  /** Explicit, bounded environment additions for a configured build. */
+  env?: Record<string, string>
 }
 
 export interface BuildOutput {
@@ -193,6 +204,8 @@ export interface BuildSystem {
   workingDirectory?: string
   fileRegex?: string
   saveBeforeBuild?: boolean
+  shell?: boolean
+  env?: Record<string, string>
   variants?: BuildVariant[]
 }
 
@@ -202,6 +215,8 @@ export interface BuildVariant {
   args?: string[]
   workingDirectory?: string
   fileRegex?: string
+  env?: Record<string, string>
+  shell?: boolean
 }
 
 export interface BuildProblem {
@@ -229,7 +244,21 @@ export interface GitDiff {
   diff: string
 }
 
-export type GitAction = 'stage' | 'unstage' | 'discard' | 'commit' | 'checkout-branch' | 'create-branch'
+export interface GitHunk {
+  path: string
+  header: string
+  patch: string
+}
+
+export interface GitHistoryEntry {
+  id: string
+  shortId: string
+  author: string
+  date: string
+  subject: string
+}
+
+export type GitAction = 'stage' | 'unstage' | 'discard' | 'stage-hunk' | 'discard-hunk' | 'commit' | 'checkout-branch' | 'create-branch'
 
 export interface GitActionRequest {
   root: string
@@ -237,6 +266,7 @@ export interface GitActionRequest {
   paths?: string[]
   message?: string
   branch?: string
+  patch?: string
 }
 
 export interface GitConflict {
@@ -352,6 +382,8 @@ export interface Settings {
   /** Optional project-specific command used by Build. */
   buildCommand: string
   colorScheme: ColorScheme
+  /** Uses Chromium's native spell checker for prose-oriented files. */
+  spellCheck: boolean
   /** Hide surrounding chrome and center the editor, like Sublime's Distraction Free Mode. */
   distractionFree: boolean
   searchHistory: string[]
@@ -372,6 +404,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxFileSizeMB: 20,
   buildCommand: '',
   colorScheme: 'dark',
+  spellCheck: false,
   distractionFree: false,
   searchHistory: [],
   replaceHistory: []
@@ -400,6 +433,8 @@ export interface SessionFile {
   draft?: string
   encoding?: TextEncoding
   eol?: LineEnding
+  /** 1-based bookmark lines restored with the session. */
+  bookmarks?: number[]
 }
 
 /** Editor state persisted across restarts (open tabs + workspace). */
@@ -439,6 +474,15 @@ export interface ProjectSettings {
   /** Legacy direct map remains supported for simple project key overrides. */
   keyBindingRules: KeyBindingRule[]
   marketplaceUrls: string[]
+}
+
+/** Result of a user-confirmed `.sublime-project` import. */
+export interface SublimeProjectImport {
+  /** Opaque, short-lived main-process token. Roots are not authorised until accepted. */
+  token: string
+  sourcePath: string
+  roots: string[]
+  project: ProjectSettings
 }
 
 export interface KeyBindingRule {
@@ -576,7 +620,11 @@ export type MenuEvent =
   | 'open-folder'
   | 'save'
   | 'save-as'
+  | 'save-all'
   | 'close-tab'
+  | 'close-other-tabs'
+  | 'close-tabs-to-right'
+  | 'close-all-tabs'
   | 'reopen-tab'
   | 'next-tab'
   | 'prev-tab'
@@ -632,6 +680,8 @@ export type MenuEvent =
   | 'new-window'
   | 'add-folder-to-project'
   | 'open-recent-project'
+  | 'import-sublime-project'
+  | 'import-sublime-settings'
   | 'lsp-hover'
   | 'lsp-definition'
   | 'lsp-references'

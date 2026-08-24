@@ -23,7 +23,11 @@ export const COMMANDS: Command[] = [
   { id: 'open-folder', title: 'File: Open Folder…', hint: 'Ctrl/Cmd+Shift+O' },
   { id: 'save', title: 'File: Save', hint: 'Ctrl/Cmd+S' },
   { id: 'save-as', title: 'File: Save As…', hint: 'Ctrl/Cmd+Shift+S' },
+  { id: 'save-all', title: 'File: Save All', hint: 'Ctrl/Cmd+Alt+S' },
   { id: 'close-tab', title: 'File: Close Tab', hint: 'Ctrl/Cmd+W' },
+  { id: 'close-other-tabs', title: 'File: Close Other Tabs' },
+  { id: 'close-tabs-to-right', title: 'File: Close Tabs to the Right' },
+  { id: 'close-all-tabs', title: 'File: Close All Tabs' },
   { id: 'reopen-tab', title: 'File: Reopen Closed Tab', hint: 'Ctrl/Cmd+Shift+T' },
 
   { id: 'goto-anything', title: 'Goto: Goto Anything…', hint: 'Ctrl/Cmd+P' },
@@ -40,8 +44,8 @@ export const COMMANDS: Command[] = [
   { id: 'undo-replace-in-files', title: 'Find: Undo Last Replace in Files' },
   { id: 'find-results-next', title: 'Find: Next Result', hint: 'F4' },
   { id: 'find-results-prev', title: 'Find: Previous Result', hint: 'Shift+F4' },
-  { id: 'next-change', title: 'Goto: Next Change', hint: 'Ctrl/Cmd+Alt+Down' },
-  { id: 'prev-change', title: 'Goto: Previous Change', hint: 'Ctrl/Cmd+Alt+Up' },
+  { id: 'next-change', title: 'Goto: Next Change', hint: 'Ctrl/Cmd+Alt+Shift+Down' },
+  { id: 'prev-change', title: 'Goto: Previous Change', hint: 'Ctrl/Cmd+Alt+Shift+Up' },
   { id: 'revert-current-change', title: 'Edit: Revert Current Change' },
 
   { id: 'toggle-comment', title: 'Edit: Toggle Comment', hint: 'Ctrl/Cmd+/' },
@@ -49,7 +53,7 @@ export const COMMANDS: Command[] = [
   { id: 'add-cursor-above', title: 'Selection: Add Cursor Above', hint: 'Ctrl/Cmd+Alt+Up' },
   { id: 'add-cursor-below', title: 'Selection: Add Cursor Below', hint: 'Ctrl/Cmd+Alt+Down' },
   { id: 'select-next-occurrence', title: 'Selection: Add Next Occurrence', hint: 'Ctrl/Cmd+D' },
-  { id: 'select-all-occurrences', title: 'Selection: Select All Occurrences', hint: 'Ctrl/Cmd+Shift+L' },
+  { id: 'select-all-occurrences', title: 'Selection: Select All Occurrences', hint: 'Alt+F3' },
   { id: 'move-line-up', title: 'Edit: Move Line Up', hint: 'Alt+Up' },
   { id: 'move-line-down', title: 'Edit: Move Line Down', hint: 'Alt+Down' },
   { id: 'copy-line-up', title: 'Edit: Copy Line Up', hint: 'Shift+Alt+Up' },
@@ -91,7 +95,7 @@ export const COMMANDS: Command[] = [
   { id: 'to-lower-case', title: 'Edit: Lower Case' },
   { id: 'to-title-case', title: 'Edit: Title Case' },
   { id: 'join-lines', title: 'Edit: Join Lines' },
-  { id: 'split-selection-lines', title: 'Selection: Split Selection into Lines' },
+  { id: 'split-selection-lines', title: 'Selection: Split Selection into Lines', hint: 'Ctrl/Cmd+Shift+L' },
   { id: 'indent-selection', title: 'Edit: Indent Selection' },
   { id: 'outdent-selection', title: 'Edit: Outdent Selection' },
   { id: 'toggle-problems', title: 'View: Toggle Build Output' },
@@ -119,6 +123,8 @@ export const COMMANDS: Command[] = [
   { id: 'new-window', title: 'File: New Window' }
   , { id: 'add-folder-to-project', title: 'Project: Add Folder to Project…' }
   , { id: 'open-recent-project', title: 'Project: Open Recent Project…' }
+  , { id: 'import-sublime-project', title: 'Project: Import Sublime Project…' }
+  , { id: 'import-sublime-settings', title: 'Preferences: Import Sublime Settings…' }
   , { id: 'lsp-hover', title: 'LSP: Show Hover', hint: 'Ctrl/Cmd+Shift+Space' }
   , { id: 'lsp-definition', title: 'LSP: Go to Definition', hint: 'F12' }
   , { id: 'lsp-references', title: 'LSP: Find References', hint: 'Shift+F12' }

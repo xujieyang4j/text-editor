@@ -52,8 +52,7 @@ import {
   getSearchQuery,
   setSearchQuery,
   SearchQuery,
-  selectNextOccurrence,
-  selectMatches
+  selectNextOccurrence
 } from '@codemirror/search'
 import {
   autocompletion,
@@ -92,6 +91,7 @@ const indentGuideConf = new Compartment()
 const trailingWsConf = new Compartment()
 const rulerConf = new Compartment()
 const fontThemeConf = new Compartment()
+const spellCheckConf = new Compartment()
 
 const setIncrementalDiff = StateEffect.define<IncrementalChange[]>()
 
@@ -263,6 +263,7 @@ export class Editor {
         trailingWsConf.of(s.highlightTrailingWhitespace ? highlightTrailingWhitespace() : []),
         rulerConf.of(rulers(s.rulers)),
         fontThemeConf.of(fontTheme(s.fontSize)),
+        spellCheckConf.of(EditorView.contentAttributes.of({ spellcheck: s.spellCheck ? 'true' : 'false' })),
         incrementalDiffMarkers,
         lintGutter()
       ]
@@ -343,7 +344,8 @@ export class Editor {
           settings.highlightTrailingWhitespace ? highlightTrailingWhitespace() : []
         ),
         rulerConf.reconfigure(rulers(settings.rulers)),
-        fontThemeConf.reconfigure(fontTheme(settings.fontSize))
+        fontThemeConf.reconfigure(fontTheme(settings.fontSize)),
+        spellCheckConf.reconfigure(EditorView.contentAttributes.of({ spellcheck: settings.spellCheck ? 'true' : 'false' }))
       ]
     })
   }
@@ -435,7 +437,28 @@ export class Editor {
     selectNextOccurrence(this.view)
   }
   selectAllOccurrences(): void {
-    selectMatches(this.view)
+    const state = this.view.state
+    const main = state.selection.main
+    const before = state.sliceDoc(Math.max(0, main.head - 100), main.head)
+    const after = state.sliceDoc(main.head, Math.min(state.doc.length, main.head + 100))
+    const selected = main.empty
+      ? ((/[A-Za-z_$][\w$]*$/.exec(before)?.[0] ?? '') + (/^[\w$]*/.exec(after)?.[0] ?? ''))
+      : state.sliceDoc(main.from, main.to)
+    if (!selected) return
+    const ranges: SelectionRange[] = []
+    let index = 0
+    const text = state.doc.toString()
+    while (index <= text.length - selected.length && ranges.length < 10_000) {
+      const found = text.indexOf(selected, index)
+      if (found < 0) break
+      if (main.empty && (/[$\w]/.test(text[found - 1] ?? '') || /[$\w]/.test(text[found + selected.length] ?? ''))) {
+        index = found + 1
+        continue
+      }
+      ranges.push(EditorSelection.range(found, found + selected.length))
+      index = found + Math.max(1, selected.length)
+    }
+    if (ranges.length > 0) this.view.dispatch({ selection: EditorSelection.create(ranges) })
   }
 
   /** Duplicate the current selection (or line if empty) in place. */

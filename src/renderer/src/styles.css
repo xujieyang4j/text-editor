@@ -187,6 +187,15 @@ body.distraction-free .layout-root {
   white-space: pre-wrap;
 }
 
+.git-hunk-picker {
+  width: calc(100% - 16px);
+  margin: 4px 8px;
+  min-height: 26px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
 .tree-list {
   list-style: none;
   margin: 0;
