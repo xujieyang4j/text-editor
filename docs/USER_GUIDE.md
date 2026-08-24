@@ -114,6 +114,9 @@ npm run dist:linux   # Linux: AppImage + .deb
 In the file tree, click a folder to expand/collapse it (loaded on demand), and click a file to
 open it. Opening a file that's already open just focuses its tab.
 
+Drag a tab within its editor group to reorder it. Ctrl/Cmd-selected tabs move together as one block,
+and the order is restored in the next session.
+
 Right-click a file/tree entry or an open tab to copy its full path or project-relative path. The
 copy action writes only an already authorised path and does not grant clipboard-read access.
 

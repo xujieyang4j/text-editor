@@ -164,6 +164,22 @@ function createWindow(sessionId = newSessionId()): void {
         if (!result.terminalPanelMounted || !result.terminalStartAvailableInitially || !result.outlinePanelMounted) {
           throw new Error(`Terminal or outline panel did not mount with its expected initial state: ${JSON.stringify(result)}`)
         }
+        win.webContents.send(IPC.menuEvent, 'new-file' as MenuEvent)
+        await new Promise<void>((resolve) => setTimeout(resolve, 80))
+        const tabDragResult = await win.webContents.executeJavaScript(`(() => {
+          const tabs = [...document.querySelectorAll('#tab-bar > .tab')]
+          if (tabs.length < 2 || !tabs.every((tab) => tab.draggable)) return false
+          const before = tabs.map((tab) => tab.querySelector('.tab-label')?.textContent ?? '')
+          const source = tabs[1]
+          const target = tabs[0]
+          const transfer = new DataTransfer()
+          source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: transfer }))
+          target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: -1, dataTransfer: transfer }))
+          target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: -1, dataTransfer: transfer }))
+          const after = [...document.querySelectorAll('#tab-bar > .tab')].map((tab) => tab.querySelector('.tab-label')?.textContent ?? '')
+          return after[0] === before[1] && after[1] === before[0]
+        })()`, true)
+        if (!tabDragResult) throw new Error('Tab drag-and-drop did not reorder the tab bar')
         // The default profile has outline hidden; this explicit event verifies
         // its menu path without altering normal user settings (smoke userData
         // is isolated above).

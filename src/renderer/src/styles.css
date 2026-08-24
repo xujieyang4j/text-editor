@@ -450,6 +450,18 @@ body.distraction-free .layout-root {
   color: var(--text);
 }
 
+.tab.dragging {
+  opacity: 0.45;
+}
+
+.tab.tab-drop-before {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.tab.tab-drop-after {
+  box-shadow: inset -3px 0 0 var(--accent);
+}
+
 .tab-label {
   overflow: hidden;
   text-overflow: ellipsis;

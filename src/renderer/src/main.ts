@@ -159,6 +159,7 @@ class App {
   private selectedTabIds = new Set<string>()
   private sidebarVisibleBeforeDistractionFree = false
   private dragDepth = 0
+  private draggingTab: { groupId: number; docId: string } | null = null
 
   // Cached DOM references.
   private primaryTabBar = document.getElementById('tab-bar')!
@@ -347,6 +348,7 @@ class App {
     }]
     this.primaryGroupRoot.classList.add('active')
     this.primaryGroupRoot.addEventListener('mousedown', () => this.focusGroup(0))
+    this.bindTabBarDragDrop(this.groups[0])
 
     this.preview = new MarkdownPreview(this.primaryEditorArea)
     this.jsonView = new JsonView({
@@ -1072,7 +1074,23 @@ class App {
       this.settings
     )
     root.addEventListener('mousedown', () => this.focusGroup(id))
+    this.bindTabBarDragDrop(group)
     return group
+  }
+
+  /** Bind each group's background drop target once; tab rows are rebuilt often. */
+  private bindTabBarDragDrop(group: EditorGroup): void {
+    group.tabBar.addEventListener('dragover', (event) => {
+      if (!this.draggingTab || this.draggingTab.groupId !== group.id) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    })
+    group.tabBar.addEventListener('drop', (event) => {
+      const dragging = this.draggingTab
+      if (!dragging || dragging.groupId !== group.id || (event.target as HTMLElement).closest('.tab')) return
+      event.preventDefault()
+      this.reorderTabs(group.id, dragging.docId, null, false)
+    })
   }
 
   private focusGroup(index: number): void {
@@ -3872,6 +3890,8 @@ class App {
         if (!doc) continue
         const tab = document.createElement('div')
         tab.className = 'tab' + (doc.id === group.activeId ? ' active' : '') + (this.selectedTabIds.has(doc.id) ? ' selected' : '')
+        tab.draggable = true
+        tab.dataset.docId = doc.id
 
         const dot = document.createElement('span')
         dot.className = 'tab-dirty'
@@ -3905,9 +3925,60 @@ class App {
           event.preventDefault()
           this.openTabContextMenu(doc, group.id, event.clientX, event.clientY)
         })
+        tab.addEventListener('dragstart', (event) => {
+          this.draggingTab = { groupId: group.id, docId: doc.id }
+          tab.classList.add('dragging')
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move'
+            event.dataTransfer.setData('text/plain', `lumen-tab:${doc.id}`)
+          }
+        })
+        tab.addEventListener('dragend', () => {
+          this.draggingTab = null
+          for (const target of group.tabBar.querySelectorAll('.tab-drop-before, .tab-drop-after, .dragging')) {
+            target.classList.remove('tab-drop-before', 'tab-drop-after', 'dragging')
+          }
+        })
+        tab.addEventListener('dragover', (event) => {
+          const dragging = this.draggingTab
+          if (!dragging || dragging.groupId !== group.id || dragging.docId === doc.id || (this.selectedTabIds.has(dragging.docId) && this.selectedTabIds.has(doc.id))) return
+          event.preventDefault()
+          if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+          const rect = tab.getBoundingClientRect()
+          const before = event.clientX < rect.left + rect.width / 2
+          tab.classList.toggle('tab-drop-before', before)
+          tab.classList.toggle('tab-drop-after', !before)
+        })
+        tab.addEventListener('dragleave', () => tab.classList.remove('tab-drop-before', 'tab-drop-after'))
+        tab.addEventListener('drop', (event) => {
+          const dragging = this.draggingTab
+          if (!dragging || dragging.groupId !== group.id || dragging.docId === doc.id || (this.selectedTabIds.has(dragging.docId) && this.selectedTabIds.has(doc.id))) return
+          event.preventDefault()
+          const rect = tab.getBoundingClientRect()
+          this.reorderTabs(group.id, dragging.docId, doc.id, event.clientX < rect.left + rect.width / 2)
+        })
         group.tabBar.appendChild(tab)
       }
     }
+  }
+
+  /** Reorder the dragged tab (or its selected set) within one editor group. */
+  private reorderTabs(groupId: number, draggedId: string, targetId: string | null, before: boolean): void {
+    const group = this.groups[groupId]
+    if (!group || !group.docIds.includes(draggedId)) return
+    const moving = this.selectedTabIds.has(draggedId)
+      ? group.docIds.filter((id) => this.selectedTabIds.has(id))
+      : [draggedId]
+    if (targetId && moving.includes(targetId)) return
+    const remaining = group.docIds.filter((id) => !moving.includes(id))
+    let index = targetId ? remaining.indexOf(targetId) : remaining.length
+    if (index < 0) index = remaining.length
+    if (targetId && !before) index += 1
+    group.docIds = [...remaining.slice(0, index), ...moving, ...remaining.slice(index)]
+    this.selectedTabIds = new Set(moving)
+    this.draggingTab = null
+    this.renderTabs()
+    this.scheduleSessionSave()
   }
 
   private openTabContextMenu(doc: Doc, groupId: number, x: number, y: number): void {
