@@ -214,6 +214,7 @@ class App {
       onMove: (path) => { void this.movePath(path) },
       onDelete: (path) => { void this.deletePath(path) },
       onReveal: (path) => { void window.editor.revealInFolder(path).catch((error: unknown) => this.showError('Could not reveal the item.', error)) },
+      onCopyPath: (path, relative) => { void this.copyPath(path, relative) },
       onError: (message, error) => this.showError(message, error),
       isExcluded: (path, isDirectory) => this.isProjectExcluded(path, isDirectory)
     })
@@ -562,6 +563,12 @@ class App {
         break
       case 'open-folder':
         void this.openFolder()
+        break
+      case 'copy-file-path':
+        void this.copyActivePath(false)
+        break
+      case 'copy-relative-file-path':
+        void this.copyActivePath(true)
         break
       case 'save':
         void this.save(false)
@@ -1825,6 +1832,35 @@ class App {
       this.openLoadedFile(file)
     } catch (error) {
       this.showError(`Could not open “${baseName(path)}”.`, error)
+    }
+  }
+
+  /** Copy only an authorised path through main; renderer never receives clipboard read access. */
+  private async copyActivePath(relative: boolean): Promise<void> {
+    const path = this.active?.path
+    if (!path) {
+      this.showError(this.settings.locale === 'zh-CN' ? '当前标签没有已保存的文件路径。' : 'The active tab has no saved file path.')
+      return
+    }
+    await this.copyPath(path, relative)
+  }
+
+  private async copyPath(path: string, relative: boolean): Promise<void> {
+    const root = this.workspaceRootForPath(path)
+    if (relative && !root) {
+      this.showError(this.settings.locale === 'zh-CN' ? '该文件不在当前项目中，无法复制相对路径。' : 'This file is outside the current project, so it has no relative path.')
+      return
+    }
+    const value = relative && root
+      ? path.slice(root.length).replace(/^[/\\]+/, '').replaceAll('\\', '/') || baseName(path)
+      : path
+    try {
+      await window.editor.copyPath(path, relative ? root ?? undefined : undefined)
+      this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+        ? `已复制${relative ? '相对路径' : '路径'}：${value}`
+        : `Copied ${relative ? 'relative path' : 'path'}: ${value}`
+    } catch (error) {
+      this.showError(this.settings.locale === 'zh-CN' ? '无法复制文件路径。' : 'The file path could not be copied.', error)
     }
   }
 
@@ -3840,9 +3876,38 @@ class App {
           this.selectedTabIds.clear()
           void this.activate(doc.id, group.id)
         })
+        tab.addEventListener('contextmenu', (event) => {
+          event.preventDefault()
+          this.openTabContextMenu(doc, group.id, event.clientX, event.clientY)
+        })
         group.tabBar.appendChild(tab)
       }
     }
+  }
+
+  private openTabContextMenu(doc: Doc, groupId: number, x: number, y: number): void {
+    document.querySelector('.tree-context-menu')?.remove()
+    const menu = document.createElement('div')
+    menu.className = 'tree-context-menu'
+    menu.style.left = `${x}px`
+    menu.style.top = `${y}px`
+    const add = (label: string, run: () => void): void => {
+      const button = document.createElement('button')
+      button.textContent = label
+      button.addEventListener('click', () => { menu.remove(); run() })
+      menu.appendChild(button)
+    }
+    if (doc.path) {
+      add(this.settings.locale === 'zh-CN' ? '复制路径' : 'Copy Path', () => { void this.copyPath(doc.path!, false) })
+      add(this.settings.locale === 'zh-CN' ? '复制相对路径' : 'Copy Relative Path', () => { void this.copyPath(doc.path!, true) })
+    }
+    add(this.settings.locale === 'zh-CN' ? '关闭标签页' : 'Close Tab', () => this.closeDocFromGroup(doc.id, groupId))
+    document.body.appendChild(menu)
+    const dismiss = (event: MouseEvent): void => {
+      if (!menu.contains(event.target as Node)) menu.remove()
+      document.removeEventListener('mousedown', dismiss)
+    }
+    window.setTimeout(() => document.addEventListener('mousedown', dismiss), 0)
   }
 
   /** Refresh all status-bar fields for the active document. */

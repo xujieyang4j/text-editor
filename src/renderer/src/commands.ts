@@ -23,6 +23,8 @@ export const COMMANDS: Command[] = [
   { id: 'new-file', title: 'File: New File', hint: 'Ctrl/Cmd+N' },
   { id: 'open-file', title: 'File: Open File…', hint: 'Ctrl/Cmd+O' },
   { id: 'open-folder', title: 'File: Open Folder…', hint: 'Ctrl/Cmd+Shift+O' },
+  { id: 'copy-file-path', title: 'File: Copy File Path' },
+  { id: 'copy-relative-file-path', title: 'File: Copy Relative File Path' },
   { id: 'open-recent-file', title: 'File: Open Recent File…' },
   { id: 'save', title: 'File: Save', hint: 'Ctrl/Cmd+S' },
   { id: 'save-as', title: 'File: Save As…', hint: 'Ctrl/Cmd+Shift+S' },

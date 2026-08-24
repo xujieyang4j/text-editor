@@ -82,6 +82,9 @@ const api = {
   releaseWorkspace: (root: string, retainFiles: string[]): Promise<void> =>
     ipcRenderer.invoke(IPC.workspaceRelease, root, retainFiles),
 
+  /** Copy an authorised full/relative path; clipboard reads stay unavailable. */
+  copyPath: (path: string, relativeRoot?: string): Promise<void> => ipcRenderer.invoke(IPC.clipboardWritePath, path, relativeRoot),
+
   /** Preview current HTML in the system browser without forcing a save. */
   openInBrowser: (request: BrowserOpenRequest): Promise<boolean> =>
     ipcRenderer.invoke(IPC.openInBrowser, request),

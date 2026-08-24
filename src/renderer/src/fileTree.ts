@@ -10,6 +10,7 @@ export interface FileTreeHandlers {
   onMove: (path: string) => void
   onDelete: (path: string) => void
   onReveal: (path: string) => void
+  onCopyPath: (path: string, relative: boolean) => void
   onError: (message: string, error: unknown) => void
   isExcluded?: (path: string, isDirectory: boolean) => boolean
 }
@@ -167,6 +168,8 @@ export class FileTree {
     action(this.locale === 'zh-CN' ? '移动到…' : 'Move To…', () => this.handlers.onMove(entry.path))
     action(this.locale === 'zh-CN' ? '移到废纸篓' : 'Move to Trash', () => this.handlers.onDelete(entry.path))
     action(this.locale === 'zh-CN' ? '在文件管理器中显示' : 'Reveal in Folder', () => this.handlers.onReveal(entry.path))
+    action(this.locale === 'zh-CN' ? '复制路径' : 'Copy Path', () => this.handlers.onCopyPath(entry.path, false))
+    action(this.locale === 'zh-CN' ? '复制相对路径' : 'Copy Relative Path', () => this.handlers.onCopyPath(entry.path, true))
     document.body.appendChild(menu)
 
     const dismiss = (event: MouseEvent): void => {

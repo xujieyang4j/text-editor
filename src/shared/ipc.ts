@@ -15,6 +15,7 @@ export const IPC = {
   dirRead: 'dir:read',
   dirListFiles: 'dir:list-files',
   workspaceRelease: 'workspace:release',
+  clipboardWritePath: 'clipboard:write-path',
   openInBrowser: 'shell:open-in-browser',
   settingsRead: 'settings:read',
   settingsWrite: 'settings:write',
@@ -708,6 +709,8 @@ export type MenuEvent =
   | 'set-ui-language-zh'
   | 'set-ui-language-en'
   | 'open-settings'
+  | 'copy-file-path'
+  | 'copy-relative-file-path'
   | 'command-palette'
   | 'goto-anything'
   | 'goto-symbol'

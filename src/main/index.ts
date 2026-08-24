@@ -186,6 +186,16 @@ function createWindow(sessionId = newSessionId()): void {
           return getComputedStyle(editor).fontSize === '17px'
         })()`, true)
         if (!settingsResult) throw new Error('Settings panel did not apply a font-size change')
+        const copiedPath = await win.webContents.executeJavaScript(`(async () => {
+          try {
+            await window.editor.copyPath(${JSON.stringify(path.join(process.cwd(), 'package.json'))})
+            await window.editor.copyPath(${JSON.stringify(path.join(process.cwd(), 'package.json'))}, ${JSON.stringify(smokeRoot)})
+            return true
+          } catch {
+            return false
+          }
+        })()`, true)
+        if (!copiedPath) throw new Error('Authorised path could not be copied to the clipboard')
         const terminalSmokeScript = [
           '(() => {',
           '  const api = window.editor',

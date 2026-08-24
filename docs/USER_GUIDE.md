@@ -114,6 +114,9 @@ npm run dist:linux   # Linux: AppImage + .deb
 In the file tree, click a folder to expand/collapse it (loaded on demand), and click a file to
 open it. Opening a file that's already open just focuses its tab.
 
+Right-click a file/tree entry or an open tab to copy its full path or project-relative path. The
+copy action writes only an already authorised path and does not grant clipboard-read access.
+
 <a id="en-palette"></a>
 
 ## 4. Command Palette & Goto

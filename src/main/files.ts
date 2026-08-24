@@ -1,4 +1,4 @@
-import { dialog, ipcMain, BrowserWindow, app, shell, type IpcMainInvokeEvent } from 'electron'
+import { dialog, ipcMain, BrowserWindow, app, shell, clipboard, type IpcMainInvokeEvent } from 'electron'
 import { promises as fs, watch, type FSWatcher } from 'fs'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process'
 import { promisify } from 'util'
@@ -1853,6 +1853,23 @@ export function registerFileHandlers(): void {
     assertTrustedSender(event)
     assertAbsolutePath(root, 'workspace root')
     releaseWorkspaceRoot(event, root, retainFiles)
+  })
+
+  ipcMain.handle(IPC.clipboardWritePath, async (event, target: unknown, relativeRoot?: unknown): Promise<void> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(target, 'clipboard path')
+    assertGrantedFile(event, target)
+    if (relativeRoot === undefined || relativeRoot === null) {
+      clipboard.writeText(target)
+      return
+    }
+    assertAbsolutePath(relativeRoot, 'workspace root')
+    assertGrantedRoot(event, relativeRoot)
+    const root = path.resolve(relativeRoot)
+    const resolvedTarget = path.resolve(target)
+    if (!isInside(root, resolvedTarget)) throw new Error('The copied path is outside the requested workspace root.')
+    const relative = path.relative(root, resolvedTarget) || path.basename(resolvedTarget)
+    clipboard.writeText(relative.split(path.sep).join('/'))
   })
 
   ipcMain.handle(IPC.openInBrowser, async (event, request: BrowserOpenRequest): Promise<boolean> => {

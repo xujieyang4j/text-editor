@@ -51,7 +51,7 @@ export function makeTranslator(locale: UiLocale): (key: TranslationKey) => strin
 }
 
 const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
-  'new-file': '新建文件', 'new-window': '新建窗口', 'open-file': '打开文件…', 'open-folder': '打开文件夹…', 'open-recent-file': '打开最近文件…', 'open-recent-project': '打开最近项目…',
+  'new-file': '新建文件', 'new-window': '新建窗口', 'open-file': '打开文件…', 'open-folder': '打开文件夹…', 'open-recent-file': '打开最近文件…', 'open-recent-project': '打开最近项目…', 'copy-file-path': '复制文件路径', 'copy-relative-file-path': '复制相对文件路径',
   save: '保存', 'save-as': '另存为…', 'save-all': '全部保存', 'cycle-auto-save': '切换自动保存模式', 'close-tab': '关闭标签页', 'close-other-tabs': '关闭其他标签页', 'close-tabs-to-right': '关闭右侧标签页', 'close-all-tabs': '关闭全部标签页', 'reopen-tab': '重新打开已关闭标签页',
   find: '查找', replace: '替换', 'find-in-files': '在文件中查找…', 'replace-in-files': '在文件中替换…', 'undo-replace-in-files': '撤销上次文件替换', 'find-results-next': '下一个查找结果', 'find-results-prev': '上一个查找结果',
   'goto-anything': '转到任意位置…', 'goto-symbol': '转到文件符号…', 'goto-project-symbol': '转到项目符号…', 'go-to-line': '转到行…', 'navigate-back': '后退', 'navigate-forward': '前进',
