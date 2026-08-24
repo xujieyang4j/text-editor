@@ -23,28 +23,38 @@ export class FileTree {
   private expanded = new Set<string>()
 
   private rootEntries: DirEntry[] = []
+  /** Invalidates async expansion restores when the workspace changes. */
+  private renderVersion = 0
 
   constructor(container: HTMLElement, handlers: FileTreeHandlers) {
     this.container = container
     this.handlers = handlers
   }
 
-  /** Render a fresh workspace root and reset expansion state. */
-  render(entries: DirEntry[]): void {
-    this.expanded.clear()
+  /**
+   * Render workspace entries. A true `preserveExpansion` keeps the user's
+   * expanded folders open across watcher/poll refreshes.
+   */
+  render(entries: DirEntry[], preserveExpansion = false): void {
+    const version = ++this.renderVersion
+    if (!preserveExpansion) this.expanded.clear()
     this.rootEntries = entries
-    this.container.replaceChildren(this.buildList(entries, 0))
+    const rootList = this.buildList(entries, 0)
+    this.container.replaceChildren(rootList)
+    if (preserveExpansion) void this.restoreExpanded(entries, rootList, 0, version)
   }
 
   /** Clear the tree (no workspace open). */
   clear(): void {
+    this.renderVersion += 1
+    this.expanded.clear()
     this.rootEntries = []
     this.container.replaceChildren()
   }
 
-  /** Re-render the root after a mutation or filesystem-watch notification. */
+  /** Re-render existing entries while preserving expansion, for callers without new data. */
   refresh(): void {
-    if (this.rootEntries.length > 0) this.container.replaceChildren(this.buildList(this.rootEntries, 0))
+    if (this.rootEntries.length > 0) this.render(this.rootEntries, true)
   }
 
   /** Build a <ul> for a set of sibling entries at the given depth. */
@@ -61,6 +71,7 @@ export class FileTree {
   private buildItem(entry: DirEntry, depth: number): HTMLElement {
     const li = document.createElement('li')
     li.className = 'tree-item'
+    li.dataset.treePath = entry.path
 
     const row = document.createElement('div')
     row.className = 'tree-row'
@@ -93,6 +104,34 @@ export class FileTree {
     })
 
     return li
+  }
+
+  /** Re-expand known folders after a root refresh, without blocking the tree UI. */
+  private async restoreExpanded(
+    entries: DirEntry[],
+    parent: HTMLElement,
+    depth: number,
+    version: number
+  ): Promise<void> {
+    for (const entry of entries) {
+      if (!entry.isDirectory || !this.expanded.has(entry.path) || version !== this.renderVersion) continue
+      const li = Array.from(parent.children).find(
+        (element) => element instanceof HTMLElement && element.dataset.treePath === entry.path
+      )
+      if (!(li instanceof HTMLElement)) continue
+      const twisty = li.querySelector<HTMLElement>(':scope > .tree-row > .tree-twisty')
+      if (!twisty) continue
+      try {
+        const children = await window.editor.readDir(entry.path)
+        if (version !== this.renderVersion) return
+        const childList = this.buildList(children, depth + 1)
+        li.appendChild(childList)
+        twisty.textContent = '▾'
+        await this.restoreExpanded(children, childList, depth + 1, version)
+      } catch (error) {
+        if (version === this.renderVersion) this.handlers.onError(`Could not read “${entry.name}”.`, error)
+      }
+    }
   }
 
   private openContextMenu(entry: DirEntry, x: number, y: number): void {

@@ -4,6 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import { detectLineEnding, encodeText as encodePreservedText } from '../shared/text.js'
+import { isBinaryBuffer, maxEditableBytes } from '../shared/filePolicy.js'
 import {
   IPC,
   DEFAULT_SETTINGS,
@@ -31,8 +32,6 @@ import {
   type PluginInstallRequest
 } from '../shared/ipc.js'
 
-/** Maximum text size we load into CodeMirror. This prevents accidental UI stalls. */
-const MAX_EDITABLE_BYTES = 20 * 1024 * 1024
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
 const MAX_SEARCH_RESULTS = 5_000
 
@@ -206,9 +205,7 @@ function encodeText(content: string, options: FileWriteOptions): Buffer {
 }
 
 function looksBinary(buffer: Buffer, encoding: TextEncoding): boolean {
-  if (encoding === 'utf16le' || encoding === 'utf16be') return false
-  const sample = buffer.subarray(0, 8_192)
-  return sample.includes(0)
+  return isBinaryBuffer(buffer, encoding === 'utf16le' || encoding === 'utf16be')
 }
 
 /** Read a file safely, preserving its physical encoding and newline convention. */
@@ -216,7 +213,8 @@ async function readFile(filePath: string): Promise<OpenedFile> {
   const stat = await fs.stat(filePath)
   if (!stat.isFile()) throw new Error('The selected path is not a file.')
   const byteLength = stat.size
-  if (byteLength > MAX_EDITABLE_BYTES) {
+  const maxBytes = maxEditableBytes((await readSettings()).maxFileSizeMB)
+  if (byteLength > maxBytes) {
     return { path: filePath, content: '', encoding: 'utf8', eol: 'LF', byteLength, isBinary: false, isTooLarge: true }
   }
   const buffer = await fs.readFile(filePath)
@@ -239,6 +237,11 @@ async function readFile(filePath: string): Promise<OpenedFile> {
 /** Absolute path to a JSON file living in Electron's userData directory. */
 function userDataFile(name: string): string {
   return path.join(app.getPath('userData'), name)
+}
+
+/** Settings are read at open time so a changed large-file limit applies immediately. */
+async function readSettings(): Promise<Settings> {
+  return sanitizeSettings(await readJson<unknown>(userDataFile('settings.json'), DEFAULT_SETTINGS))
 }
 
 async function readJson<T>(file: string, fallback: T): Promise<T> {
@@ -817,7 +820,7 @@ export function registerFileHandlers(): void {
 
   ipcMain.handle(IPC.settingsRead, async (event): Promise<Settings> => {
     assertTrustedSender(event)
-    return sanitizeSettings(await readJson<unknown>(userDataFile('settings.json'), DEFAULT_SETTINGS))
+    return readSettings()
   })
   ipcMain.handle(IPC.settingsWrite, async (event, settings: unknown): Promise<void> => {
     assertTrustedSender(event)

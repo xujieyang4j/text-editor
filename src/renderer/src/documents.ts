@@ -25,6 +25,14 @@ export interface Doc {
   editorState?: import('@codemirror/state').EditorState
   /** Bookmarked 1-based line numbers for quick navigation. */
   bookmarks: number[]
+  /** New on-disk version held while local unsaved edits need a conflict decision. */
+  externalChange?: {
+    content: string
+    encoding: import('../../shared/ipc.js').TextEncoding
+    eol: import('../../shared/ipc.js').LineEnding
+  }
+  /** Disk version explicitly kept aside while the user continues local edits. */
+  ignoredExternalContent?: string
 }
 
 let counter = 0

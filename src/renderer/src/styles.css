@@ -207,6 +207,37 @@ body {
   position: relative;
 }
 
+/* ---------- External file-change conflict ---------- */
+.external-conflict-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 10px;
+  border-bottom: 1px solid #8a6210;
+  background: #4a3a12;
+  color: #ffe8a3;
+  font-size: 12px;
+}
+
+.external-conflict-bar.hidden {
+  display: none;
+}
+
+.external-conflict-message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.external-conflict-bar .panel-button {
+  border: 1px solid rgba(255, 232, 163, 0.45);
+  color: inherit;
+  font-size: 12px;
+}
+
 .editor-split-host {
   flex: 1;
   min-width: 0;

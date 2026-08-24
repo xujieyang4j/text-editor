@@ -64,6 +64,8 @@ class App {
   private booted = false
   private pendingLaunchPaths: string[] = []
   private workspacePollTimer: number | null = null
+  private conflictBar: HTMLDivElement | null = null
+  private conflictDocId: string | null = null
 
   // Cached DOM references.
   private tabBar = document.getElementById('tab-bar')!
@@ -102,6 +104,7 @@ class App {
         this.renderTabs()
       }
     })
+    this.createConflictBar()
     // The status-bar language field opens the syntax picker (like Sublime).
     this.statusLanguage.addEventListener('click', () => this.pickLanguage())
     this.statusLanguage.classList.add('clickable')
@@ -515,6 +518,93 @@ class App {
     button.classList.toggle('hidden', !visible)
   }
 
+  /** A non-blocking conflict action bar for external edits to dirty buffers. */
+  private createConflictBar(): void {
+    const bar = document.createElement('div')
+    bar.className = 'external-conflict-bar hidden'
+    const message = document.createElement('span')
+    message.className = 'external-conflict-message'
+    const addAction = (label: string, action: () => void): void => {
+      const button = document.createElement('button')
+      button.className = 'panel-button'
+      button.textContent = label
+      button.addEventListener('click', action)
+      bar.appendChild(button)
+    }
+    bar.appendChild(message)
+    addAction('Compare', () => this.compareExternalChange())
+    addAction('Reload Disk', () => this.reloadExternalChange())
+    addAction('Keep Local', () => this.keepLocalExternalChange())
+    addAction('Save Local As…', () => { void this.saveExternalConflictAs() })
+    this.editorArea.parentElement?.insertBefore(bar, this.editorArea)
+    this.conflictBar = bar
+  }
+
+  private showExternalConflict(doc: Doc): void {
+    if (!doc.externalChange || !this.conflictBar) return
+    this.conflictDocId = doc.id
+    const message = this.conflictBar.querySelector<HTMLElement>('.external-conflict-message')
+    if (message) message.textContent = `“${doc.name}” changed on disk while you have unsaved edits.`
+    this.conflictBar.classList.remove('hidden')
+  }
+
+  private hideExternalConflict(): void {
+    this.conflictDocId = null
+    this.conflictBar?.classList.add('hidden')
+  }
+
+  private get conflictDoc(): Doc | undefined {
+    return this.docs.find((doc) => doc.id === this.conflictDocId && doc.externalChange)
+  }
+
+  /** Open an ephemeral comparison buffer without discarding either version. */
+  private compareExternalChange(): void {
+    const doc = this.conflictDoc
+    if (!doc?.externalChange) return
+    const comparison = createUntitled()
+    comparison.name = `${doc.name} (disk version)`
+    comparison.content = doc.externalChange.content
+    comparison.savedContent = doc.externalChange.content
+    comparison.language = doc.language
+    comparison.languageLocked = true
+    comparison.encoding = doc.externalChange.encoding
+    comparison.eol = doc.externalChange.eol
+    this.addDoc(comparison)
+  }
+
+  private reloadExternalChange(): void {
+    const doc = this.conflictDoc
+    if (!doc?.externalChange) return
+    doc.content = doc.externalChange.content
+    doc.savedContent = doc.externalChange.content
+    doc.encoding = doc.externalChange.encoding
+    doc.eol = doc.externalChange.eol
+    doc.editorState = undefined
+    doc.externalChange = undefined
+    doc.ignoredExternalContent = undefined
+    if (this.activeId === doc.id) void this.activate(doc.id)
+    this.renderTabs()
+    this.hideExternalConflict()
+  }
+
+  private keepLocalExternalChange(): void {
+    const doc = this.conflictDoc
+    if (!doc?.externalChange) return
+    doc.ignoredExternalContent = doc.externalChange.content
+    doc.externalChange = undefined
+    this.renderTabs()
+    this.hideExternalConflict()
+  }
+
+  private async saveExternalConflictAs(): Promise<void> {
+    const doc = this.conflictDoc
+    if (!doc) return
+    const activeBefore = this.activeId
+    if (activeBefore !== doc.id) await this.activate(doc.id)
+    await this.save(true)
+    if (activeBefore && activeBefore !== doc.id) await this.activate(activeBefore)
+  }
+
   /**
    * Show/hide the per-document chrome that depends on the active file type:
    * the floating "open in browser" icon (HTML), the markdown preview icon, and
@@ -536,6 +626,8 @@ class App {
       else this.preview.hide()
     }
     this.previewBtn.classList.toggle('active', this.preview.isVisible && md)
+    if (doc?.externalChange) this.showExternalConflict(doc)
+    else this.hideExternalConflict()
   }
 
   /** Toggle the markdown preview for the active document. */
@@ -773,7 +865,7 @@ class App {
   private async reloadWorkspaceTree(): Promise<void> {
     if (!this.folder) return
     try {
-      this.tree.render(await window.editor.readDir(this.folder))
+      this.tree.render(await window.editor.readDir(this.folder), true)
     } catch (error) {
       this.showError('The workspace tree could not be refreshed.', error)
     }
@@ -806,11 +898,21 @@ class App {
       const opened = await window.editor.openPath(changedPath)
       if (opened.isBinary || opened.isTooLarge) return
       if (opened.content === doc.savedContent && opened.encoding === doc.encoding && opened.eol === doc.eol) return
+      if (isDirty(doc)) {
+        if (doc.externalChange?.content === opened.content || doc.ignoredExternalContent === opened.content) return
+        doc.externalChange = { content: opened.content, encoding: opened.encoding, eol: opened.eol }
+        doc.ignoredExternalContent = undefined
+        this.renderTabs()
+        if (this.activeId === doc.id) this.showExternalConflict(doc)
+        return
+      }
       doc.content = opened.content
       doc.savedContent = opened.content
       doc.encoding = opened.encoding
       doc.eol = opened.eol
       doc.editorState = undefined
+      doc.externalChange = undefined
+      doc.ignoredExternalContent = undefined
       if (this.activeId === doc.id) await this.activate(doc.id)
       this.renderTabs()
     } catch {
@@ -897,6 +999,8 @@ class App {
     // Mark only the exact snapshot written to disk as saved. Edits made while
     // the async write was in flight remain dirty and cannot be silently lost.
     doc.savedContent = savedSnapshot
+    doc.externalChange = undefined
+    doc.ignoredExternalContent = undefined
     if (!doc.languageLocked && this.activeId === doc.id) {
       try {
         doc.language = await this.editor.setLanguageForFile(doc.name)
@@ -908,6 +1012,7 @@ class App {
     this.updateStatus()
     this.scheduleSessionSave()
     this.syncEditorChrome()
+    this.hideExternalConflict()
   }
 
   /** Close the active tab, guarding against losing unsaved changes. */
@@ -1411,7 +1516,8 @@ class App {
 
       const dot = document.createElement('span')
       dot.className = 'tab-dirty'
-      dot.textContent = isDirty(doc) ? '●' : ''
+      dot.textContent = doc.externalChange ? '!' : isDirty(doc) ? '●' : ''
+      dot.title = doc.externalChange ? 'Changed on disk' : isDirty(doc) ? 'Unsaved changes' : ''
 
       const label = document.createElement('span')
       label.className = 'tab-label'
