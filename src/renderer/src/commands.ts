@@ -80,6 +80,7 @@ export const COMMANDS: Command[] = [
   { id: 'split-editor', title: 'View: Toggle Split Editor', hint: 'Ctrl/Cmd+Alt+2' },
   { id: 'split-selected-tabs', title: 'View: Split Selected Tabs into Groups' },
   { id: 'toggle-minimap', title: 'View: Toggle Minimap' },
+  { id: 'toggle-outline', title: 'View: Toggle Outline' },
   { id: 'toggle-distraction-free', title: 'View: Toggle Distraction Free Mode', hint: 'Shift+F11' },
   { id: 'cycle-auto-save', title: 'File: Cycle Auto Save Mode' },
   { id: 'toggle-spell-check', title: 'View: Toggle Spell Check' },

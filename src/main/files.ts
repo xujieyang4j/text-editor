@@ -518,6 +518,7 @@ function sanitizeSettings(value: unknown): Settings {
     autoSave: raw.autoSave === 'after_delay' || raw.autoSave === 'on_focus_change' ? raw.autoSave : 'off',
     autoSaveDelayMs: asFiniteInt(raw.autoSaveDelayMs, DEFAULT_SETTINGS.autoSaveDelayMs, 250, 60_000),
     distractionFree: typeof raw.distractionFree === 'boolean' ? raw.distractionFree : DEFAULT_SETTINGS.distractionFree,
+    showOutline: typeof raw.showOutline === 'boolean' ? raw.showOutline : DEFAULT_SETTINGS.showOutline,
     searchHistory: Array.isArray(raw.searchHistory)
       ? raw.searchHistory.filter((item): item is string => typeof item === 'string').map((item) => item.slice(0, 2_000)).slice(0, 50)
       : [],

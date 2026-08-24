@@ -137,16 +137,39 @@ function createWindow(sessionId = newSessionId()): void {
             /^(启动|Start)$/.test(button.textContent?.trim() ?? '')
           )
           const terminalPanel = document.querySelector('.terminal-panel')
+          const outlinePanel = document.querySelector('.outline-panel')
           return {
             editorAcceptedInput: editor.textContent?.includes('smoke') === true,
             terminalPanelMounted: terminalPanel instanceof HTMLElement && terminalPanel.classList.contains('hidden'),
-            terminalStartDisabledInitially: terminalCommand instanceof HTMLButtonElement && terminalCommand.disabled
+            terminalStartDisabledInitially: terminalCommand instanceof HTMLButtonElement && terminalCommand.disabled,
+            outlinePanelMounted: outlinePanel instanceof HTMLElement && outlinePanel.classList.contains('hidden')
           }
         })()`, true)
         if (!result.editorAcceptedInput) throw new Error('CodeMirror did not receive smoke input')
-        if (!result.terminalPanelMounted || !result.terminalStartDisabledInitially) {
-          throw new Error('Terminal panel did not mount with its safe initial state')
+        if (!result.terminalPanelMounted || !result.terminalStartDisabledInitially || !result.outlinePanelMounted) {
+          throw new Error('Terminal or outline panel did not mount with its expected initial state')
         }
+        win.webContents.send(IPC.menuEvent, 'toggle-outline' as MenuEvent)
+        const outlineResult = await win.webContents.executeJavaScript(`(() => new Promise((resolve, reject) => {
+          const deadline = Date.now() + 3_000
+          const check = () => {
+            const panel = document.querySelector('.outline-panel')
+            if (panel instanceof HTMLElement && !panel.classList.contains('hidden')) {
+              const editor = document.querySelector('.cm-content')
+              if (!(editor instanceof HTMLElement)) return reject(new Error('CodeMirror content did not mount'))
+              editor.focus()
+              document.execCommand('insertText', false, '\nfunction outlineSmokeSymbol() {}')
+              window.setTimeout(() => resolve(
+                [...document.querySelectorAll('.outline-symbol')].some((item) => item.textContent?.includes('outlineSmokeSymbol'))
+              ), 180)
+              return
+            }
+            if (Date.now() >= deadline) return reject(new Error('Outline did not open'))
+            window.setTimeout(check, 25)
+          }
+          check()
+        }))()`, true)
+        if (!outlineResult) throw new Error('Outline did not render the active document symbol')
         const terminalSmokeScript = [
           '(() => {',
           '  const api = window.editor',

@@ -8,6 +8,7 @@ import { openMarketplace } from './marketplace.js'
 import { ExtensionHost } from './extensionHost.js'
 import { incrementalChanges, revertIncrementalChange, type IncrementalChange } from './incrementalDiff.js'
 import { JsonView } from './jsonView.js'
+import { OutlinePanel } from './outlinePanel.js'
 import { parseLosslessJson, stringifyLosslessJson } from '../../shared/losslessJson.js'
 import { BuildPanel } from './buildPanel.js'
 import { TerminalPanel } from './terminalPanel.js'
@@ -94,6 +95,7 @@ class App {
   private terminalPanel!: TerminalPanel
   private preview!: MarkdownPreview
   private jsonView!: JsonView
+  private outlinePanel!: OutlinePanel
   private docs: Doc[] = []
   private groups: EditorGroup[] = []
   private activeGroup = 0
@@ -170,6 +172,7 @@ class App {
   private primaryGroupRoot = document.getElementById('editor-group-0')!
   private findResultsHost = document.getElementById('find-results-host')!
   private gitPanelHost = document.getElementById('git-panel-host')!
+  private outlinePanelHost = document.getElementById('outline-panel-host')!
   private browserBtn = document.getElementById('browser-btn') as HTMLButtonElement
   private previewBtn = document.getElementById('preview-btn') as HTMLButtonElement
   private jsonToolbar = document.getElementById('json-toolbar') as HTMLDivElement
@@ -252,6 +255,14 @@ class App {
       onBranch: (create) => { void this.switchGitBranch(create) }
     })
     this.gitPanelHost.appendChild(this.gitPanel.element)
+    this.outlinePanel = new OutlinePanel({
+      onSelect: (symbol) => {
+        this.recordNavigation()
+        this.editor.gotoPos(symbol.pos)
+        this.editor.focus()
+      }
+    })
+    this.outlinePanelHost.appendChild(this.outlinePanel.element)
     this.createConflictBar()
     // The status-bar language field opens the syntax picker (like Sublime).
     this.statusLanguage.addEventListener('click', () => this.pickLanguage())
@@ -688,6 +699,12 @@ class App {
         break
       case 'toggle-terminal':
         this.toggleTerminal()
+        break
+      case 'toggle-outline':
+        this.settings.showOutline = !this.settings.showOutline
+        if (this.settings.showOutline && !this.settings.distractionFree) this.sidebar.classList.remove('hidden')
+        this.syncOutline(true)
+        this.persistSettings()
         break
       case 'select-color-scheme':
         this.selectColorScheme()
@@ -1406,6 +1423,7 @@ class App {
     // immediately. Language support is lazy-loaded and must not delay or block
     // the toolbar when a language chunk is slow or fails to load.
     this.syncEditorChrome()
+    this.syncOutline(true)
 
     try {
       const language = !doc.languageLocked
@@ -1462,6 +1480,7 @@ class App {
     if (this.preview.isVisible && this.isMarkdownDoc(doc)) {
       this.preview.update(doc.content)
     }
+    if (groupIndex === this.activeGroup) this.syncOutline()
     // Persist drafts as the user types (debounced) so an unexpected quit or
     // machine crash never loses unsaved work — this is the core of hot exit.
     this.scheduleSessionSave()
@@ -1687,6 +1706,15 @@ class App {
     this.jsonViewBtn.classList.toggle('active', this.jsonView.visible && json)
     if (doc?.externalChange) this.showExternalConflict(doc)
     else this.hideExternalConflict()
+  }
+
+  /** Keep the sidebar outline in sync without changing editor or document state. */
+  private syncOutline(immediate = false): void {
+    if (!this.outlinePanel) return
+    this.outlinePanel.toggle(this.settings.showOutline)
+    const doc = this.active
+    const cursor = this.editor?.view.state.selection.main.head ?? 0
+    this.outlinePanel.setDocument(doc?.name ?? '', doc?.content ?? '', cursor, immediate)
   }
 
   /** Toggle the markdown preview for the active document. */
@@ -3360,6 +3388,7 @@ class App {
     if (this.findResults) this.findResults.setLocale(locale)
     if (this.searchPanel) this.searchPanel.setLocale(locale)
     if (this.jsonView) this.jsonView.setLocale(locale)
+    if (this.outlinePanel) this.outlinePanel.setLocale(locale)
     if (this.terminalPanel) this.terminalPanel.setLocale(locale)
     this.jsonFormatBtn.textContent = locale === 'zh-CN' ? '格式化' : 'Format'
     this.jsonCompactBtn.textContent = locale === 'zh-CN' ? '压缩' : 'Compact'
@@ -3370,6 +3399,7 @@ class App {
     if (this.groups.length > 0) {
       this.updateStatus()
       this.syncEditorChrome()
+      this.syncOutline(true)
     }
   }
 
@@ -3683,6 +3713,7 @@ class App {
     this.statusSelection.textContent = len > 0
       ? (this.settings.locale === 'zh-CN' ? `（已选择 ${len} 个字符）` : `(${len} selected)`)
       : ''
+    if (this.outlinePanel && state === this.editor.view.state) this.outlinePanel.setCursor(sel.head)
   }
 
   /** Keep filesystem failures actionable without exposing low-level stacks in the UI. */

@@ -228,6 +228,10 @@ input, code folding (fold gutter in the margin), bracket matching, and autocompl
 Toggles you flip at runtime (theme, wrap, minimap, font size) are written straight back to the
 settings file, so they persist across restarts.
 
+The **View: Toggle Outline** command adds a filtered outline of functions, classes, and Markdown
+headings for the active document to the sidebar. It is local to the open buffer and does not start
+a language server.
+
 <a id="en-settings"></a>
 
 ## 9. Settings Reference
@@ -246,6 +250,7 @@ Settings are stored as JSON in the OS user-data directory and applied live:
   "theme": "dark",                      // "dark" | "light"
   "wordWrap": false,                    // soft wrap long lines
   "showMinimap": true,                  // right-edge minimap
+  "showOutline": false,                 // active-file structure outline in sidebar
   "showIndentGuides": true,             // indentation guide lines
   "highlightTrailingWhitespace": true,  // mark trailing spaces/tabs
   "rulers": [80, 120]                   // vertical rulers at these columns ([] = none)

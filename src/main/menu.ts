@@ -169,6 +169,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Focus Next Group', 'focus-next-group', 'CmdOrCtrl+Alt+]'),
         item('Focus Previous Group', 'focus-prev-group', 'CmdOrCtrl+Alt+['),
         item('Toggle Minimap', 'toggle-minimap'),
+        item('Toggle Outline', 'toggle-outline'),
         item('Distraction Free Mode', 'toggle-distraction-free', 'Shift+F11'),
         item('Toggle Spell Check', 'toggle-spell-check'),
         item('Toggle Word Wrap', 'toggle-word-wrap', 'Alt+Z'),

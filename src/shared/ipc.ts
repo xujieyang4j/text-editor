@@ -423,6 +423,8 @@ export interface Settings {
   autoSaveDelayMs: number
   /** Hide surrounding chrome and center the editor, like Sublime's Distraction Free Mode. */
   distractionFree: boolean
+  /** Keep the active-document outline visible in the workspace sidebar. */
+  showOutline: boolean
   searchHistory: string[]
   replaceHistory: string[]
 }
@@ -446,6 +448,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoSave: 'off',
   autoSaveDelayMs: 1_000,
   distractionFree: false,
+  showOutline: false,
   searchHistory: [],
   replaceHistory: []
 }
@@ -747,6 +750,7 @@ export type MenuEvent =
   | 'import-sublime-keymap'
   | 'import-sublime-build'
   | 'toggle-terminal'
+  | 'toggle-outline'
   | 'lsp-hover'
   | 'lsp-definition'
   | 'lsp-references'
