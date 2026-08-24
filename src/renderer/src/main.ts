@@ -20,6 +20,7 @@ import {
 } from './documents.js'
 import type { EditorState } from '@codemirror/state'
 import type { Diagnostic } from '@codemirror/lint'
+import type { CompletionContext, Completion } from '@codemirror/autocomplete'
 import {
   DEFAULT_SETTINGS,
   type MenuEvent,
@@ -39,6 +40,8 @@ import {
   type BuildProblem,
   type BuildOutput
   , type MarketplaceItem
+  , type LanguageServerInteractiveResult
+  , type LanguageRenameEdit
 } from '../../shared/ipc.js'
 import './styles.css'
 
@@ -103,6 +106,7 @@ class App {
   private lspDocumentVersion = new Map<string, number>()
   private buildOutputText = ''
   private activeBuildSystem: BuildSystem | null = null
+  private windowSessionId = new URLSearchParams(location.hash.slice(1)).get('window') ?? 'legacy'
   private pendingKeySequence: string[] = []
   private pendingKeyTimer: number | null = null
 
@@ -207,6 +211,11 @@ class App {
   /** Load settings, construct the editor, then restore the previous session. */
   private async boot(): Promise<void> {
     try {
+      await window.editor.registerWindowSession(this.windowSessionId)
+    } catch (error) {
+      this.showError('Window session could not be registered.', error)
+    }
+    try {
       this.settings = await window.editor.readSettings()
     } catch (error) {
       this.showError('Settings could not be read; safe defaults were used.', error)
@@ -218,7 +227,8 @@ class App {
       this.primaryHost,
       {
         onDocChange: () => this.handleDocChange(),
-        onCursorChange: (state) => this.updatePositionStatus(state)
+        onCursorChange: (state) => this.updatePositionStatus(state),
+        onCompletion: (context) => this.requestLspCompletions(context)
       },
       this.settings
     )
@@ -352,6 +362,18 @@ class App {
         break
       case 'open-recent-project':
         void this.openRecentProject()
+        break
+      case 'lsp-hover':
+        void this.showLspHover()
+        break
+      case 'lsp-definition':
+        void this.runLspLocations('definition')
+        break
+      case 'lsp-references':
+        void this.runLspLocations('references')
+        break
+      case 'lsp-rename':
+        void this.renameLspSymbol()
         break
       case 'open-file':
         void this.openViaDialog()
@@ -694,6 +716,7 @@ class App {
     if (currentGroup && active) {
       active.content = currentGroup.editor.getContent()
       active.editorState = currentGroup.editor.getState()
+      active.groupStates.set(currentGroup.id, currentGroup.editor.getState())
     }
 
     while (this.groups.length > count) {
@@ -753,7 +776,8 @@ class App {
         onDocChange: () => this.handleDocChange(id),
         onCursorChange: (state) => {
           if (this.activeGroup === id) this.updatePositionStatus(state)
-        }
+        },
+        onCompletion: (context) => this.requestLspCompletions(context)
       },
       this.settings
     )
@@ -819,6 +843,173 @@ class App {
     }
   }
 
+  private async requestLsp(method: 'completion' | 'hover' | 'definition' | 'references' | 'rename', newName?: string): Promise<LanguageServerInteractiveResult | null> {
+    const doc = this.active
+    if (!this.folder || !doc?.path) {
+      this.showError('Open a saved file in a workspace before using this language feature.')
+      return null
+    }
+    const config = this.project.languageServers[doc.language]
+    if (!config) {
+      this.showError(`No language server is configured for ${doc.language}.`)
+      return null
+    }
+    if (!this.confirmExternalTool(config.command, `language server for ${doc.language}`)) return null
+    const selection = this.editor.view.state.selection.main
+    const line = this.editor.view.state.doc.lineAt(selection.head)
+    try {
+      return await window.editor.requestLanguageServer({
+        root: this.folder,
+        config,
+        content: this.editor.getContent(),
+        filePath: doc.path,
+        languageId: doc.language.toLowerCase().replaceAll(' ', '-'),
+        method,
+        line: line.number - 1,
+        character: selection.head - line.from,
+        ...(newName ? { newName } : {})
+      })
+    } catch (error) {
+      this.showError(`Language server ${method} request failed.`, error)
+      return null
+    }
+  }
+
+  private async requestLspCompletions(context: CompletionContext): Promise<Completion[] | null> {
+    const doc = this.active
+    if (!doc?.path || !this.folder || !this.project.languageServers[doc.language]) return null
+    const line = context.state.doc.lineAt(context.pos)
+    const result = await this.requestLspAt('completion', line.number - 1, context.pos - line.from)
+    return result?.completions?.map((item) => ({
+      label: item.label,
+      ...(item.detail ? { detail: item.detail } : {}),
+      ...(item.documentation ? { info: item.documentation } : {}),
+      ...(item.insertText ? { apply: item.insertText } : {})
+    })) ?? null
+  }
+
+  private async requestLspAt(
+    method: 'completion' | 'hover' | 'definition' | 'references' | 'rename',
+    line: number,
+    character: number,
+    newName?: string
+  ): Promise<LanguageServerInteractiveResult | null> {
+    const doc = this.active
+    if (!this.folder || !doc?.path) return null
+    const config = this.project.languageServers[doc.language]
+    if (!config || !this.confirmExternalTool(config.command, `language server for ${doc.language}`)) return null
+    try {
+      return await window.editor.requestLanguageServer({
+        root: this.folder,
+        config,
+        content: this.editor.getContent(),
+        filePath: doc.path,
+        languageId: doc.language.toLowerCase().replaceAll(' ', '-'),
+        method,
+        line,
+        character,
+        ...(newName ? { newName } : {})
+      })
+    } catch (error) {
+      this.showError(`Language server ${method} request failed.`, error)
+      return null
+    }
+  }
+
+  private async showLspHover(): Promise<void> {
+    const result = await this.requestLsp('hover')
+    const text = result?.hover?.text?.trim()
+    if (!text) {
+      this.statusSelection.textContent = 'No hover information'
+      return
+    }
+    window.alert(text)
+  }
+
+  private async runLspLocations(method: 'definition' | 'references'): Promise<void> {
+    const result = await this.requestLsp(method)
+    const locations = result?.locations ?? []
+    if (locations.length === 0) {
+      this.statusSelection.textContent = method === 'definition' ? 'No definition found' : 'No references found'
+      return
+    }
+    if (method === 'definition' && locations.length === 1) {
+      const location = locations[0]
+      await this.openWorkspaceMatch({
+        path: location.filePath,
+        line: location.line + 1,
+        column: location.character + 1,
+        lineText: '',
+        matchText: ''
+      })
+      return
+    }
+    const matches: WorkspaceMatch[] = locations.map((location) => ({
+      path: location.filePath,
+      line: location.line + 1,
+      column: location.character + 1,
+      lineText: method === 'definition' ? 'Definition' : 'Reference',
+      matchText: method
+    }))
+    this.showFindResults(method === 'definition' ? 'Definitions' : 'References', matches)
+  }
+
+  private async renameLspSymbol(): Promise<void> {
+    const name = window.prompt('New symbol name:')?.trim()
+    if (!name) return
+    const result = await this.requestLsp('rename', name)
+    const edits = result?.renameEdits ?? []
+    if (edits.length === 0) {
+      this.statusSelection.textContent = 'No rename edits returned'
+      return
+    }
+    if (!window.confirm(`Apply ${edits.length} rename edit${edits.length === 1 ? '' : 's'} across ${new Set(edits.map((edit) => edit.filePath)).size} file${new Set(edits.map((edit) => edit.filePath)).size === 1 ? '' : 's'}?`)) return
+    await this.applyLspRenameEdits(edits)
+  }
+
+  private async applyLspRenameEdits(edits: LanguageRenameEdit[]): Promise<void> {
+    const grouped = new Map<string, LanguageRenameEdit[]>()
+    for (const edit of edits) grouped.set(edit.filePath, [...(grouped.get(edit.filePath) ?? []), edit])
+    for (const [filePath, fileEdits] of grouped) {
+      const doc = this.docs.find((candidate) => candidate.path === filePath)
+      let content: string
+      let encoding: Doc['encoding'] = 'utf8'
+      let eol: Doc['eol'] = 'LF'
+      if (doc) {
+        content = doc.content
+        encoding = doc.encoding
+        eol = doc.eol
+      } else {
+        const opened = await window.editor.openPath(filePath)
+        if (opened.isBinary || opened.isTooLarge) throw new Error(`Cannot rename inside non-text file ${baseName(filePath)}.`)
+        content = opened.content
+        encoding = opened.encoding
+        eol = opened.eol
+      }
+      const lines = content.split('\n')
+      const offset = (lineIndex: number, character: number): number => {
+        const line = Math.max(0, Math.min(lines.length - 1, lineIndex))
+        let value = 0
+        for (let index = 0; index < line; index += 1) value += lines[index].length + 1
+        return value + Math.max(0, Math.min(lines[line].length, character))
+      }
+      let next = content
+      for (const edit of [...fileEdits].sort((a, b) => offset(b.startLine, b.startCharacter) - offset(a.startLine, a.startCharacter))) {
+        next = `${next.slice(0, offset(edit.startLine, edit.startCharacter))}${edit.newText}${next.slice(offset(edit.endLine, edit.endCharacter))}`
+      }
+      if (doc) {
+        doc.content = next
+        doc.savedContent = next
+        doc.editorState = undefined
+        if (this.activeId === doc.id) await this.activate(doc.id)
+      }
+      const result = await window.editor.save(filePath, next, { encoding, eol })
+      if (!result.saved) throw new Error(`Could not write ${baseName(filePath)}.`)
+    }
+    this.renderTabs()
+    this.statusSelection.textContent = `Renamed symbol in ${grouped.size} file${grouped.size === 1 ? '' : 's'}`
+  }
+
   private applyLanguageServerDiagnostics(event: LanguageServerDiagnosticEvent): void {
     const doc = this.docs.find((candidate) => candidate.path === event.filePath)
     if (!doc) return
@@ -853,6 +1044,7 @@ class App {
     if (previous && previousGroup) {
       previous.content = previousGroup.editor.getContent()
       previous.editorState = previousGroup.editor.getState()
+      previous.groupStates.set(previousGroup.id, previousGroup.editor.getState())
     }
 
     const group = this.groups[groupIndex]
@@ -863,7 +1055,7 @@ class App {
     group.activeId = id
     this.hideFindResults()
     const activation = ++this.languageActivation
-    group.editor.setDocument(doc.content, doc.editorState)
+    group.editor.setDocument(doc.content, doc.groupStates.get(groupIndex) ?? doc.editorState)
     group.editor.setDiagnostics((doc.diagnostics ?? []).map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
 
     // File-name based actions (HTML browser / Markdown preview) must appear
@@ -880,6 +1072,7 @@ class App {
       if (activation !== this.languageActivation || this.activeGroup !== groupIndex || group.activeId !== id) return
       doc.language = language
       doc.editorState = group.editor.getState()
+      doc.groupStates.set(groupIndex, group.editor.getState())
     } catch (error) {
       console.error(`Failed to load syntax support for ${doc.name}:`, error)
     }
@@ -901,6 +1094,7 @@ class App {
     if (!doc) return
     doc.content = group.editor.getContent()
     doc.editorState = group.editor.getState()
+    doc.groupStates.set(groupIndex, group.editor.getState())
     for (const sibling of this.groups) {
       if (sibling.id !== groupIndex && sibling.activeId === doc.id && sibling.editor.getContent() !== doc.content) {
         sibling.editor.replaceContent(doc.content)
@@ -2218,6 +2412,7 @@ class App {
       if (doc) {
         doc.content = group.editor.getContent()
         doc.editorState = group.editor.getState()
+        doc.groupStates.set(group.id, group.editor.getState())
       }
     }
 

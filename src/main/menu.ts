@@ -111,6 +111,8 @@ export function buildMenu(): void {
         item('Goto Anything…', 'goto-anything', 'CmdOrCtrl+P'),
         item('Goto Symbol…', 'goto-symbol', 'CmdOrCtrl+R'),
         item('Goto Symbol in Project…', 'goto-project-symbol', 'CmdOrCtrl+Shift+R'),
+        item('Go to Definition', 'lsp-definition', 'F12'),
+        item('Find References', 'lsp-references', 'Shift+F12'),
         item('Goto Line…', 'go-to-line', 'CmdOrCtrl+G'),
         { type: 'separator' },
         item('Back', 'navigate-back', 'Alt+Left'),
@@ -163,6 +165,8 @@ export function buildMenu(): void {
       submenu: [
         item('Build', 'build', 'CmdOrCtrl+Shift+B'),
         item('Format Document', 'format-document'),
+        item('Show Hover', 'lsp-hover', 'CmdOrCtrl+Shift+Space'),
+        item('Rename Symbol', 'lsp-rename', 'F2'),
         item('Select Build System…', 'select-build-system'),
         item('Toggle Build Output', 'toggle-problems'),
         item('Configure Language Tool…', 'language-tools'),

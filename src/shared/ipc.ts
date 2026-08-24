@@ -22,6 +22,8 @@ export const IPC = {
   recentProjectsRead: 'recent-projects:read',
   recentProjectsAdd: 'recent-projects:add',
   recentProjectOpen: 'recent-project:open',
+  windowSessionRegister: 'window-session:register',
+  windowSessionList: 'window-session:list',
   openExternal: 'shell:open-external',
   workspaceSearch: 'workspace:search',
   workspaceReplace: 'workspace:replace',
@@ -44,6 +46,7 @@ export const IPC = {
   languageServerSync: 'language-server:sync',
   languageServerStop: 'language-server:stop',
   languageServerDiagnostics: 'language-server:diagnostics',
+  languageServerRequest: 'language-server:request',
   marketplaceList: 'marketplace:list',
   marketplaceInstall: 'marketplace:install',
   gitStatus: 'git:status',
@@ -257,6 +260,11 @@ export interface RecentProject {
   lastOpened: number
 }
 
+export interface WindowSessionMeta {
+  id: string
+  updatedAt: number
+}
+
 /**
  * User-configurable settings, persisted as JSON in the app's userData dir.
  * Mirrors the subset of Sublime's Preferences that we support.
@@ -427,6 +435,53 @@ export interface LanguageServerResult {
   diagnostics: LanguageToolResult['diagnostics']
 }
 
+export type LanguageServerMethod =
+  | 'completion'
+  | 'hover'
+  | 'definition'
+  | 'references'
+  | 'rename'
+
+export interface LanguageServerInteractiveRequest extends LanguageServerRequest {
+  method: LanguageServerMethod
+  line: number
+  character: number
+  newName?: string
+}
+
+export interface LanguageLocation {
+  filePath: string
+  line: number
+  character: number
+}
+
+export interface LanguageCompletionItem {
+  label: string
+  detail?: string
+  documentation?: string
+  insertText?: string
+}
+
+export interface LanguageHover {
+  text: string
+}
+
+export interface LanguageRenameEdit {
+  filePath: string
+  startLine: number
+  startCharacter: number
+  endLine: number
+  endCharacter: number
+  newText: string
+}
+
+export interface LanguageServerInteractiveResult {
+  completions?: LanguageCompletionItem[]
+  hover?: LanguageHover
+  locations?: LanguageLocation[]
+  renameEdits?: LanguageRenameEdit[]
+}
+
 /** Empty session used on first launch. */
 export const EMPTY_SESSION: Session = {
   openFiles: [],
@@ -493,6 +548,10 @@ export type MenuEvent =
   | 'new-window'
   | 'add-folder-to-project'
   | 'open-recent-project'
+  | 'lsp-hover'
+  | 'lsp-definition'
+  | 'lsp-references'
+  | 'lsp-rename'
   | 'select-color-scheme'
   | 'open-marketplace'
   | 'toggle-git'

@@ -104,4 +104,8 @@ export const COMMANDS: Command[] = [
   { id: 'new-window', title: 'File: New Window' }
   , { id: 'add-folder-to-project', title: 'Project: Add Folder to Project…' }
   , { id: 'open-recent-project', title: 'Project: Open Recent Project…' }
+  , { id: 'lsp-hover', title: 'LSP: Show Hover', hint: 'Ctrl/Cmd+Shift+Space' }
+  , { id: 'lsp-definition', title: 'LSP: Go to Definition', hint: 'F12' }
+  , { id: 'lsp-references', title: 'LSP: Find References', hint: 'Shift+F12' }
+  , { id: 'lsp-rename', title: 'LSP: Rename Symbol', hint: 'F2' }
 ]

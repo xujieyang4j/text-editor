@@ -34,6 +34,11 @@ import {
   type LanguageServerResult,
   type LanguageServerSyncRequest,
   type LanguageServerDiagnosticEvent,
+  type LanguageServerInteractiveRequest,
+  type LanguageServerInteractiveResult,
+  type LanguageLocation,
+  type LanguageRenameEdit,
+  type LanguageCompletionItem,
   type PluginInstallRequest
   , type LayoutKind
   , type MarketplaceItem
@@ -41,6 +46,7 @@ import {
   , type GitStatus
   , type GitDiff
   , type RecentProject
+  , type WindowSessionMeta
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -1012,6 +1018,125 @@ async function formatWithPersistentLanguageServer(
   })
 }
 
+async function lspRequest(
+  sender: Electron.WebContents,
+  request: LanguageServerRequest,
+  method: string,
+  params: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const server = startPersistentLanguageServer(sender, request.root, request.config)
+  await syncPersistentLanguageServer(sender, {
+    ...request,
+    version: (server.documents.get(pathToFileURL(request.filePath).href) ?? 0) + 1
+  })
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
+    const id = server.nextId++
+    const timer = setTimeout(() => {
+      server.pending.delete(id)
+      reject(new Error(`Language server ${method} request timed out.`))
+    }, 15_000)
+    server.pending.set(id, (message) => {
+      clearTimeout(timer)
+      if (message.error) {
+        reject(new Error(String((message.error as { message?: unknown }).message ?? `Language server ${method} error.`)))
+      } else resolve(message)
+    })
+    lspMessage(server.child, { jsonrpc: '2.0', id, method, params })
+  })
+}
+
+function lspLocations(value: unknown): LanguageLocation[] {
+  const locations = Array.isArray(value) ? value : value ? [value] : []
+  return locations.flatMap((location) => {
+    if (!location || typeof location !== 'object') return []
+    const source = location as { uri?: unknown; targetUri?: unknown; range?: unknown; targetSelectionRange?: unknown }
+    const uri = typeof source.uri === 'string' ? source.uri : typeof source.targetUri === 'string' ? source.targetUri : null
+    const range = (source.range ?? source.targetSelectionRange) as { start?: { line?: number; character?: number } } | undefined
+    if (!uri?.startsWith('file:')) return []
+    try {
+      return [{ filePath: fileURLToPath(uri), line: range?.start?.line ?? 0, character: range?.start?.character ?? 0 }]
+    } catch {
+      return []
+    }
+  })
+}
+
+function lspText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(lspText).filter(Boolean).join('\n')
+  if (value && typeof value === 'object') {
+    const source = value as { value?: unknown; language?: unknown }
+    if (typeof source.value === 'string') return source.value
+    if (typeof source.language === 'string') return source.language
+  }
+  return ''
+}
+
+async function interactiveLanguageServerRequest(
+  sender: Electron.WebContents,
+  request: LanguageServerInteractiveRequest
+): Promise<LanguageServerInteractiveResult> {
+  const uri = pathToFileURL(request.filePath).href
+  const position = { line: Math.max(0, request.line), character: Math.max(0, request.character) }
+  let method = ''
+  let params: Record<string, unknown> = {}
+  if (request.method === 'completion') {
+    method = 'textDocument/completion'
+    params = { textDocument: { uri }, position }
+  } else if (request.method === 'hover') {
+    method = 'textDocument/hover'
+    params = { textDocument: { uri }, position }
+  } else if (request.method === 'definition') {
+    method = 'textDocument/definition'
+    params = { textDocument: { uri }, position }
+  } else if (request.method === 'references') {
+    method = 'textDocument/references'
+    params = { textDocument: { uri }, position, context: { includeDeclaration: true } }
+  } else {
+    if (!request.newName?.trim()) throw new Error('A new symbol name is required.')
+    method = 'textDocument/rename'
+    params = { textDocument: { uri }, position, newName: request.newName.trim() }
+  }
+  const message = await lspRequest(sender, request, method, params)
+  const result = message.result
+  if (request.method === 'completion') {
+    const rawItems = Array.isArray(result) ? result : Array.isArray((result as { items?: unknown })?.items) ? (result as { items: unknown[] }).items : []
+    const completions: LanguageCompletionItem[] = rawItems.flatMap((item) => {
+      if (!item || typeof item !== 'object' || typeof (item as { label?: unknown }).label !== 'string') return []
+      const source = item as { label: string; detail?: unknown; documentation?: unknown; insertText?: unknown }
+      return [{
+        label: source.label,
+        ...(typeof source.detail === 'string' ? { detail: source.detail } : {}),
+        ...(lspText(source.documentation) ? { documentation: lspText(source.documentation) } : {}),
+        ...(typeof source.insertText === 'string' ? { insertText: source.insertText } : {})
+      }]
+    }).slice(0, 200)
+    return { completions }
+  }
+  if (request.method === 'hover') return { hover: result ? { text: lspText((result as { contents?: unknown }).contents) } : undefined }
+  if (request.method === 'definition' || request.method === 'references') return { locations: lspLocations(result) }
+  const changes = (result as { changes?: Record<string, unknown> } | null)?.changes ?? {}
+  const renameEdits: LanguageRenameEdit[] = []
+  for (const [editUri, edits] of Object.entries(changes)) {
+    if (!editUri.startsWith('file:') || !Array.isArray(edits)) continue
+    let filePath: string
+    try { filePath = fileURLToPath(editUri) } catch { continue }
+    for (const edit of edits) {
+      const source = edit as { range?: { start?: { line?: number; character?: number }; end?: { line?: number; character?: number } }; newText?: unknown }
+      if (typeof source.newText !== 'string') continue
+      renameEdits.push({
+        filePath,
+        startLine: source.range?.start?.line ?? 0,
+        startCharacter: source.range?.start?.character ?? 0,
+        endLine: source.range?.end?.line ?? 0,
+        endCharacter: source.range?.end?.character ?? 0,
+        newText: source.newText
+      })
+    }
+  }
+  return { renameEdits }
+}
+
 /** Register all file-system IPC handlers. Every handler validates its caller and input. */
 export function registerFileHandlers(): void {
   ipcMain.handle(IPC.fileOpen, async (event): Promise<OpenedFile | null> => {
@@ -1157,6 +1282,23 @@ export function registerFileHandlers(): void {
     if (!recent.some((entry) => entry.path === root)) throw new Error('This project is not in the recent-projects list.')
     grantRoot(event.sender.id, root)
     return { root, entries: await readDirectory(root) }
+  })
+
+  ipcMain.handle(IPC.windowSessionRegister, async (event, id: unknown): Promise<void> => {
+    assertTrustedSender(event)
+    if (typeof id !== 'string' || !/^[a-z0-9-]+$/i.test(id)) throw new Error('Invalid window session ID.')
+    setWindowSessionId(event.sender.id, id)
+    const existing = await readJson<WindowSessionMeta[]>(userDataFile('window-sessions.json'), [])
+    const next = [{ id, updatedAt: Date.now() }, ...existing.filter((entry) => entry.id !== id)].slice(0, 12)
+    await writeJson(userDataFile('window-sessions.json'), next)
+  })
+
+  ipcMain.handle(IPC.windowSessionList, async (event): Promise<WindowSessionMeta[]> => {
+    assertTrustedSender(event)
+    const sessions = await readJson<WindowSessionMeta[]>(userDataFile('window-sessions.json'), [])
+    return Array.isArray(sessions)
+      ? sessions.filter((entry) => entry && typeof entry.id === 'string' && /^[a-z0-9-]+$/i.test(entry.id) && typeof entry.updatedAt === 'number').slice(0, 12)
+      : []
   })
 
   ipcMain.handle(IPC.workspaceSearch, async (event, request: WorkspaceSearchRequest): Promise<WorkspaceMatch[]> => {
@@ -1371,6 +1513,13 @@ export function registerFileHandlers(): void {
     const server = languageServers.get(key)
     server?.child.kill()
     languageServers.delete(key)
+  })
+
+  ipcMain.handle(IPC.languageServerRequest, async (event, request: LanguageServerInteractiveRequest): Promise<LanguageServerInteractiveResult> => {
+    assertTrustedSender(event)
+    assertGrantedRoot(event, request.root)
+    assertGrantedFile(event, request.filePath)
+    return interactiveLanguageServerRequest(event.sender, request)
   })
 }
 

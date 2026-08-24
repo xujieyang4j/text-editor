@@ -23,6 +23,8 @@ export interface Doc {
   eol: import('../../shared/ipc.js').LineEnding
   /** Per-tab CodeMirror state preserves undo history, selection and folds. */
   editorState?: import('@codemirror/state').EditorState
+  /** Per-editor-group view states for cloned tabs (selection/history/folds are group-local). */
+  groupStates: Map<number, import('@codemirror/state').EditorState>
   /** Bookmarked 1-based line numbers for quick navigation. */
   bookmarks: number[]
   /** New on-disk version held while local unsaved edits need a conflict decision. */
@@ -59,7 +61,8 @@ export function createUntitled(): Doc {
     languageLocked: false,
     encoding: 'utf8',
     eol: 'LF',
-    bookmarks: []
+    bookmarks: [],
+    groupStates: new Map()
   }
 }
 
@@ -81,7 +84,8 @@ export function createFromFile(
     languageLocked: false,
     encoding,
     eol,
-    bookmarks: []
+    bookmarks: [],
+    groupStates: new Map()
   }
 }
 
@@ -119,7 +123,8 @@ export function createFromSession(
     languageLocked: sf.languageLocked,
     encoding: sf.encoding ?? 'utf8',
     eol: sf.eol ?? 'LF',
-    bookmarks: []
+    bookmarks: [],
+    groupStates: new Map()
   }
 }
 

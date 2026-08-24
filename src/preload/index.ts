@@ -26,12 +26,15 @@ import {
   type LanguageServerResult,
   type LanguageServerSyncRequest,
   type LanguageServerDiagnosticEvent,
+  type LanguageServerInteractiveRequest,
+  type LanguageServerInteractiveResult,
   type PluginInstallRequest
   , type MarketplaceItem
   , type MarketplaceInstallRequest
   , type GitStatus
   , type GitDiff
   , type RecentProject
+  , type WindowSessionMeta
 } from '../shared/ipc.js'
 
 /**
@@ -86,6 +89,10 @@ const api = {
   addRecentProject: (root: string): Promise<void> => ipcRenderer.invoke(IPC.recentProjectsAdd, root),
 
   openRecentProject: (root: string): Promise<OpenedFolder> => ipcRenderer.invoke(IPC.recentProjectOpen, root),
+
+  registerWindowSession: (id: string): Promise<void> => ipcRenderer.invoke(IPC.windowSessionRegister, id),
+
+  listWindowSessions: (): Promise<WindowSessionMeta[]> => ipcRenderer.invoke(IPC.windowSessionList),
 
   /** Confirm to the main process that a close-time session flush has completed. */
   sessionFlushed: (): Promise<void> => ipcRenderer.invoke(IPC.sessionFlushed),
@@ -172,6 +179,9 @@ const api = {
     ipcRenderer.on(IPC.languageServerDiagnostics, listener)
     return () => ipcRenderer.removeListener(IPC.languageServerDiagnostics, listener)
   },
+
+  requestLanguageServer: (request: LanguageServerInteractiveRequest): Promise<LanguageServerInteractiveResult> =>
+    ipcRenderer.invoke(IPC.languageServerRequest, request),
 
   onOpenPathRequested: (handler: (filePath: string) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, filePath: string): void => handler(filePath)

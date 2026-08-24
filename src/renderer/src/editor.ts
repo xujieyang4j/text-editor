@@ -51,7 +51,9 @@ import {
   autocompletion,
   completionKeymap,
   closeBrackets,
-  closeBracketsKeymap
+  closeBracketsKeymap,
+  type CompletionContext,
+  type Completion
 } from '@codemirror/autocomplete'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { showMinimap } from '@replit/codemirror-minimap'
@@ -65,6 +67,8 @@ import type { Settings, ColorScheme } from '../../shared/ipc.js'
 export interface EditorCallbacks {
   onDocChange: () => void
   onCursorChange: (state: EditorState) => void
+  onCompletion?: (context: CompletionContext) => Promise<Completion[] | null>
+  onTab?: () => boolean
 }
 
 /** Compartments allow reconfiguring parts of the editor without a full reset. */
@@ -136,7 +140,14 @@ function baseExtensions(
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     bracketMatching(),
     closeBrackets(),
-    autocompletion(),
+    autocompletion(callbacks.onCompletion ? {
+      override: [async (context) => {
+        const options = await callbacks.onCompletion!(context)
+        if (!options || options.length === 0) return null
+        const token = context.matchBefore(/[\w$]*/)
+        return { from: token?.from ?? context.pos, options }
+      }]
+    } : {}),
     rectangularSelection(),
     crosshairCursor(),
     highlightActiveLine(),
@@ -181,9 +192,13 @@ export class Editor {
       state: this.makeState('')
     })
     this.view.dom.addEventListener('keydown', (event) => {
-      if (event.key !== 'Tab' || this.snippetRanges.length === 0) return
-      event.preventDefault()
-      this.nextSnippetPlaceholder(event.shiftKey ? -1 : 1)
+      if (event.key !== 'Tab') return
+      if (this.snippetRanges.length > 0) {
+        event.preventDefault()
+        this.nextSnippetPlaceholder(event.shiftKey ? -1 : 1)
+      } else if (this.callbacks.onTab?.()) {
+        event.preventDefault()
+      }
     }, true)
   }
 

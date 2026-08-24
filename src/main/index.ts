@@ -138,9 +138,11 @@ function createWindow(sessionId = newSessionId()): void {
   // electron-vite sets ELECTRON_RENDERER_URL in dev; load the file in prod.
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) {
-    win.loadURL(devUrl)
+    const target = new URL(devUrl)
+    target.hash = `window=${sessionId}`
+    win.loadURL(target.href)
   } else {
-    win.loadFile(path.join(__dirname, '../renderer/index.html'))
+    win.loadFile(path.join(__dirname, '../renderer/index.html'), { hash: `window=${sessionId}` })
   }
 }
 
