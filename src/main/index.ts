@@ -187,7 +187,10 @@ app.whenReady().then(() => {
     pendingSessionFlushes.get(event.sender)?.()
     pendingSessionFlushes.delete(event.sender)
   })
-  buildMenu()
+  buildMenu('zh-CN')
+  ipcMain.handle(IPC.menuSetLocale, (_event, locale: unknown) => {
+    buildMenu(locale === 'en-US' ? 'en-US' : 'zh-CN')
+  })
   void listWindowSessionIds().then((sessions) => {
     if (sessions.length === 0) createWindow('legacy')
     else for (const sessionId of sessions) createWindow(sessionId)

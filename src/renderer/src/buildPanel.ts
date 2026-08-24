@@ -1,4 +1,5 @@
-import type { BuildOutput, BuildProblem } from '../../shared/ipc.js'
+import type { BuildOutput, BuildProblem, UiLocale } from '../../shared/ipc.js'
+import { translate } from '../../shared/i18n.js'
 
 export interface BuildPanelCallbacks {
   onRun: (command: string) => void
@@ -12,6 +13,8 @@ export class BuildPanel {
   private readonly output: HTMLPreElement
   private readonly problems: HTMLUListElement
   private readonly command: HTMLInputElement
+  private readonly run: HTMLButtonElement
+  private readonly cancel: HTMLButtonElement
   private visible = false
 
   constructor(
@@ -24,12 +27,12 @@ export class BuildPanel {
     toolbar.className = 'build-toolbar'
     this.command = document.createElement('input')
     this.command.className = 'build-command'
-    this.command.placeholder = 'Build command, e.g. npm test'
+    this.command.placeholder = translate('zh-CN', 'build')
     this.command.value = initialCommand
-    const run = this.button('Run', () => this.callbacks.onRun(this.command.value.trim()))
-    const cancel = this.button('Stop', this.callbacks.onCancel)
+    this.run = this.button(translate('zh-CN', 'run'), () => this.callbacks.onRun(this.command.value.trim()))
+    this.cancel = this.button(translate('zh-CN', 'stop'), this.callbacks.onCancel)
     const close = this.button('×', () => this.toggle(false))
-    toolbar.append(this.command, run, cancel, close)
+    toolbar.append(this.command, this.run, this.cancel, close)
     this.output = document.createElement('pre')
     this.output.className = 'build-output'
     this.problems = document.createElement('ul')
@@ -47,6 +50,12 @@ export class BuildPanel {
   getCommand(): string { return this.command.value.trim() }
 
   setCommand(command: string): void { this.command.value = command }
+
+  setLocale(locale: UiLocale): void {
+    this.command.placeholder = locale === 'zh-CN' ? '构建命令，例如 npm test' : 'Build command, e.g. npm test'
+    this.run.textContent = translate(locale, 'run')
+    this.cancel.textContent = translate(locale, 'stop')
+  }
 
   clear(): void {
     this.output.textContent = ''

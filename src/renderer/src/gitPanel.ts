@@ -1,4 +1,5 @@
-import type { GitAction, GitDiff, GitHistoryEntry, GitHunk, GitStatus } from '../../shared/ipc.js'
+import type { GitAction, GitDiff, GitHistoryEntry, GitHunk, GitStatus, UiLocale } from '../../shared/ipc.js'
+import { translate } from '../../shared/i18n.js'
 
 export interface GitPanelCallbacks {
   onOpenFile: (relativePath: string) => void
@@ -18,17 +19,20 @@ export class GitPanel {
   private readonly list: HTMLUListElement
   private readonly diff: HTMLPreElement
   private readonly hunkPicker: HTMLSelectElement
+  private readonly heading: HTMLDivElement
+  private readonly actionButtons = new Map<string, HTMLButtonElement>()
   private selectedHunk: GitHunk | null = null
   private activePath: string | null = null
   private visible = false
   private selected = new Set<string>()
+  private locale: UiLocale = 'zh-CN'
 
   constructor(private readonly callbacks: GitPanelCallbacks) {
     this.root = document.createElement('div')
     this.root.className = 'git-panel hidden'
-    const heading = document.createElement('div')
-    heading.className = 'git-panel-heading'
-    heading.textContent = 'Git Changes'
+    this.heading = document.createElement('div')
+    this.heading.className = 'git-panel-heading'
+    this.heading.textContent = translate(this.locale, 'gitChanges')
     this.list = document.createElement('ul')
     this.list.className = 'git-change-list'
     this.diff = document.createElement('pre')
@@ -43,30 +47,43 @@ export class GitPanel {
     })
     const actions = document.createElement('div')
     actions.className = 'git-actions'
-    const add = (label: string, action: () => void): void => {
+    const add = (key: string, label: string, action: () => void): void => {
       const button = document.createElement('button')
       button.className = 'panel-button'
       button.textContent = label
       button.addEventListener('click', action)
       actions.appendChild(button)
+      this.actionButtons.set(key, button)
     }
-    add('Stage', () => this.callbacks.onAction('stage', [...this.selected]))
-    add('Unstage', () => this.callbacks.onAction('unstage', [...this.selected]))
-    add('Discard', () => this.callbacks.onAction('discard', [...this.selected]))
-    add('Stage Hunk', () => { if (this.selectedHunk) this.callbacks.onHunkAction('stage-hunk', this.selectedHunk) })
-    add('Discard Hunk', () => { if (this.selectedHunk) this.callbacks.onHunkAction('discard-hunk', this.selectedHunk) })
-    add('History', () => { if (this.activePath) void this.showHistory(this.activePath) })
-    add('Blame', () => { if (this.activePath) void this.showBlame(this.activePath) })
-    add('Commit', this.callbacks.onCommit)
-    add('Switch', () => this.callbacks.onBranch(false))
-    add('New Branch', () => this.callbacks.onBranch(true))
-    this.root.append(heading, actions, this.list, this.hunkPicker, this.diff)
+    add('stage', translate(this.locale, 'stage'), () => this.callbacks.onAction('stage', [...this.selected]))
+    add('unstage', translate(this.locale, 'unstage'), () => this.callbacks.onAction('unstage', [...this.selected]))
+    add('discard', translate(this.locale, 'discard'), () => this.callbacks.onAction('discard', [...this.selected]))
+    add('stageHunk', `${translate(this.locale, 'stage')} Hunk`, () => { if (this.selectedHunk) this.callbacks.onHunkAction('stage-hunk', this.selectedHunk) })
+    add('discardHunk', `${translate(this.locale, 'discard')} Hunk`, () => { if (this.selectedHunk) this.callbacks.onHunkAction('discard-hunk', this.selectedHunk) })
+    add('history', translate(this.locale, 'history'), () => { if (this.activePath) void this.showHistory(this.activePath) })
+    add('blame', translate(this.locale, 'blame'), () => { if (this.activePath) void this.showBlame(this.activePath) })
+    add('commit', translate(this.locale, 'commit'), this.callbacks.onCommit)
+    add('switch', 'Switch', () => this.callbacks.onBranch(false))
+    add('branch', 'New Branch', () => this.callbacks.onBranch(true))
+    this.root.append(this.heading, actions, this.list, this.hunkPicker, this.diff)
   }
 
   get element(): HTMLElement { return this.root }
   toggle(show = !this.visible): void {
     this.visible = show
     this.root.classList.toggle('hidden', !show)
+  }
+
+  setLocale(locale: UiLocale): void {
+    this.locale = locale
+    this.heading.textContent = translate(locale, 'gitChanges')
+    const labels: Record<string, string> = {
+      stage: translate(locale, 'stage'), unstage: translate(locale, 'unstage'), discard: translate(locale, 'discard'),
+      stageHunk: `${translate(locale, 'stage')} Hunk`, discardHunk: `${translate(locale, 'discard')} Hunk`,
+      history: translate(locale, 'history'), blame: translate(locale, 'blame'), commit: translate(locale, 'commit'),
+      switch: locale === 'zh-CN' ? '切换分支' : 'Switch', branch: locale === 'zh-CN' ? '新建分支' : 'New Branch'
+    }
+    for (const [key, label] of Object.entries(labels)) this.actionButtons.get(key)!.textContent = label
   }
 
   setStatus(status: GitStatus): void {
@@ -77,12 +94,11 @@ export class GitPanel {
     this.selectedHunk = null
     this.hunkPicker.replaceChildren()
     this.hunkPicker.disabled = true
-    const heading = this.root.querySelector<HTMLElement>('.git-panel-heading')
     if (!status.available) {
-      if (heading) heading.textContent = 'Git Changes — no repository'
+      this.heading.textContent = this.locale === 'zh-CN' ? 'Git 更改 — 非 Git 仓库' : 'Git Changes — no repository'
       return
     }
-    if (heading) heading.textContent = `Git Changes — ${status.branch ?? ''}`
+    this.heading.textContent = `${translate(this.locale, 'gitChanges')} — ${status.branch ?? ''}`
     for (const entry of status.entries) {
       const item = document.createElement('li')
       item.className = 'git-change-item'

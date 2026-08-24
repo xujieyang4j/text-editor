@@ -1,5 +1,8 @@
 import { app, Menu, shell, BrowserWindow, type MenuItemConstructorOptions } from 'electron'
-import { IPC, type MenuEvent } from '../shared/ipc.js'
+import { IPC, type MenuEvent, type UiLocale } from '../shared/ipc.js'
+import { commandLabel, translate } from '../shared/i18n.js'
+
+let activeLocale: UiLocale = 'zh-CN'
 
 /** Send a menu-driven command to the focused window's renderer. */
 function emit(event: MenuEvent): void {
@@ -13,15 +16,17 @@ function item(
   event: MenuEvent,
   accelerator?: string
 ): MenuItemConstructorOptions {
-  return { label, accelerator, click: () => emit(event) }
+  return { label: commandLabel(activeLocale, event, label), accelerator, click: () => emit(event) }
 }
 
 /**
  * Build and install the native application menu.
  * Accelerators are wired to renderer events so the editor owns document state.
  */
-export function buildMenu(): void {
+export function buildMenu(locale: UiLocale = 'zh-CN'): void {
+  activeLocale = locale
   const isMac = process.platform === 'darwin'
+  const t = (key: Parameters<typeof translate>[1]): string => translate(locale, key)
 
   const template: MenuItemConstructorOptions[] = [
     // macOS gets the standard app menu as the first item.
@@ -44,7 +49,7 @@ export function buildMenu(): void {
         ] as MenuItemConstructorOptions[])
       : []),
     {
-      label: 'File',
+      label: t('file'),
       submenu: [
         item('New File', 'new-file', 'CmdOrCtrl+N'),
         item('New Window', 'new-window', 'CmdOrCtrl+Shift+N'),
@@ -67,7 +72,7 @@ export function buildMenu(): void {
       ]
     },
     {
-      label: 'Edit',
+      label: t('edit'),
       submenu: [
         { role: 'undo' },
         { role: 'redo' },
@@ -105,7 +110,7 @@ export function buildMenu(): void {
       ]
     },
     {
-      label: 'Selection',
+      label: t('selection'),
       submenu: [
         // These map to CM6 defaults already bound in-editor; listed for
         // discoverability. selectAll is provided by the Edit role above.
@@ -119,7 +124,7 @@ export function buildMenu(): void {
       ]
     },
     {
-      label: 'Goto',
+      label: t('goto'),
       submenu: [
         item('Goto Anything…', 'goto-anything', 'CmdOrCtrl+P'),
         item('Goto Symbol…', 'goto-symbol', 'CmdOrCtrl+R'),
@@ -143,7 +148,7 @@ export function buildMenu(): void {
       ]
     },
     {
-      label: 'View',
+      label: t('view'),
       submenu: [
         item('Command Palette…', 'command-palette', 'CmdOrCtrl+Shift+P'),
         item('Set Syntax…', 'select-language'),
@@ -180,7 +185,7 @@ export function buildMenu(): void {
       ]
     },
     {
-      label: 'Tools',
+      label: t('tools'),
       submenu: [
         item('Build', 'build', 'CmdOrCtrl+Shift+B'),
         item('Format Document', 'format-document'),
@@ -203,11 +208,17 @@ export function buildMenu(): void {
       ]
     },
     {
-      label: 'Preferences',
-      submenu: [item('Import Sublime Settings…', 'import-sublime-settings'), item('Import Sublime Keymap…', 'import-sublime-keymap')]
+      label: t('preferences'),
+      submenu: [
+        item('Import Sublime Settings…', 'import-sublime-settings'),
+        item('Import Sublime Keymap…', 'import-sublime-keymap'),
+        { type: 'separator' },
+        { label: t('languageChinese'), type: 'radio', checked: locale === 'zh-CN', click: () => emit('set-ui-language-zh') },
+        { label: t('languageEnglish'), type: 'radio', checked: locale === 'en-US', click: () => emit('set-ui-language-en') }
+      ]
     },
     {
-      label: 'Project',
+      label: t('project'),
       submenu: [
         item('Import Sublime Project…', 'import-sublime-project'),
         item('Add Folder to Project…', 'add-folder-to-project'),
@@ -216,11 +227,11 @@ export function buildMenu(): void {
       ]
     },
     {
-      label: 'Git',
+      label: t('git'),
       submenu: [item('Refresh Changes', 'refresh-git'), item('Open Merge Conflicts', 'open-git-conflicts')]
     },
     {
-      label: 'Window',
+      label: t('window'),
       submenu: [
         { role: 'minimize' },
         { role: 'zoom' },
@@ -236,7 +247,7 @@ export function buildMenu(): void {
       role: 'help',
       submenu: [
         {
-          label: 'Learn More',
+          label: t('learnMore'),
           click: () => shell.openExternal('https://www.electronjs.org')
         },
         item('Check for Updates…', 'check-for-updates')

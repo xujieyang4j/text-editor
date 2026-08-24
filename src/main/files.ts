@@ -442,6 +442,7 @@ function asFiniteInt(value: unknown, fallback: number, min: number, max: number)
 function sanitizeSettings(value: unknown): Settings {
   const raw = value && typeof value === 'object' ? (value as Partial<Settings>) : {}
   return {
+    locale: raw.locale === 'en-US' ? 'en-US' : 'zh-CN',
     fontSize: asFiniteInt(raw.fontSize, DEFAULT_SETTINGS.fontSize, 8, 40),
     tabSize: asFiniteInt(raw.tabSize, DEFAULT_SETTINGS.tabSize, 1, 16),
     insertSpaces: typeof raw.insertSpaces === 'boolean' ? raw.insertSpaces : DEFAULT_SETTINGS.insertSpaces,

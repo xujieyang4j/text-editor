@@ -89,6 +89,9 @@ const api = {
   writeSettings: (settings: Settings): Promise<void> =>
     ipcRenderer.invoke(IPC.settingsWrite, settings),
 
+  setMenuLocale: (locale: import('../shared/ipc.js').UiLocale): Promise<void> =>
+    ipcRenderer.invoke(IPC.menuSetLocale, locale),
+
   importSublimeSettings: (): Promise<Settings | null> =>
     ipcRenderer.invoke(IPC.settingsImportSublime),
 

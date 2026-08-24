@@ -1,4 +1,5 @@
-import type { WorkspaceMatch, WorkspaceReplaceRequest, WorkspaceSearchRequest } from '../../shared/ipc.js'
+import type { WorkspaceMatch, WorkspaceReplaceRequest, WorkspaceSearchRequest, UiLocale } from '../../shared/ipc.js'
+import { translate } from '../../shared/i18n.js'
 import { baseName } from './documents.js'
 
 export interface WorkspaceSearchCallbacks {
@@ -33,6 +34,13 @@ export class WorkspaceSearchPanel {
   private readonly summary: HTMLDivElement
   private readonly searchHistory: HTMLDataListElement
   private readonly replaceHistory: HTMLDataListElement
+  private readonly title: HTMLElement
+  private readonly findButton: HTMLButtonElement
+  private readonly replaceButton: HTMLButtonElement
+  private readonly caseLabel: HTMLLabelElement
+  private readonly wordLabel: HTMLLabelElement
+  private readonly regexLabel: HTMLLabelElement
+  private locale: UiLocale = 'zh-CN'
   private replaceVisible = false
   private searchToken = 0
   private previewReady = false
@@ -43,14 +51,14 @@ export class WorkspaceSearchPanel {
 
     const header = document.createElement('div')
     header.className = 'workspace-search-header'
-    const title = document.createElement('strong')
-    title.textContent = 'Find in Files'
+    this.title = document.createElement('strong')
+    this.title.textContent = translate(this.locale, 'findInFiles')
     const close = document.createElement('button')
     close.className = 'panel-button'
     close.textContent = '×'
     close.title = 'Close'
     close.addEventListener('click', () => this.hide())
-    header.append(title, close)
+    header.append(this.title, close)
 
     this.query = this.input('Find')
     this.replacement = this.input('Replace')
@@ -65,16 +73,19 @@ export class WorkspaceSearchPanel {
 
     const options = document.createElement('div')
     options.className = 'workspace-search-options'
-    this.caseSensitive = this.checkbox('Case')
-    this.wholeWord = this.checkbox('Word')
-    this.regex = this.checkbox('Regex')
-    options.append(this.caseSensitive.parentElement!, this.wholeWord.parentElement!, this.regex.parentElement!)
+    this.caseSensitive = this.checkbox('区分大小写')
+    this.wholeWord = this.checkbox('全词')
+    this.regex = this.checkbox('正则')
+    this.caseLabel = this.caseSensitive.parentElement as HTMLLabelElement
+    this.wordLabel = this.wholeWord.parentElement as HTMLLabelElement
+    this.regexLabel = this.regex.parentElement as HTMLLabelElement
+    options.append(this.caseLabel, this.wordLabel, this.regexLabel)
 
     const actions = document.createElement('div')
     actions.className = 'workspace-search-actions'
-    const find = this.button('Find All', () => void this.search())
-    const replace = this.button('Replace All', () => void this.replace())
-    actions.append(find, replace)
+    this.findButton = this.button(translate(this.locale, 'findAll'), () => void this.search())
+    this.replaceButton = this.button(translate(this.locale, 'replaceAll'), () => void this.replace())
+    actions.append(this.findButton, this.replaceButton)
 
     this.summary = document.createElement('div')
     this.summary.className = 'workspace-search-summary'
@@ -118,6 +129,20 @@ export class WorkspaceSearchPanel {
     this.root.classList.add('hidden')
   }
 
+  setLocale(locale: UiLocale): void {
+    this.locale = locale
+    this.title.textContent = translate(locale, 'findInFiles')
+    this.query.placeholder = translate(locale, 'findPlaceholder')
+    this.replacement.placeholder = translate(locale, 'replacePlaceholder')
+    this.include.placeholder = translate(locale, 'includePlaceholder')
+    this.exclude.placeholder = translate(locale, 'excludePlaceholder')
+    this.findButton.textContent = translate(locale, 'findAll')
+    this.replaceButton.textContent = translate(locale, 'replaceAll')
+    this.replaceCheckboxLabel(this.caseLabel, this.caseSensitive, locale === 'zh-CN' ? '区分大小写' : 'Case')
+    this.replaceCheckboxLabel(this.wordLabel, this.wholeWord, locale === 'zh-CN' ? '全词' : 'Word')
+    this.replaceCheckboxLabel(this.regexLabel, this.regex, locale === 'zh-CN' ? '正则' : 'Regex')
+  }
+
   private input(placeholder: string): HTMLInputElement {
     const input = document.createElement('input')
     input.className = 'workspace-search-input'
@@ -148,6 +173,10 @@ export class WorkspaceSearchPanel {
       option.value = value
       return option
     }))
+  }
+
+  private replaceCheckboxLabel(label: HTMLLabelElement, input: HTMLInputElement, text: string): void {
+    label.replaceChildren(input, document.createTextNode(text))
   }
 
   private request(): WorkspaceSearchRequest | null {

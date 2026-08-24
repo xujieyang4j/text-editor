@@ -16,6 +16,7 @@ export const IPC = {
   openInBrowser: 'shell:open-in-browser',
   settingsRead: 'settings:read',
   settingsWrite: 'settings:write',
+  menuSetLocale: 'menu:set-locale',
   settingsImportSublime: 'settings:import-sublime',
   sessionRead: 'session:read',
   sessionWrite: 'session:write',
@@ -101,6 +102,9 @@ export type TextEncoding = 'utf8' | 'utf8bom' | 'utf16le' | 'utf16be'
 
 /** UI and editor color schemes are independent from language syntax selection. */
 export type ColorScheme = 'dark' | 'light' | 'solarized-dark' | 'dracula'
+
+/** Interface language. Chinese is the product default; English remains available per user. */
+export type UiLocale = 'zh-CN' | 'en-US'
 
 /** Physical newline convention used when a document is saved. */
 export type LineEnding = 'LF' | 'CRLF' | 'CR'
@@ -382,6 +386,7 @@ export interface SavedMacro {
  * Mirrors the subset of Sublime's Preferences that we support.
  */
 export interface Settings {
+  locale: UiLocale
   fontSize: number
   tabSize: number
   /** Insert spaces instead of a literal tab character. */
@@ -411,6 +416,7 @@ export interface Settings {
 
 /** Built-in defaults, used when no settings file exists yet. */
 export const DEFAULT_SETTINGS: Settings = {
+  locale: 'zh-CN',
   fontSize: 14,
   tabSize: 4,
   insertSpaces: true,
@@ -671,6 +677,8 @@ export type MenuEvent =
   | 'toggle-distraction-free'
   | 'cycle-auto-save'
   | 'toggle-spell-check'
+  | 'set-ui-language-zh'
+  | 'set-ui-language-en'
   | 'command-palette'
   | 'goto-anything'
   | 'goto-symbol'

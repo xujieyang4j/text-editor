@@ -1,4 +1,6 @@
 import type { MenuEvent } from '../../shared/ipc.js'
+import { commandTitle } from '../../shared/i18n.js'
+import type { UiLocale } from '../../shared/ipc.js'
 
 /**
  * A user-invokable command. The `id` doubles as the {@link MenuEvent} name so
@@ -131,8 +133,14 @@ export const COMMANDS: Command[] = [
   , { id: 'import-sublime-settings', title: 'Preferences: Import Sublime Settings…' }
   , { id: 'import-sublime-snippet', title: 'Tools: Import Sublime Snippet…' }
   , { id: 'import-sublime-keymap', title: 'Preferences: Import Sublime Keymap…' }
+  , { id: 'set-ui-language-zh', title: 'Preferences: Switch to Simplified Chinese' }
+  , { id: 'set-ui-language-en', title: 'Preferences: Switch to English' }
   , { id: 'lsp-hover', title: 'LSP: Show Hover', hint: 'Ctrl/Cmd+Shift+Space' }
   , { id: 'lsp-definition', title: 'LSP: Go to Definition', hint: 'F12' }
   , { id: 'lsp-references', title: 'LSP: Find References', hint: 'Shift+F12' }
   , { id: 'lsp-rename', title: 'LSP: Rename Symbol', hint: 'F2' }
 ]
+
+export function localizedCommands(locale: UiLocale): Command[] {
+  return COMMANDS.map((command) => ({ ...command, title: commandTitle(locale, command.id, command.title) }))
+}

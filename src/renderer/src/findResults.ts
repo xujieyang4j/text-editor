@@ -1,4 +1,5 @@
-import type { WorkspaceMatch } from '../../shared/ipc.js'
+import type { WorkspaceMatch, UiLocale } from '../../shared/ipc.js'
+import { translate } from '../../shared/i18n.js'
 import { baseName } from './documents.js'
 
 export interface FindResultsCallbacks {
@@ -14,13 +15,15 @@ export class FindResultsView {
   private readonly list: HTMLUListElement
   private matches: WorkspaceMatch[] = []
   private activeIndex = -1
+  private locale: UiLocale = 'zh-CN'
+  private query = ''
 
   constructor(private readonly callbacks: FindResultsCallbacks) {
     this.root = document.createElement('div')
     this.root.className = 'find-results-view hidden'
     const header = document.createElement('div')
     header.className = 'find-results-header'
-    header.textContent = 'Find Results'
+    header.textContent = translate(this.locale, 'findResults')
     this.list = document.createElement('ul')
     this.list.className = 'find-results-list'
     this.root.append(header, this.list)
@@ -29,16 +32,23 @@ export class FindResultsView {
   get element(): HTMLElement { return this.root }
 
   setResults(query: string, matches: WorkspaceMatch[]): void {
+    this.query = query
     this.matches = matches
     this.activeIndex = matches.length > 0 ? 0 : -1
     const header = this.root.querySelector<HTMLElement>('.find-results-header')
-    if (header) header.textContent = `Find Results — “${query}” (${matches.length})`
+    if (header) header.textContent = `${translate(this.locale, 'findResults')} — “${query}” (${matches.length})`
     this.render()
   }
 
   show(): void { this.root.classList.remove('hidden') }
   hide(): void { this.root.classList.add('hidden') }
   get count(): number { return this.matches.length }
+
+  setLocale(locale: UiLocale): void {
+    this.locale = locale
+    const header = this.root.querySelector<HTMLElement>('.find-results-header')
+    if (header) header.textContent = this.query ? `${translate(locale, 'findResults')} — “${this.query}” (${this.matches.length})` : translate(locale, 'findResults')
+  }
 
   move(delta: number): WorkspaceMatch | null {
     if (this.matches.length === 0) return null

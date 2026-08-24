@@ -9,9 +9,10 @@ import { ExtensionHost } from './extensionHost.js'
 import { incrementalChanges, revertIncrementalChange, type IncrementalChange } from './incrementalDiff.js'
 import { BuildPanel } from './buildPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
-import { COMMANDS } from './commands.js'
+import { COMMANDS, localizedCommands } from './commands.js'
 import { extractSymbols } from './symbols.js'
 import { fuzzyFilter } from './fuzzy.js'
+import { makeTranslator, type TranslationKey } from '../../shared/i18n.js'
 import {
   createUntitled,
   createFromFile,
@@ -161,6 +162,8 @@ class App {
   private browserBtn = document.getElementById('browser-btn') as HTMLButtonElement
   private previewBtn = document.getElementById('preview-btn') as HTMLButtonElement
 
+  private t: (key: TranslationKey) => string = makeTranslator(DEFAULT_SETTINGS.locale)
+
   private get editor(): Editor {
     return this.groups[this.activeGroup]?.editor ?? this.primaryEditor
   }
@@ -278,6 +281,8 @@ class App {
       this.settings = { ...DEFAULT_SETTINGS }
     }
     document.documentElement.dataset.colorScheme = this.settings.colorScheme
+    void window.editor.setMenuLocale(this.settings.locale).catch(() => undefined)
+    this.applyLocale(this.settings.locale)
     this.applyDistractionFreeMode(this.settings.distractionFree)
 
     this.primaryEditor = new Editor(
@@ -313,6 +318,7 @@ class App {
         onOpenProblem: (problem) => { void this.openBuildProblem(problem) }
       }
     )
+    this.applyLocale(this.settings.locale)
 
     try {
       await this.restoreSession()
@@ -439,6 +445,12 @@ class App {
         break
       case 'import-sublime-keymap':
         void this.importSublimeKeymap()
+        break
+      case 'set-ui-language-zh':
+        this.setLocale('zh-CN')
+        break
+      case 'set-ui-language-en':
+        this.setLocale('en-US')
         break
       case 'lsp-hover':
         void this.showLspHover()
@@ -1961,7 +1973,7 @@ class App {
   private async openRecentProject(): Promise<void> {
     const projects = await window.editor.readRecentProjects()
     if (projects.length === 0) {
-      this.showError('No recent projects are available.')
+      this.showError(this.t('noRecentProjects'))
       return
     }
     this.palette.open({
@@ -1975,7 +1987,7 @@ class App {
     try {
       const files = await window.editor.readRecentFiles()
       if (files.length === 0) {
-        this.showError('No recent files are available.')
+        this.showError(this.t('noRecentFiles'))
         return
       }
       this.palette.open({
@@ -2512,7 +2524,9 @@ class App {
       this.autoSaveTimer = null
     }
     this.persistSettings()
-    this.statusSelection.textContent = `Auto Save: ${next.replaceAll('_', ' ')}`
+    this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+      ? `自动保存：${next === 'off' ? '关闭' : next === 'after_delay' ? '延时保存' : '失焦保存'}`
+      : `Auto Save: ${next.replaceAll('_', ' ')}`
     if (next === 'after_delay') this.scheduleAutoSave()
   }
 
@@ -3093,7 +3107,7 @@ class App {
 
   /** Ctrl/Cmd+Shift+P — fuzzy list of all commands. */
   private openCommandPalette(): void {
-    const items: PaletteItem[] = COMMANDS.map((c) => ({
+    const items: PaletteItem[] = localizedCommands(this.settings.locale).map((c) => ({
       label: c.title,
       hint: c.hint,
       value: c.id
@@ -3111,7 +3125,7 @@ class App {
       items.push({ label: `${command.plugin.name}: ${command.title}`, detail: id, value: { kind: 'extension-command', id } })
     }
     this.palette.open({
-      placeholder: 'Type a command…',
+      placeholder: this.settings.locale === 'zh-CN' ? '输入命令…' : 'Type a command…',
       items,
       onAccept: (item) => {
         if (typeof item.value === 'object' && item.value && (item.value as { kind?: string }).kind === 'plugin-command') {
@@ -3127,6 +3141,36 @@ class App {
         this.run(item.value as MenuEvent)
       }
     })
+  }
+
+  private applyLocale(locale: Settings['locale']): void {
+    this.t = makeTranslator(locale)
+    document.documentElement.lang = locale
+    document.title = this.t('appTitle')
+    this.tree?.setLocale(locale)
+    if (!this.folder) this.workspaceName.textContent = this.t('noFolder')
+    this.statusLanguage.textContent = this.active?.language === 'Plain Text' || !this.active
+      ? this.t('plainText')
+      : this.active.language
+    if (this.buildPanel) this.buildPanel.setLocale(locale)
+    if (this.gitPanel) this.gitPanel.setLocale(locale)
+    if (this.findResults) this.findResults.setLocale(locale)
+    if (this.searchPanel) this.searchPanel.setLocale(locale)
+    if (this.groups.length > 0) {
+      this.updateStatus()
+      this.syncEditorChrome()
+    }
+  }
+
+  private setLocale(locale: Settings['locale']): void {
+    if (this.settings.locale === locale) return
+    this.settings.locale = locale
+    this.applyLocale(locale)
+    this.persistSettings()
+    void window.editor.setMenuLocale(locale).catch((error: unknown) =>
+      this.showError(locale === 'zh-CN' ? '界面语言切换失败。' : 'Could not switch interface language.', error)
+    )
+    this.statusSelection.textContent = locale === 'zh-CN' ? '界面语言：简体中文' : 'Interface language: English'
   }
 
   /** Ctrl/Cmd+P — fuzzy list of workspace files, with :line, @symbol and #project-symbol modes. */
@@ -3409,7 +3453,7 @@ class App {
   /** Refresh all status-bar fields for the active document. */
   private updateStatus(): void {
     const doc = this.active
-    this.statusLanguage.textContent = doc?.language ?? 'Plain Text'
+    this.statusLanguage.textContent = !doc || doc.language === 'Plain Text' ? this.t('plainText') : doc.language
     this.statusEol.textContent = doc?.eol ?? 'LF'
     this.statusEncoding.textContent = doc?.encoding === 'utf8bom' ? 'UTF-8 BOM' : doc?.encoding.toUpperCase() ?? 'UTF-8'
     this.updatePositionStatus(this.editor.view.state)
@@ -3420,10 +3464,14 @@ class App {
     const sel = state.selection.main
     const line = state.doc.lineAt(sel.head)
     const col = sel.head - line.from + 1
-    this.statusPosition.textContent = `Ln ${line.number}, Col ${col}`
+    this.statusPosition.textContent = this.settings.locale === 'zh-CN'
+      ? `行 ${line.number}，列 ${col}`
+      : `Ln ${line.number}, Col ${col}`
 
     const len = Math.abs(sel.to - sel.from)
-    this.statusSelection.textContent = len > 0 ? `(${len} selected)` : ''
+    this.statusSelection.textContent = len > 0
+      ? (this.settings.locale === 'zh-CN' ? `（已选择 ${len} 个字符）` : `(${len} selected)`)
+      : ''
   }
 
   /** Keep filesystem failures actionable without exposing low-level stacks in the UI. */

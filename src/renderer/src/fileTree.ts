@@ -1,4 +1,4 @@
-import type { DirEntry } from '../../shared/ipc.js'
+import type { DirEntry, UiLocale } from '../../shared/ipc.js'
 
 /** Callback fired when a file (not a folder) is activated in the tree. */
 type FileOpenHandler = (path: string) => void
@@ -31,6 +31,7 @@ export class FileTree {
   private rootEntries: TreeEntry[] = []
   /** Invalidates async expansion restores when the workspace changes. */
   private renderVersion = 0
+  private locale: UiLocale = 'zh-CN'
 
   constructor(container: HTMLElement, handlers: FileTreeHandlers) {
     this.container = container
@@ -61,6 +62,10 @@ export class FileTree {
   /** Re-render existing entries while preserving expansion, for callers without new data. */
   refresh(): void {
     if (this.rootEntries.length > 0) this.render(this.rootEntries, true)
+  }
+
+  setLocale(locale: UiLocale): void {
+    this.locale = locale
   }
 
   /** Build a <ul> for a set of sibling entries at the given depth. */
@@ -155,13 +160,13 @@ export class FileTree {
       menu.appendChild(button)
     }
     if (entry.isDirectory) {
-      action('New File…', () => this.handlers.onCreate(entry.path, false))
-      action('New Folder…', () => this.handlers.onCreate(entry.path, true))
+      action(this.locale === 'zh-CN' ? '新建文件…' : 'New File…', () => this.handlers.onCreate(entry.path, false))
+      action(this.locale === 'zh-CN' ? '新建文件夹…' : 'New Folder…', () => this.handlers.onCreate(entry.path, true))
     }
-    action('Rename…', () => this.handlers.onRename(entry.path))
-    action('Move To…', () => this.handlers.onMove(entry.path))
-    action('Move to Trash', () => this.handlers.onDelete(entry.path))
-    action('Reveal in Folder', () => this.handlers.onReveal(entry.path))
+    action(this.locale === 'zh-CN' ? '重命名…' : 'Rename…', () => this.handlers.onRename(entry.path))
+    action(this.locale === 'zh-CN' ? '移动到…' : 'Move To…', () => this.handlers.onMove(entry.path))
+    action(this.locale === 'zh-CN' ? '移到废纸篓' : 'Move to Trash', () => this.handlers.onDelete(entry.path))
+    action(this.locale === 'zh-CN' ? '在文件管理器中显示' : 'Reveal in Folder', () => this.handlers.onReveal(entry.path))
     document.body.appendChild(menu)
 
     const dismiss = (event: MouseEvent): void => {
