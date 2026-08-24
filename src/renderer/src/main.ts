@@ -197,6 +197,8 @@ class App {
       getRoot: () => this.folder,
       getRoots: () => [...this.folders],
       getProjectExclude: () => this.project.exclude,
+      getSearchHistory: () => this.settings.searchHistory,
+      getReplaceHistory: () => this.settings.replaceHistory,
       openMatch: (match) => {
         void this.openPath(match.path).then(() => this.editor.gotoLineNumber(match.line))
       },
@@ -691,6 +693,12 @@ class App {
         this.settings.distractionFree = !this.settings.distractionFree
         this.applyDistractionFreeMode(this.settings.distractionFree)
         this.persistSettings()
+        break
+      case 'toggle-spell-check':
+        this.settings.spellCheck = !this.settings.spellCheck
+        this.editor.setSpellCheck(this.settings.spellCheck && !!this.active && (this.isMarkdownDoc(this.active) || this.active.language === 'Plain Text'))
+        this.persistSettings()
+        this.statusSelection.textContent = `Spell Check: ${this.settings.spellCheck ? 'on' : 'off'}`
         break
       case 'command-palette':
         this.openCommandPalette()

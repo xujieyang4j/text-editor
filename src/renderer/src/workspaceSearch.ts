@@ -5,6 +5,8 @@ export interface WorkspaceSearchCallbacks {
   getRoot: () => string | null
   getRoots: () => string[]
   getProjectExclude: () => string[]
+  getSearchHistory: () => string[]
+  getReplaceHistory: () => string[]
   openMatch: (match: WorkspaceMatch) => void
   notify: (message: string, error?: unknown) => void
   afterReplace: () => void
@@ -29,6 +31,8 @@ export class WorkspaceSearchPanel {
   private readonly regex: HTMLInputElement
   private readonly results: HTMLUListElement
   private readonly summary: HTMLDivElement
+  private readonly searchHistory: HTMLDataListElement
+  private readonly replaceHistory: HTMLDataListElement
   private replaceVisible = false
   private searchToken = 0
   private previewReady = false
@@ -50,6 +54,12 @@ export class WorkspaceSearchPanel {
 
     this.query = this.input('Find')
     this.replacement = this.input('Replace')
+    this.searchHistory = document.createElement('datalist')
+    this.searchHistory.id = 'lumen-workspace-search-history'
+    this.replaceHistory = document.createElement('datalist')
+    this.replaceHistory.id = 'lumen-workspace-replace-history'
+    this.query.setAttribute('list', this.searchHistory.id)
+    this.replacement.setAttribute('list', this.replaceHistory.id)
     this.include = this.input('Include: e.g. **/*.ts')
     this.exclude = this.input('Exclude: e.g. **/node_modules/**')
 
@@ -72,6 +82,7 @@ export class WorkspaceSearchPanel {
     this.results.className = 'workspace-search-results'
 
     this.root.append(header, this.query, this.replacement, this.include, this.exclude, options, actions, this.summary, this.results)
+    document.body.append(this.searchHistory, this.replaceHistory)
     document.body.appendChild(this.root)
 
     this.query.addEventListener('keydown', (event) => {
@@ -94,6 +105,8 @@ export class WorkspaceSearchPanel {
     }
     this.replaceVisible = withReplace
     this.previewReady = false
+    this.setHistory(this.searchHistory, this.callbacks.getSearchHistory())
+    this.setHistory(this.replaceHistory, this.callbacks.getReplaceHistory())
     this.root.classList.remove('hidden')
     this.root.classList.toggle('replace-mode', withReplace)
     this.replacement.hidden = !withReplace
@@ -127,6 +140,14 @@ export class WorkspaceSearchPanel {
     button.textContent = label
     button.addEventListener('click', onClick)
     return button
+  }
+
+  private setHistory(list: HTMLDataListElement, values: string[]): void {
+    list.replaceChildren(...values.slice(0, 50).map((value) => {
+      const option = document.createElement('option')
+      option.value = value
+      return option
+    }))
   }
 
   private request(): WorkspaceSearchRequest | null {

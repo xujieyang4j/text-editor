@@ -165,6 +165,7 @@ export function buildMenu(): void {
         item('Focus Previous Group', 'focus-prev-group', 'CmdOrCtrl+Alt+['),
         item('Toggle Minimap', 'toggle-minimap'),
         item('Distraction Free Mode', 'toggle-distraction-free', 'Shift+F11'),
+        item('Toggle Spell Check', 'toggle-spell-check'),
         item('Toggle Word Wrap', 'toggle-word-wrap', 'Alt+Z'),
         item('Toggle Theme', 'toggle-theme', 'CmdOrCtrl+K'),
         item('Select Color Scheme…', 'select-color-scheme'),

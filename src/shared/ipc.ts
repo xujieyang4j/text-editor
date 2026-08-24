@@ -670,6 +670,7 @@ export type MenuEvent =
   | 'toggle-minimap'
   | 'toggle-distraction-free'
   | 'cycle-auto-save'
+  | 'toggle-spell-check'
   | 'command-palette'
   | 'goto-anything'
   | 'goto-symbol'

@@ -80,6 +80,7 @@ export const COMMANDS: Command[] = [
   { id: 'toggle-minimap', title: 'View: Toggle Minimap' },
   { id: 'toggle-distraction-free', title: 'View: Toggle Distraction Free Mode', hint: 'Shift+F11' },
   { id: 'cycle-auto-save', title: 'File: Cycle Auto Save Mode' },
+  { id: 'toggle-spell-check', title: 'View: Toggle Spell Check' },
   { id: 'toggle-word-wrap', title: 'View: Toggle Word Wrap', hint: 'Alt+Z' },
   { id: 'toggle-theme', title: 'View: Toggle Theme', hint: 'Ctrl/Cmd+K' },
   { id: 'font-zoom-in', title: 'View: Zoom In', hint: 'Ctrl/Cmd+=' },
