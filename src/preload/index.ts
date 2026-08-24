@@ -14,6 +14,7 @@ import {
   type WorkspaceSearchRequest,
   type WorkspaceReplaceRequest,
   type WorkspaceReplaceResult,
+  type WorkspaceReplacePreview,
   type WorkspaceSymbol,
   type FileChangeEvent,
   type BuildRequest,
@@ -107,6 +108,12 @@ const api = {
   /** Apply a controlled workspace-wide replacement. */
   replaceWorkspace: (request: WorkspaceReplaceRequest): Promise<WorkspaceReplaceResult> =>
     ipcRenderer.invoke(IPC.workspaceReplace, request),
+
+  previewWorkspaceReplace: (request: WorkspaceReplaceRequest): Promise<WorkspaceReplacePreview> =>
+    ipcRenderer.invoke(IPC.workspaceReplacePreview, request),
+
+  undoWorkspaceReplace: (token: string): Promise<WorkspaceReplaceResult> =>
+    ipcRenderer.invoke(IPC.workspaceReplaceUndo, token),
 
   listWorkspaceSymbols: (root: string): Promise<WorkspaceSymbol[]> =>
     ipcRenderer.invoke(IPC.workspaceSymbols, root),

@@ -8,6 +8,8 @@ export interface WorkspaceSearchCallbacks {
   notify: (message: string, error?: unknown) => void
   afterReplace: () => void
   onResults: (query: string, matches: WorkspaceMatch[]) => void
+  onReplaceComplete: (undoToken: string | undefined, files: number, replacements: number) => void
+  onHistory: (search: string, replacement?: string) => void
 }
 
 /**
@@ -28,6 +30,7 @@ export class WorkspaceSearchPanel {
   private readonly summary: HTMLDivElement
   private replaceVisible = false
   private searchToken = 0
+  private previewReady = false
 
   constructor(private readonly callbacks: WorkspaceSearchCallbacks) {
     this.root = document.createElement('div')
@@ -89,6 +92,7 @@ export class WorkspaceSearchPanel {
       return
     }
     this.replaceVisible = withReplace
+    this.previewReady = false
     this.root.classList.remove('hidden')
     this.root.classList.toggle('replace-mode', withReplace)
     this.replacement.hidden = !withReplace
@@ -153,6 +157,7 @@ export class WorkspaceSearchPanel {
       const matches = await window.editor.searchWorkspace(request)
       if (token !== this.searchToken) return
       this.renderResults(matches)
+      this.callbacks.onHistory(request.query)
       this.callbacks.onResults(request.query, matches)
       this.hide()
     } catch (error) {
@@ -191,13 +196,24 @@ export class WorkspaceSearchPanel {
       this.callbacks.notify('Enter a search term first.')
       return
     }
-    if (!window.confirm(`Replace every match of “${search.query}” in the workspace?`)) return
     const request: WorkspaceReplaceRequest = { ...search, replacement: this.replacement.value }
     try {
+      if (!this.previewReady) {
+        const preview = await window.editor.previewWorkspaceReplace(request)
+        this.summary.textContent = `Preview: ${preview.replacements} replacement${preview.replacements === 1 ? '' : 's'} in ${preview.files} file${preview.files === 1 ? '' : 's'}. Click Replace All again to apply.`
+        this.renderResults(preview.matches)
+        this.callbacks.onResults(`Replace Preview: ${search.query}`, preview.matches)
+        this.previewReady = true
+        return
+      }
+      if (!window.confirm(`Apply the previewed replacements for “${search.query}”?`)) return
       const result = await window.editor.replaceWorkspace(request)
       this.summary.textContent = `Replaced ${result.replacements} match${result.replacements === 1 ? '' : 'es'} in ${result.files} file${result.files === 1 ? '' : 's'}.`
       this.results.replaceChildren()
+      this.previewReady = false
       this.callbacks.afterReplace()
+      this.callbacks.onReplaceComplete(result.undoToken, result.files, result.replacements)
+      this.callbacks.onHistory(search.query, this.replacement.value)
     } catch (error) {
       this.callbacks.notify('Replace in Files could not complete.', error)
     }

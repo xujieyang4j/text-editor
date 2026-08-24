@@ -27,6 +27,8 @@ export const IPC = {
   openExternal: 'shell:open-external',
   workspaceSearch: 'workspace:search',
   workspaceReplace: 'workspace:replace',
+  workspaceReplacePreview: 'workspace:replace-preview',
+  workspaceReplaceUndo: 'workspace:replace-undo',
   workspaceSymbols: 'workspace:symbols',
   fileCreate: 'file:create',
   fileRename: 'file:rename',
@@ -134,6 +136,13 @@ export interface WorkspaceReplaceRequest extends WorkspaceSearchRequest {
 export interface WorkspaceReplaceResult {
   files: number
   replacements: number
+  undoToken?: string
+}
+
+export interface WorkspaceReplacePreview {
+  files: number
+  replacements: number
+  matches: WorkspaceMatch[]
 }
 
 /** Lightweight project-wide symbol entry, suitable for fast navigation. */
@@ -286,6 +295,8 @@ export interface Settings {
   /** Optional project-specific command used by Build. */
   buildCommand: string
   colorScheme: ColorScheme
+  searchHistory: string[]
+  replaceHistory: string[]
 }
 
 /** Built-in defaults, used when no settings file exists yet. */
@@ -301,7 +312,9 @@ export const DEFAULT_SETTINGS: Settings = {
   rulers: [],
   maxFileSizeMB: 20,
   buildCommand: '',
-  colorScheme: 'dark'
+  colorScheme: 'dark',
+  searchHistory: [],
+  replaceHistory: []
 }
 
 /**
@@ -532,6 +545,7 @@ export type MenuEvent =
   | 'open-in-browser'
   | 'find-in-files'
   | 'replace-in-files'
+  | 'undo-replace-in-files'
   | 'find-results-next'
   | 'find-results-prev'
   | 'goto-project-symbol'

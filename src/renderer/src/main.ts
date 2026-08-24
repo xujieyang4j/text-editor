@@ -106,6 +106,7 @@ class App {
   private lspDocumentVersion = new Map<string, number>()
   private buildOutputText = ''
   private activeBuildSystem: BuildSystem | null = null
+  private replaceUndoToken: string | null = null
   private windowSessionId = new URLSearchParams(location.hash.slice(1)).get('window') ?? 'legacy'
   private pendingKeySequence: string[] = []
   private pendingKeyTimer: number | null = null
@@ -169,7 +170,14 @@ class App {
         void this.reloadWorkspaceTree()
         this.renderTabs()
       },
-      onResults: (query, matches) => this.showFindResults(query, matches)
+      onResults: (query, matches) => this.showFindResults(query, matches),
+      onReplaceComplete: (token, files, replacements) => {
+        this.replaceUndoToken = token ?? null
+        this.statusSelection.textContent = token
+          ? `Replaced ${replacements} match${replacements === 1 ? '' : 'es'} in ${files} file${files === 1 ? '' : 's'} — undo is available`
+          : `Replaced ${replacements} match${replacements === 1 ? '' : 'es'}`
+      },
+      onHistory: (search, replacement) => this.rememberSearchHistory(search, replacement)
     })
     this.findResults = new FindResultsView({
       onOpenMatch: (match) => { void this.openWorkspaceMatch(match) }
@@ -410,6 +418,9 @@ class App {
         break
       case 'replace-in-files':
         this.searchPanel.show(true)
+        break
+      case 'undo-replace-in-files':
+        void this.undoReplaceInFiles()
         break
       case 'find-results-next':
         this.findResults.move(1)
@@ -1333,6 +1344,32 @@ class App {
     const state = this.editor.view.state
     const line = state.doc.line(Math.max(1, Math.min(state.doc.lines, match.line)))
     this.editor.gotoPos(Math.min(line.to, line.from + match.column - 1))
+  }
+
+  private async undoReplaceInFiles(): Promise<void> {
+    if (!this.replaceUndoToken) {
+      this.showError('There is no recent workspace replace to undo.')
+      return
+    }
+    try {
+      const result = await window.editor.undoWorkspaceReplace(this.replaceUndoToken)
+      this.replaceUndoToken = null
+      this.statusSelection.textContent = `Restored ${result.files} file${result.files === 1 ? '' : 's'}`
+      for (const doc of this.docs) {
+        if (doc.path && !isDirty(doc)) await this.handleExternalFileChange(doc.path)
+      }
+      await this.reloadWorkspaceTree()
+    } catch (error) {
+      this.replaceUndoToken = null
+      this.showError('Workspace replace could not be undone.', error)
+    }
+  }
+
+  private rememberSearchHistory(search: string, replacement?: string): void {
+    const add = (items: string[], value: string): string[] => [value, ...items.filter((item) => item !== value)].slice(0, 50)
+    this.settings.searchHistory = add(this.settings.searchHistory, search)
+    if (replacement !== undefined) this.settings.replaceHistory = add(this.settings.replaceHistory, replacement)
+    this.persistSettings()
   }
 
   private showFindResults(query: string, matches: WorkspaceMatch[]): void {

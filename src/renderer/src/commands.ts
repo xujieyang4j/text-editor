@@ -37,6 +37,7 @@ export const COMMANDS: Command[] = [
   { id: 'replace', title: 'Find: Replace…', hint: 'Ctrl/Cmd+H' },
   { id: 'find-in-files', title: 'Find: Find in Files…', hint: 'Ctrl/Cmd+Shift+F' },
   { id: 'replace-in-files', title: 'Find: Replace in Files…', hint: 'Ctrl/Cmd+Shift+H' },
+  { id: 'undo-replace-in-files', title: 'Find: Undo Last Replace in Files' },
   { id: 'find-results-next', title: 'Find: Next Result', hint: 'F4' },
   { id: 'find-results-prev', title: 'Find: Previous Result', hint: 'Shift+F4' },
 

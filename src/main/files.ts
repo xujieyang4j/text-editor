@@ -24,6 +24,7 @@ import {
   type WorkspaceSearchRequest,
   type WorkspaceReplaceRequest,
   type WorkspaceReplaceResult,
+  type WorkspaceReplacePreview,
   type WorkspaceSymbol,
   type BuildRequest,
   type BuildOutput,
@@ -84,6 +85,7 @@ interface PersistentLanguageServer {
 const languageServers = new Map<string, PersistentLanguageServer>()
 const execFileAsync = promisify(execFile)
 const windowSessionIds = new Map<number, string>()
+const replaceUndoTransactions = new Map<string, { expiresAt: number; files: Map<string, Buffer> }>()
 const grantedFiles = new Map<number, Set<string>>()
 const grantedRoots = new Map<number, Set<string>>()
 
@@ -352,7 +354,13 @@ function sanitizeSettings(value: unknown): Settings {
     buildCommand: typeof raw.buildCommand === 'string' ? raw.buildCommand.slice(0, 1_000) : '',
     colorScheme: raw.colorScheme === 'light' || raw.colorScheme === 'solarized-dark' || raw.colorScheme === 'dracula'
       ? raw.colorScheme
-      : 'dark'
+      : 'dark',
+    searchHistory: Array.isArray(raw.searchHistory)
+      ? raw.searchHistory.filter((item): item is string => typeof item === 'string').map((item) => item.slice(0, 2_000)).slice(0, 50)
+      : [],
+    replaceHistory: Array.isArray(raw.replaceHistory)
+      ? raw.replaceHistory.filter((item): item is string => typeof item === 'string').map((item) => item.slice(0, 2_000)).slice(0, 50)
+      : []
   }
 }
 
@@ -575,15 +583,23 @@ async function searchWorkspace(request: WorkspaceSearchRequest): Promise<Workspa
       if (stat.size > MAX_SEARCH_FILE_BYTES) continue
       const opened = await readFile(file)
       if (opened.isBinary || opened.isTooLarge) continue
-      const lines = opened.content.split(/\r\n|\r|\n/)
-      for (let index = 0; index < lines.length && results.length < limit; index += 1) {
-        const line = lines[index]
-        re.lastIndex = 0
-        let match: RegExpExecArray | null
-        while ((match = re.exec(line)) && results.length < limit) {
-          results.push({ path: file, line: index + 1, column: match.index + 1, lineText: line, matchText: match[0] })
-          if (match[0].length === 0) re.lastIndex += 1
-        }
+      const content = opened.content
+      re.lastIndex = 0
+      let match: RegExpExecArray | null
+      while ((match = re.exec(content)) && results.length < limit) {
+        const before = content.slice(0, match.index)
+        const line = before.split('\n').length
+        const lineStart = before.lastIndexOf('\n') + 1
+        const lineEnd = content.indexOf('\n', match.index)
+        const sourceLine = content.slice(lineStart, lineEnd < 0 ? content.length : lineEnd)
+        results.push({
+          path: file,
+          line,
+          column: match.index - lineStart + 1,
+          lineText: sourceLine,
+          matchText: match[0]
+        })
+        if (match[0].length === 0) re.lastIndex += 1
       }
     } catch {
       // Files can disappear or become unreadable while a workspace search runs.
@@ -599,6 +615,7 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
   const files = await listFilesRecursive(root)
   let changedFiles = 0
   let replacements = 0
+  const undoFiles = new Map<string, Buffer>()
 
   for (const file of files) {
     if (
@@ -620,6 +637,7 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
         return request.replacement
       })
       if (count > 0) {
+        undoFiles.set(file, await fs.readFile(file))
         await fs.writeFile(file, encodeText(next, { encoding: opened.encoding, eol: opened.eol }))
         changedFiles += 1
         replacements += count
@@ -628,7 +646,30 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
       // Preserve a best-effort replace: inaccessible files are skipped, not partially rewritten.
     }
   }
-  return { files: changedFiles, replacements }
+  if (undoFiles.size === 0) return { files: changedFiles, replacements }
+  const undoToken = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  replaceUndoTransactions.set(undoToken, { expiresAt: Date.now() + 10 * 60_000, files: undoFiles })
+  return { files: changedFiles, replacements, undoToken }
+}
+
+async function previewWorkspaceReplace(request: WorkspaceReplaceRequest): Promise<WorkspaceReplacePreview> {
+  const matches = await searchWorkspace(request)
+  return {
+    files: new Set(matches.map((match) => match.path)).size,
+    replacements: matches.length,
+    matches
+  }
+}
+
+async function undoWorkspaceReplace(token: string): Promise<WorkspaceReplaceResult> {
+  const transaction = replaceUndoTransactions.get(token)
+  if (!transaction || transaction.expiresAt < Date.now()) {
+    replaceUndoTransactions.delete(token)
+    throw new Error('The workspace replace undo snapshot has expired.')
+  }
+  for (const [file, content] of transaction.files) await fs.writeFile(file, content)
+  replaceUndoTransactions.delete(token)
+  return { files: transaction.files.size, replacements: 0 }
 }
 
 /** Index symbols across a bounded workspace scan for Project Symbol navigation. */
@@ -1310,6 +1351,16 @@ export function registerFileHandlers(): void {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
     return replaceWorkspace(request)
+  })
+  ipcMain.handle(IPC.workspaceReplacePreview, async (event, request: WorkspaceReplaceRequest): Promise<WorkspaceReplacePreview> => {
+    assertTrustedSender(event)
+    assertGrantedRoot(event, request.root)
+    return previewWorkspaceReplace(request)
+  })
+  ipcMain.handle(IPC.workspaceReplaceUndo, async (event, token: unknown): Promise<WorkspaceReplaceResult> => {
+    assertTrustedSender(event)
+    if (typeof token !== 'string' || token.length > 200) throw new Error('Invalid workspace replace undo token.')
+    return undoWorkspaceReplace(token)
   })
   ipcMain.handle(IPC.workspaceSymbols, async (event, root: unknown): Promise<WorkspaceSymbol[]> => {
     assertTrustedSender(event)

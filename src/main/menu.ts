@@ -91,6 +91,7 @@ export function buildMenu(): void {
         item('Replace', 'replace', 'CmdOrCtrl+H'),
         item('Find in Files…', 'find-in-files', 'CmdOrCtrl+Shift+F'),
         item('Replace in Files…', 'replace-in-files', 'CmdOrCtrl+Shift+H'),
+        item('Undo Last Replace in Files', 'undo-replace-in-files'),
         item('Next Find Result', 'find-results-next', 'F4'),
         item('Previous Find Result', 'find-results-prev', 'Shift+F4')
       ]
