@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { maxEditableBytes, isBinaryBuffer } from '../../out-test/shared/filePolicy.js'
 import { score, fuzzyFilter } from '../../out-test/renderer/src/fuzzy.js'
 import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
+import { incrementalChanges, revertIncrementalChange } from '../../out-test/renderer/src/incrementalDiff.js'
 
 assert.equal(maxEditableBytes(1), 1024 * 1024)
 assert.equal(maxEditableBytes(0), 1024 * 1024)
@@ -14,4 +15,8 @@ assert.deepEqual(
   extractSymbols('class App {}\nfunction run() {}\n# Heading').map((symbol) => symbol.label),
   ['App', 'run', '# Heading']
 )
+const changes = incrementalChanges('one\ntwo\nfour', 'one\nthree\nfour\nfive')
+assert.deepEqual(changes.map((change) => [change.kind, change.line, change.lineCount]), [['modified', 2, 1], ['added', 4, 1]])
+assert.equal(revertIncrementalChange('one\nthree\nfour\nfive', changes[0]), 'one\ntwo\nfour\nfive')
+assert.deepEqual(incrementalChanges('one\ntwo', 'one').map((change) => [change.kind, change.line]), [['deleted', 2]])
 console.log('shared core tests passed')

@@ -72,6 +72,7 @@ export function buildMenu(): void {
         { role: 'selectAll' },
         { type: 'separator' },
         item('Toggle Comment', 'toggle-comment', 'CmdOrCtrl+/'),
+        item('Toggle Block Comment', 'toggle-block-comment', 'CmdOrCtrl+Shift+/'),
         item('Move Line Up', 'move-line-up', 'Alt+Up'),
         item('Move Line Down', 'move-line-down', 'Alt+Down'),
         item('Copy Line Up', 'copy-line-up', 'Shift+Alt+Up'),
@@ -83,6 +84,7 @@ export function buildMenu(): void {
         item('Lower Case', 'to-lower-case'),
         item('Title Case', 'to-title-case'),
         item('Join Lines', 'join-lines'),
+        item('Revert Current Change', 'revert-current-change'),
         item('Trim Trailing Whitespace', 'trim-trailing-whitespace'),
         item('Indent Selection', 'indent-selection', 'CmdOrCtrl+]'),
         item('Outdent Selection', 'outdent-selection', 'CmdOrCtrl+['),
@@ -104,6 +106,10 @@ export function buildMenu(): void {
         item('Duplicate Line/Selection', 'duplicate-selection', 'CmdOrCtrl+Shift+D'),
         item('Sort Lines', 'sort-lines'),
         item('Split Selection into Lines', 'split-selection-lines')
+        , item('Add Next Occurrence', 'select-next-occurrence', 'CmdOrCtrl+D')
+        , item('Select All Occurrences', 'select-all-occurrences', 'CmdOrCtrl+Shift+L')
+        , item('Add Cursor Above', 'add-cursor-above', 'CmdOrCtrl+Alt+Up')
+        , item('Add Cursor Below', 'add-cursor-below', 'CmdOrCtrl+Alt+Down')
       ]
     },
     {
@@ -125,6 +131,9 @@ export function buildMenu(): void {
         item('Toggle Bookmark', 'toggle-bookmark', 'CmdOrCtrl+F2'),
         item('Next Bookmark', 'next-bookmark', 'F2'),
         item('Previous Bookmark', 'prev-bookmark', 'Shift+F2')
+        , { type: 'separator' }
+        , item('Next Change', 'next-change', 'CmdOrCtrl+Alt+Down')
+        , item('Previous Change', 'prev-change', 'CmdOrCtrl+Alt+Up')
       ]
     },
     {
@@ -138,6 +147,7 @@ export function buildMenu(): void {
         { type: 'separator' },
         item('Toggle Sidebar', 'toggle-sidebar', 'CmdOrCtrl+B'),
         item('Toggle Split Editor', 'split-editor', 'CmdOrCtrl+Alt+2'),
+        item('Split Selected Tabs into Groups', 'split-selected-tabs'),
         { type: 'separator' },
         item('Layout: Single', 'layout-single'),
         item('Layout: Columns 2', 'layout-columns2'),

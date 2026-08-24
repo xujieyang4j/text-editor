@@ -6,6 +6,7 @@ import { FindResultsView } from './findResults.js'
 import { GitPanel } from './gitPanel.js'
 import { openMarketplace } from './marketplace.js'
 import { ExtensionHost } from './extensionHost.js'
+import { incrementalChanges, revertIncrementalChange, type IncrementalChange } from './incrementalDiff.js'
 import { BuildPanel } from './buildPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS } from './commands.js'
@@ -120,6 +121,8 @@ class App {
   private suppressRecordedTextEdits = false
   /** Avoid duplicate macro edits while a cloned document is mirrored into another group. */
   private syncingGroupContent = false
+  /** Ctrl/Cmd-click tab selection mirrors Sublime's tab multi-select. */
+  private selectedTabIds = new Set<string>()
 
   // Cached DOM references.
   private primaryTabBar = document.getElementById('tab-bar')!
@@ -447,6 +450,15 @@ class App {
       case 'find-results-prev':
         this.findResults.move(-1)
         break
+      case 'next-change':
+        this.navigateIncrementalChange(1)
+        break
+      case 'prev-change':
+        this.navigateIncrementalChange(-1)
+        break
+      case 'revert-current-change':
+        this.revertCurrentIncrementalChange()
+        break
       case 'goto-project-symbol':
         void this.openProjectSymbol()
         break
@@ -458,6 +470,9 @@ class App {
         break
       case 'split-editor':
         this.toggleSplitEditor()
+        break
+      case 'split-selected-tabs':
+        this.splitSelectedTabs()
         break
       case 'layout-single':
         this.setLayout('single')
@@ -623,6 +638,21 @@ class App {
         break
       case 'toggle-comment':
         this.editor.toggleComment()
+        break
+      case 'toggle-block-comment':
+        this.editor.toggleBlockComment()
+        break
+      case 'add-cursor-above':
+        this.editor.addCursorAbove()
+        break
+      case 'add-cursor-below':
+        this.editor.addCursorBelow()
+        break
+      case 'select-next-occurrence':
+        this.editor.selectNextOccurrence()
+        break
+      case 'select-all-occurrences':
+        this.editor.selectAllOccurrences()
         break
       case 'move-line-up':
         this.editor.moveLineUp()
@@ -853,6 +883,33 @@ class App {
       if (source.activeId === doc.id) source.activeId = source.docIds[0] ?? null
     }
     this.focusGroup(targetIndex)
+    this.renderTabs()
+    this.scheduleSessionSave()
+  }
+
+  private selectedDocs(group: EditorGroup): string[] {
+    const selected = group.docIds.filter((id) => this.selectedTabIds.has(id))
+    return selected.length > 0 ? selected : group.activeId ? [group.activeId] : []
+  }
+
+  /** Open the selected tabs side by side, preserving their independent views. */
+  private splitSelectedTabs(): void {
+    const source = this.groups[this.activeGroup]
+    if (!source) return
+    const ids = this.selectedDocs(source)
+    if (ids.length < 2) {
+      this.moveActiveToNextGroup(true)
+      return
+    }
+    const needed = Math.min(4, Math.max(2, ids.length))
+    this.setLayout(needed === 2 ? 'columns2' : needed === 3 ? 'columns3' : 'grid4')
+    for (const [index, id] of ids.entries()) {
+      const target = this.groups[index]
+      if (!target.docIds.includes(id)) target.docIds.push(id)
+      target.activeId = id
+    }
+    this.selectedTabIds.clear()
+    this.focusGroup(0)
     this.renderTabs()
     this.scheduleSessionSave()
   }
@@ -1104,6 +1161,7 @@ class App {
     this.hideFindResults()
     const activation = ++this.languageActivation
     group.editor.setDocument(doc.content, doc.groupStates.get(groupIndex) ?? doc.editorState)
+    this.refreshIncrementalDiff(doc, group.editor)
     group.editor.setDiagnostics((doc.diagnostics ?? []).map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
 
     // File-name based actions (HTML browser / Markdown preview) must appear
@@ -1154,6 +1212,7 @@ class App {
       }
     }
     this.renderTabs()
+    this.refreshIncrementalDiff(doc, group.editor)
     // Live-update the markdown preview if it's showing this doc.
     if (this.preview.isVisible && this.isMarkdownDoc(doc)) {
       this.preview.update(doc.content)
@@ -1171,6 +1230,43 @@ class App {
    */
   private isMarkdownDoc(doc: Doc): boolean {
     return isMarkdown(doc.name) || doc.language === 'Markdown'
+  }
+
+  /** Compute Sublime-style change markers against the last saved/disk version. */
+  private refreshIncrementalDiff(doc: Doc, editor = this.editor): IncrementalChange[] {
+    const changes = doc.path ? incrementalChanges(doc.savedContent, doc.content) : []
+    editor.setIncrementalChanges(changes)
+    return changes
+  }
+
+  private navigateIncrementalChange(direction: 1 | -1): void {
+    const doc = this.active
+    if (!doc?.path) {
+      this.statusSelection.textContent = 'Save the file before navigating changes'
+      return
+    }
+    const change = this.editor.nextIncrementalChange(direction)
+    this.statusSelection.textContent = change
+      ? `${change.kind} change at line ${change.line}`
+      : 'No unsaved changes'
+  }
+
+  private revertCurrentIncrementalChange(): void {
+    const doc = this.active
+    if (!doc?.path) {
+      this.showError('Save the file before reverting an incremental change.')
+      return
+    }
+    const changes = this.refreshIncrementalDiff(doc)
+    const line = this.editor.currentLine()
+    const change = changes.find((candidate) => line >= candidate.line && line < candidate.line + Math.max(1, candidate.lineCount))
+      ?? [...changes].reverse().find((candidate) => candidate.line <= line)
+    if (!change) {
+      this.statusSelection.textContent = 'No change at the cursor'
+      return
+    }
+    if (!window.confirm(`Revert this ${change.kind} change near line ${change.line}?`)) return
+    this.editor.replaceContent(revertIncrementalChange(doc.content, change))
   }
 
   /** Keep native and CSS visibility state in lockstep. */
@@ -2058,13 +2154,17 @@ class App {
     if (!doc || !group) return
     if (confirmClose && isDirty(doc) && !confirm(`"${doc.name}" has unsaved changes. Close anyway?`)) return
     if (doc.path && !this.closedStack.includes(doc.path)) this.closedStack.push(doc.path)
+    this.selectedTabIds.delete(id)
 
     const index = group.docIds.indexOf(id)
     group.docIds = group.docIds.filter((docId) => docId !== id)
     if (group.activeId === id) group.activeId = group.docIds[Math.max(0, Math.min(index, group.docIds.length - 1))] ?? null
 
     const stillVisible = this.groups.some((candidate) => candidate.docIds.includes(id))
-    if (!stillVisible) this.docs = this.docs.filter((candidate) => candidate.id !== id)
+    if (!stillVisible) {
+      this.docs = this.docs.filter((candidate) => candidate.id !== id)
+      this.selectedTabIds.delete(id)
+    }
     if (this.docs.length === 0) {
       const fresh = createUntitled()
       this.docs.push(fresh)
@@ -2765,7 +2865,7 @@ class App {
         const doc = this.docs.find((candidate) => candidate.id === id)
         if (!doc) continue
         const tab = document.createElement('div')
-        tab.className = 'tab' + (doc.id === group.activeId ? ' active' : '')
+        tab.className = 'tab' + (doc.id === group.activeId ? ' active' : '') + (this.selectedTabIds.has(doc.id) ? ' selected' : '')
 
         const dot = document.createElement('span')
         dot.className = 'tab-dirty'
@@ -2785,7 +2885,16 @@ class App {
         })
 
         tab.append(dot, label, close)
-        tab.addEventListener('click', () => void this.activate(doc.id, group.id))
+        tab.addEventListener('click', (event) => {
+          if (event.ctrlKey || event.metaKey) {
+            if (this.selectedTabIds.has(doc.id)) this.selectedTabIds.delete(doc.id)
+            else this.selectedTabIds.add(doc.id)
+            this.renderTabs()
+            return
+          }
+          this.selectedTabIds.clear()
+          void this.activate(doc.id, group.id)
+        })
         group.tabBar.appendChild(tab)
       }
     }

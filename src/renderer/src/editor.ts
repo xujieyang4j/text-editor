@@ -1,4 +1,4 @@
-import { EditorState, Compartment, EditorSelection, type Extension, type SelectionRange } from '@codemirror/state'
+import { EditorState, Compartment, EditorSelection, StateEffect, StateField, RangeSet, RangeSetBuilder, type Extension, type SelectionRange } from '@codemirror/state'
 import {
   EditorView,
   keymap,
@@ -10,6 +10,9 @@ import {
   dropCursor,
   rectangularSelection,
   crosshairCursor,
+  gutter,
+  GutterMarker,
+  gutterLineClass,
   type ViewUpdate
 } from '@codemirror/view'
 import {
@@ -23,6 +26,9 @@ import {
   copyLineDown,
   deleteLine,
   toggleComment,
+  toggleBlockComment,
+  addCursorAbove,
+  addCursorBelow,
   indentMore,
   indentLess
 } from '@codemirror/commands'
@@ -45,7 +51,9 @@ import {
   gotoLine,
   getSearchQuery,
   setSearchQuery,
-  SearchQuery
+  SearchQuery,
+  selectNextOccurrence,
+  selectMatches
 } from '@codemirror/search'
 import {
   autocompletion,
@@ -61,6 +69,7 @@ import { setDiagnostics, lintGutter, type Diagnostic } from '@codemirror/lint'
 import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { rulers } from './extensions/rulers.js'
 import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
+import type { IncrementalChange } from './incrementalDiff.js'
 import type { Settings, ColorScheme } from '../../shared/ipc.js'
 
 /** Callbacks the editor emits so the shell can update tabs/status bar. */
@@ -83,6 +92,32 @@ const indentGuideConf = new Compartment()
 const trailingWsConf = new Compartment()
 const rulerConf = new Compartment()
 const fontThemeConf = new Compartment()
+
+const setIncrementalDiff = StateEffect.define<IncrementalChange[]>()
+
+class IncrementalDiffMarker extends GutterMarker {
+  constructor(kind: IncrementalChange['kind']) {
+    super()
+    this.elementClass = `incremental-diff-marker incremental-diff-${kind}`
+  }
+}
+
+const incrementalDiffMarkers = StateField.define<RangeSet<IncrementalDiffMarker>>({
+  create: () => RangeSet.empty,
+  update: (markers, transaction) => {
+    for (const effect of transaction.effects) {
+      if (!effect.is(setIncrementalDiff)) continue
+      const builder = new RangeSetBuilder<IncrementalDiffMarker>()
+      for (const change of effect.value) {
+        const line = Math.max(1, Math.min(transaction.state.doc.lines, change.line))
+        builder.add(transaction.state.doc.line(line).from, transaction.state.doc.line(line).from, new IncrementalDiffMarker(change.kind))
+      }
+      return builder.finish()
+    }
+    return markers.map(transaction.changes)
+  },
+  provide: (field) => [gutter({ class: 'incremental-diff-gutter', markers: (view) => view.state.field(field) }), gutterLineClass.from(field)]
+})
 
 /** Minimap mounted into a container we create on the right edge of the editor. */
 function minimapExtension(): Extension {
@@ -191,6 +226,7 @@ export class Editor {
   private snippetCursor = -1
   private snippetFinalPos: number | null = null
   private applyingSnippetMirror = false
+  private incrementalChanges: IncrementalChange[] = []
 
   constructor(parent: HTMLElement, callbacks: EditorCallbacks, settings: Settings) {
     this.callbacks = callbacks
@@ -227,6 +263,7 @@ export class Editor {
         trailingWsConf.of(s.highlightTrailingWhitespace ? highlightTrailingWhitespace() : []),
         rulerConf.of(rulers(s.rulers)),
         fontThemeConf.of(fontTheme(s.fontSize)),
+        incrementalDiffMarkers,
         lintGutter()
       ]
     })
@@ -378,6 +415,21 @@ export class Editor {
   toggleComment(): void {
     toggleComment(this.view)
   }
+  toggleBlockComment(): void {
+    toggleBlockComment(this.view)
+  }
+  addCursorAbove(): void {
+    addCursorAbove(this.view)
+  }
+  addCursorBelow(): void {
+    addCursorBelow(this.view)
+  }
+  selectNextOccurrence(): void {
+    selectNextOccurrence(this.view)
+  }
+  selectAllOccurrences(): void {
+    selectMatches(this.view)
+  }
 
   /** Duplicate the current selection (or line if empty) in place. */
   duplicateSelection(): void {
@@ -476,6 +528,23 @@ export class Editor {
   /** Current 1-based line number, used by bookmarks and status-driven actions. */
   currentLine(): number {
     return this.view.state.doc.lineAt(this.view.state.selection.main.head).number
+  }
+
+  /** Show lightweight incremental-diff markers without extending renderer privileges. */
+  setIncrementalChanges(changes: IncrementalChange[]): void {
+    this.incrementalChanges = changes
+    this.view.dispatch({ effects: setIncrementalDiff.of(changes) })
+  }
+
+  nextIncrementalChange(direction: 1 | -1): IncrementalChange | null {
+    if (this.incrementalChanges.length === 0) return null
+    const current = this.currentLine()
+    const changes = this.incrementalChanges
+    const target = direction > 0
+      ? changes.find((change) => change.line > current) ?? changes[0]
+      : [...changes].reverse().find((change) => change.line < current) ?? changes[changes.length - 1]
+    this.gotoLineNumber(target.line)
+    return target
   }
 
   /** Insert reusable text at every selection, retaining normal multi-cursor semantics. */
