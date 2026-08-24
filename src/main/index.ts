@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, type WebContents } from 'electron'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { authorizePathForRenderer, clearWindowSessionId, registerFileHandlers, setWindowSessionId } from './files.js'
+import { authorizePathForRenderer, clearWindowSessionId, listWindowSessionIds, registerFileHandlers, setWindowSessionId } from './files.js'
 import { buildMenu } from './menu.js'
 import { IPC, type MenuEvent } from '../shared/ipc.js'
 
@@ -176,7 +176,10 @@ app.whenReady().then(() => {
     pendingSessionFlushes.delete(event.sender)
   })
   buildMenu()
-  createWindow('legacy')
+  void listWindowSessionIds().then((sessions) => {
+    if (sessions.length === 0) createWindow('legacy')
+    else for (const sessionId of sessions) createWindow(sessionId)
+  })
   const initialPath = filePathFromArgv(process.argv)
   if (initialPath) sendOpenPath(initialPath)
 

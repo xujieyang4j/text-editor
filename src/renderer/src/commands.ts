@@ -54,6 +54,8 @@ export const COMMANDS: Command[] = [
   { id: 'prev-bookmark', title: 'Navigate: Previous Bookmark', hint: 'Shift+F2' },
   { id: 'record-macro', title: 'Tools: Start / Stop Macro Recording' },
   { id: 'run-macro', title: 'Tools: Run Last Macro' },
+  { id: 'save-macro', title: 'Tools: Save Last Macro…' },
+  { id: 'run-saved-macro', title: 'Tools: Run Saved Macro…' },
   { id: 'insert-snippet', title: 'Tools: Insert Snippet…' },
 
   { id: 'select-language', title: 'View: Set Syntax…' },
@@ -86,6 +88,8 @@ export const COMMANDS: Command[] = [
   { id: 'select-color-scheme', title: 'View: Select Color Scheme…' },
   { id: 'toggle-git', title: 'View: Toggle Git Changes' },
   { id: 'refresh-git', title: 'Git: Refresh Changes' },
+  { id: 'open-git-conflicts', title: 'Git: Open Merge Conflicts' },
+  { id: 'check-for-updates', title: 'Help: Check for Updates…' },
   { id: 'open-marketplace', title: 'Tools: Browse Plugin Marketplace…' },
   { id: 'project-settings', title: 'Project: Configure…' },
   { id: 'language-tools', title: 'Tools: Configure Language Tool…' },

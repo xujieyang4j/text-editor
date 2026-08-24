@@ -183,6 +183,7 @@ export class Editor {
   private snippetRanges: Array<{ from: number; to: number; index: number }> = []
   private snippetCursor = -1
   private snippetFinalPos: number | null = null
+  private applyingSnippetMirror = false
 
   constructor(parent: HTMLElement, callbacks: EditorCallbacks, settings: Settings) {
     this.callbacks = callbacks
@@ -519,6 +520,21 @@ export class Editor {
       to: update.changes.mapPos(range.to, -1)
     }))
     if (this.snippetFinalPos !== null) this.snippetFinalPos = update.changes.mapPos(this.snippetFinalPos, 1)
+    if (this.applyingSnippetMirror || this.snippetCursor < 0) return
+    const active = this.snippetRanges[this.snippetCursor]
+    if (!active) return
+    const sameIndex = this.snippetRanges.filter((range) => range.index === active.index)
+    if (sameIndex.length < 2) return
+    const value = update.state.sliceDoc(active.from, active.to)
+    const changes = sameIndex
+      .filter((range) => range !== active && update.state.sliceDoc(range.from, range.to) !== value)
+      .map((range) => ({ from: range.from, to: range.to, insert: value }))
+      .sort((a, b) => b.from - a.from)
+    if (changes.length > 0) {
+      this.applyingSnippetMirror = true
+      this.view.dispatch({ changes, userEvent: 'input.snippet-mirror' })
+      this.applyingSnippetMirror = false
+    }
   }
 
   trimTrailingWhitespace(): void {

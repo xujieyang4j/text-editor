@@ -34,8 +34,12 @@ import {
   , type MarketplaceInstallRequest
   , type GitStatus
   , type GitDiff
+  , type GitActionRequest
+  , type GitConflict
+  , type UpdateInfo
   , type RecentProject
   , type WindowSessionMeta
+  , type SavedMacro
 } from '../shared/ipc.js'
 
 /**
@@ -159,6 +163,13 @@ const api = {
 
   removePlugin: (root: string, id: string): Promise<void> => ipcRenderer.invoke(IPC.pluginRemove, root, id),
 
+  readPluginExtension: (root: string, id: string, worker: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.pluginExtensionRead, root, id, worker),
+
+  listMacros: (root: string): Promise<SavedMacro[]> => ipcRenderer.invoke(IPC.macroList, root),
+
+  writeMacro: (root: string, macro: SavedMacro): Promise<void> => ipcRenderer.invoke(IPC.macroWrite, root, macro),
+
   listMarketplace: (root: string): Promise<MarketplaceItem[]> => ipcRenderer.invoke(IPC.marketplaceList, root),
 
   installMarketplacePlugin: (request: MarketplaceInstallRequest): Promise<PluginManifest> =>
@@ -168,6 +179,12 @@ const api = {
 
   gitDiff: (root: string, relativePath: string): Promise<GitDiff> =>
     ipcRenderer.invoke(IPC.gitDiff, root, relativePath),
+
+  gitAction: (request: GitActionRequest): Promise<GitStatus> => ipcRenderer.invoke(IPC.gitAction, request),
+
+  gitConflicts: (root: string): Promise<GitConflict[]> => ipcRenderer.invoke(IPC.gitConflicts, root),
+
+  checkForUpdate: (): Promise<UpdateInfo> => ipcRenderer.invoke(IPC.updateCheck),
 
   runLanguageTool: (request: LanguageToolRequest): Promise<LanguageToolResult> =>
     ipcRenderer.invoke(IPC.languageToolRun, request),

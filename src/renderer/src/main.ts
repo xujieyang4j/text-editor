@@ -5,6 +5,7 @@ import { WorkspaceSearchPanel } from './workspaceSearch.js'
 import { FindResultsView } from './findResults.js'
 import { GitPanel } from './gitPanel.js'
 import { openMarketplace } from './marketplace.js'
+import { ExtensionHost } from './extensionHost.js'
 import { BuildPanel } from './buildPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS } from './commands.js'
@@ -42,6 +43,7 @@ import {
   , type MarketplaceItem
   , type LanguageServerInteractiveResult
   , type LanguageRenameEdit
+  , type GitAction
 } from '../../shared/ipc.js'
 import './styles.css'
 
@@ -78,8 +80,10 @@ class App {
   private settings: Settings = { ...DEFAULT_SETTINGS }
   private folder: string | null = null
   private folders: string[] = []
-  private project: ProjectSettings = { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] }
+  private project: ProjectSettings = { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], pluginPermissions: {}, languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] }
   private plugins: PluginManifest[] = []
+  private extensionHost = new ExtensionHost()
+  private extensionCommands = new Map<string, { plugin: PluginManifest; title: string; run: () => void }>()
   /** Recently-closed file paths, for Reopen Closed Tab (LIFO). */
   private closedStack: string[] = []
   /** Debounce handle for session persistence. */
@@ -110,6 +114,8 @@ class App {
   private windowSessionId = new URLSearchParams(location.hash.slice(1)).get('window') ?? 'legacy'
   private pendingKeySequence: string[] = []
   private pendingKeyTimer: number | null = null
+  private recordedTextEdits: Array<{ from: number; to: number; insert: string }> = []
+  private macroBaseContent = ''
 
   // Cached DOM references.
   private primaryTabBar = document.getElementById('tab-bar')!
@@ -187,7 +193,10 @@ class App {
       onOpenFile: (relativePath) => {
         if (this.folder) void this.openPath(`${this.folder}/${relativePath}`)
       },
-      onDiff: (relativePath) => this.folder ? window.editor.gitDiff(this.folder, relativePath) : Promise.reject(new Error('No workspace open.'))
+      onDiff: (relativePath) => this.folder ? window.editor.gitDiff(this.folder, relativePath) : Promise.reject(new Error('No workspace open.')),
+      onAction: (action, paths) => { void this.runGitAction(action, paths) },
+      onCommit: () => { void this.commitGitChanges() },
+      onBranch: (create) => { void this.switchGitBranch(create) }
     })
     this.gitPanelHost.appendChild(this.gitPanel.element)
     this.createConflictBar()
@@ -236,7 +245,8 @@ class App {
       {
         onDocChange: () => this.handleDocChange(),
         onCursorChange: (state) => this.updatePositionStatus(state),
-        onCompletion: (context) => this.requestLspCompletions(context)
+        onCompletion: (context) => this.requestLspCompletions(context),
+        onTab: () => this.expandSnippetTrigger()
       },
       this.settings
     )
@@ -479,6 +489,12 @@ class App {
       case 'run-macro':
         this.runMacro()
         break
+      case 'save-macro':
+        void this.saveMacro()
+        break
+      case 'run-saved-macro':
+        void this.runSavedMacro()
+        break
       case 'insert-snippet':
         this.insertSnippet()
         break
@@ -543,6 +559,12 @@ class App {
         break
       case 'refresh-git':
         void this.refreshGit()
+        break
+      case 'open-git-conflicts':
+        void this.openGitConflicts()
+        break
+      case 'check-for-updates':
+        void this.checkForUpdates()
         break
       case 'open-marketplace':
         void this.openMarketplace()
@@ -788,7 +810,8 @@ class App {
         onCursorChange: (state) => {
           if (this.activeGroup === id) this.updatePositionStatus(state)
         },
-        onCompletion: (context) => this.requestLspCompletions(context)
+        onCompletion: (context) => this.requestLspCompletions(context),
+        onTab: () => this.expandSnippetTrigger()
       },
       this.settings
     )
@@ -1120,6 +1143,9 @@ class App {
     // machine crash never loses unsaved work — this is the core of hot exit.
     this.scheduleSessionSave()
     this.scheduleLanguageServerSync(doc)
+    if (this.recordingMacro && !this.isReplayingMacro) {
+      this.recordedTextEdits = [{ from: 0, to: this.macroBaseContent.length, insert: doc.content }]
+    }
   }
 
   /**
@@ -1569,14 +1595,41 @@ class App {
 
   private async loadProject(root: string): Promise<void> {
     try {
-      this.project = (await window.editor.readProject(root)) ?? { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] }
+      this.project = (await window.editor.readProject(root)) ?? { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], pluginPermissions: {}, languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] }
       if (this.project.buildCommand) this.buildPanel?.setCommand(this.project.buildCommand)
       this.plugins = (await window.editor.listPlugins(root)).filter(
         (plugin) => plugin.enabled && (this.project.plugins.length === 0 || this.project.plugins.includes(plugin.id))
       )
+      await this.loadExtensionWorkers(root)
       void this.refreshGit()
     } catch (error) {
       this.showError('Project settings could not be read.', error)
+    }
+  }
+
+  private async loadExtensionWorkers(root: string): Promise<void> {
+    this.extensionHost.dispose()
+    this.extensionCommands.clear()
+    for (const plugin of this.plugins) {
+      const required = plugin.extension?.permissions ?? []
+      const granted = this.project.pluginPermissions[plugin.id] ?? []
+      const missing = required.filter((permission) => !granted.includes(permission))
+      if (missing.length > 0) {
+        const ok = window.confirm(`Allow plugin “${plugin.name}” to use: ${missing.join(', ')}?\n\nIt runs in a sandboxed Web Worker without filesystem, network, Node, or process access.`)
+        if (!ok) continue
+        this.project.pluginPermissions[plugin.id] = [...new Set([...granted, ...missing])]
+        void this.saveProject()
+      }
+      const permissions = this.project.pluginPermissions[plugin.id] ?? []
+      await this.extensionHost.load(root, plugin, permissions, {
+        getDocument: () => {
+          const selection = this.editor.view.state.selection.main
+          return { text: this.editor.getContent(), language: this.active?.language ?? 'Plain Text', selection: { from: selection.from, to: selection.to } }
+        },
+        replaceDocument: (text) => this.editor.replaceContent(text),
+        registerCommand: (owner, id, title, run) => this.extensionCommands.set(`${owner.id}:${id}`, { plugin: owner, title, run }),
+        notify: (message) => { this.statusSelection.textContent = message }
+      })
     }
   }
 
@@ -1606,6 +1659,7 @@ class App {
         buildCommand: typeof parsed.buildCommand === 'string' ? parsed.buildCommand : '',
         keyBindings: parsed.keyBindings && typeof parsed.keyBindings === 'object' ? parsed.keyBindings : {},
         plugins: Array.isArray(parsed.plugins) ? parsed.plugins.filter((item): item is string => typeof item === 'string') : [],
+        pluginPermissions: parsed.pluginPermissions && typeof parsed.pluginPermissions === 'object' ? parsed.pluginPermissions : {},
         languageTools: parsed.languageTools && typeof parsed.languageTools === 'object' ? parsed.languageTools : {},
         languageServers: parsed.languageServers && typeof parsed.languageServers === 'object' ? parsed.languageServers : {},
         buildSystems: Array.isArray(parsed.buildSystems) ? parsed.buildSystems : [],
@@ -1660,6 +1714,89 @@ class App {
       this.gitPanel.setStatus(await window.editor.gitStatus(this.folder))
     } catch (error) {
       this.showError('Git status could not be loaded.', error)
+    }
+  }
+
+  private async openGitConflicts(): Promise<void> {
+    if (!this.folder) return
+    try {
+      const conflicts = await window.editor.gitConflicts(this.folder)
+      if (conflicts.length === 0) {
+        this.statusSelection.textContent = 'No merge conflicts detected'
+        return
+      }
+      if (this.groups.length < 2) this.setLayout('columns2')
+      for (const conflict of conflicts) {
+        const targetGroup = (this.activeGroup + 1) % this.groups.length
+        await this.openPath(`${this.folder}/${conflict.path}`)
+        const doc = this.docs.find((candidate) => candidate.path === `${this.folder}/${conflict.path}`)
+        if (doc) {
+          const group = this.groups[targetGroup]
+          if (!group.docIds.includes(doc.id)) group.docIds.push(doc.id)
+          group.activeId = doc.id
+        }
+      }
+      this.renderTabs()
+      this.statusSelection.textContent = `Opened ${conflicts.length} conflicted file${conflicts.length === 1 ? '' : 's'}`
+    } catch (error) {
+      this.showError('Git conflicts could not be opened.', error)
+    }
+  }
+
+  private async checkForUpdates(): Promise<void> {
+    try {
+      const update = await window.editor.checkForUpdate()
+      if (!update.available || !update.latestVersion) {
+        this.statusSelection.textContent = `Lumen ${update.currentVersion} is up to date`
+        return
+      }
+      const message = `Lumen ${update.latestVersion} is available (current: ${update.currentVersion}).`
+      if (update.releaseUrl && window.confirm(`${message}\n\nOpen the release page to download the signed installer?`)) {
+        await window.editor.openExternal(update.releaseUrl)
+      } else {
+        this.statusSelection.textContent = message
+      }
+    } catch (error) {
+      this.showError('Update check failed.', error)
+    }
+  }
+
+  private async runGitAction(action: GitAction, paths: string[] = []): Promise<void> {
+    if (!this.folder) return
+    if (paths.length === 0) {
+      this.showError('Select one or more files with Ctrl/Cmd-click in the Git panel.')
+      return
+    }
+    const actionLabel = action === 'stage' ? 'Stage' : action === 'unstage' ? 'Unstage' : 'Discard local changes for'
+    if (!window.confirm(`${actionLabel} ${paths.length} selected file${paths.length === 1 ? '' : 's'}?`)) return
+    try {
+      this.gitPanel.setStatus(await window.editor.gitAction({ root: this.folder, action, paths }))
+      await this.reloadWorkspaceTree()
+    } catch (error) {
+      this.showError(`Git ${action} failed.`, error)
+    }
+  }
+
+  private async commitGitChanges(): Promise<void> {
+    if (!this.folder) return
+    const message = window.prompt('Commit message:')?.trim()
+    if (!message || !window.confirm(`Create commit with message:\n\n${message}`)) return
+    try {
+      this.gitPanel.setStatus(await window.editor.gitAction({ root: this.folder, action: 'commit', message }))
+    } catch (error) {
+      this.showError('Git commit failed.', error)
+    }
+  }
+
+  private async switchGitBranch(create: boolean): Promise<void> {
+    if (!this.folder) return
+    const branch = window.prompt(create ? 'New branch name:' : 'Existing branch name:')?.trim()
+    if (!branch || !window.confirm(`${create ? 'Create and switch to' : 'Switch to'} branch “${branch}”?`)) return
+    try {
+      this.gitPanel.setStatus(await window.editor.gitAction({ root: this.folder, action: create ? 'create-branch' : 'checkout-branch', branch }))
+      await this.reloadWorkspaceTree()
+    } catch (error) {
+      this.showError('Git branch action failed.', error)
     }
   }
 
@@ -1978,9 +2115,12 @@ class App {
     this.recordingMacro = !this.recordingMacro
     if (this.recordingMacro) {
       this.lastMacro = []
+      this.recordedTextEdits = []
+      this.macroBaseContent = this.editor.getContent()
       this.statusSelection.textContent = 'Recording macro…'
     } else {
-      this.statusSelection.textContent = `${this.lastMacro.length} macro step${this.lastMacro.length === 1 ? '' : 's'} recorded`
+      const steps = this.lastMacro.length + this.recordedTextEdits.length
+      this.statusSelection.textContent = `${steps} macro step${steps === 1 ? '' : 's'} recorded`
     }
   }
 
@@ -1992,8 +2132,58 @@ class App {
     this.isReplayingMacro = true
     try {
       for (const event of this.lastMacro) this.run(event)
+      for (const edit of this.recordedTextEdits) this.editor.replaceContent(edit.insert)
     } finally {
       this.isReplayingMacro = false
+    }
+  }
+
+  private async saveMacro(): Promise<void> {
+    if (!this.folder) {
+      this.showError('Open a project before saving a macro.')
+      return
+    }
+    const name = window.prompt('Macro name:')?.trim()
+    if (!name) return
+    try {
+      await window.editor.writeMacro(this.folder, {
+        name,
+        commands: this.lastMacro,
+        ...(this.recordedTextEdits[0]?.insert ? { text: this.recordedTextEdits[0].insert } : {})
+      })
+      this.statusSelection.textContent = `Saved macro: ${name}`
+    } catch (error) {
+      this.showError('Macro could not be saved.', error)
+    }
+  }
+
+  private async runSavedMacro(): Promise<void> {
+    if (!this.folder) {
+      this.showError('Open a project before running a saved macro.')
+      return
+    }
+    try {
+      const macros = await window.editor.listMacros(this.folder)
+      if (macros.length === 0) {
+        this.showError('No saved macros are available for this project.')
+        return
+      }
+      this.palette.open({
+        placeholder: 'Run saved macro…',
+        items: macros.map((macro) => ({ label: macro.name, detail: `${macro.commands.length} command step${macro.commands.length === 1 ? '' : 's'}`, value: macro })),
+        onAccept: (item) => {
+          const macro = item.value as import('../../shared/ipc.js').SavedMacro
+          this.isReplayingMacro = true
+          try {
+            for (const command of macro.commands) if (this.isMenuEvent(command)) this.run(command)
+            if (macro.text !== undefined) this.editor.replaceContent(macro.text)
+          } finally {
+            this.isReplayingMacro = false
+          }
+        }
+      })
+    } catch (error) {
+      this.showError('Saved macros could not be loaded.', error)
     }
   }
 
@@ -2017,6 +2207,23 @@ class App {
       items: snippets,
       onAccept: (item) => this.editor.insertSnippet(String(item.value))
     })
+  }
+
+  private expandSnippetTrigger(): boolean {
+    const doc = this.active
+    if (!doc) return false
+    const selection = this.editor.view.state.selection.main
+    if (!selection.empty) return false
+    const line = this.editor.view.state.doc.lineAt(selection.head)
+    const before = this.editor.view.state.sliceDoc(line.from, selection.head)
+    const trigger = /([\w-]+)$/.exec(before)?.[1]
+    if (!trigger) return false
+    const snippets = this.plugins.flatMap((plugin) => plugin.snippets.map((snippet) => ({ plugin, snippet })))
+    const found = snippets.find(({ snippet }) => snippet.trigger === trigger && (!snippet.scope || snippet.scope === doc.language))
+    if (!found) return false
+    this.editor.view.dispatch({ changes: { from: selection.head - trigger.length, to: selection.head, insert: '' } })
+    this.editor.insertSnippet(found.snippet.text)
+    return true
   }
 
   private setDocumentEol(eol: Doc['eol']): void {
@@ -2286,6 +2493,9 @@ class App {
         })
       }
     }
+    for (const [id, command] of this.extensionCommands) {
+      items.push({ label: `${command.plugin.name}: ${command.title}`, detail: id, value: { kind: 'extension-command', id } })
+    }
     this.palette.open({
       placeholder: 'Type a command…',
       items,
@@ -2293,6 +2503,11 @@ class App {
         if (typeof item.value === 'object' && item.value && (item.value as { kind?: string }).kind === 'plugin-command') {
           const command = (item.value as { command: PluginManifest['commands'][number] }).command
           if (command.insertText) this.editor.insertText(command.insertText)
+          return
+        }
+        if (typeof item.value === 'object' && item.value && (item.value as { kind?: string }).kind === 'extension-command') {
+          const id = (item.value as { id: string }).id
+          this.extensionCommands.get(id)?.run()
           return
         }
         this.run(item.value as MenuEvent)

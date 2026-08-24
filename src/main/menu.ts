@@ -177,6 +177,8 @@ export function buildMenu(): void {
         { type: 'separator' },
         item('Start / Stop Macro Recording', 'record-macro'),
         item('Run Last Macro', 'run-macro'),
+        item('Save Last Macro…', 'save-macro'),
+        item('Run Saved Macro…', 'run-saved-macro'),
         item('Insert Snippet…', 'insert-snippet')
       ]
     },
@@ -190,7 +192,7 @@ export function buildMenu(): void {
     },
     {
       label: 'Git',
-      submenu: [item('Refresh Changes', 'refresh-git')]
+      submenu: [item('Refresh Changes', 'refresh-git'), item('Open Merge Conflicts', 'open-git-conflicts')]
     },
     {
       label: 'Window',
@@ -211,7 +213,8 @@ export function buildMenu(): void {
         {
           label: 'Learn More',
           click: () => shell.openExternal('https://www.electronjs.org')
-        }
+        },
+        item('Check for Updates…', 'check-for-updates')
       ]
     }
   ]

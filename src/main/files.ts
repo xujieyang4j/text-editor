@@ -46,8 +46,12 @@ import {
   , type MarketplaceInstallRequest
   , type GitStatus
   , type GitDiff
+  , type GitActionRequest
+  , type GitConflict
   , type RecentProject
   , type WindowSessionMeta
+  , type UpdateInfo
+  , type SavedMacro
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -160,6 +164,18 @@ export function setWindowSessionId(senderId: number, sessionId: string): void {
 
 export function clearWindowSessionId(senderId: number): void {
   windowSessionIds.delete(senderId)
+}
+
+/** Main-process startup helper: returns durable window sessions ordered by recency. */
+export async function listWindowSessionIds(): Promise<string[]> {
+  const sessions = await readJson<WindowSessionMeta[]>(userDataFile('window-sessions.json'), [])
+  return Array.isArray(sessions)
+    ? sessions
+        .filter((entry) => entry && typeof entry.id === 'string' && /^[a-z0-9-]+$/i.test(entry.id))
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 12)
+        .map((entry) => entry.id)
+    : []
 }
 
 /** Add a base URL so relative assets still work in a temporary HTML snapshot. */
@@ -427,6 +443,12 @@ function sanitizeSession(value: unknown): Session {
       plugins: Array.isArray(project.plugins)
         ? project.plugins.filter((entry): entry is string => typeof entry === 'string' && /^[a-z0-9-]+$/i.test(entry)).slice(0, 50)
         : [],
+      pluginPermissions: project.pluginPermissions && typeof project.pluginPermissions === 'object'
+        ? Object.fromEntries(Object.entries(project.pluginPermissions).flatMap(([id, permissions]) => {
+            if (!/^[a-z0-9-]+$/i.test(id) || !Array.isArray(permissions)) return []
+            return [[id, permissions.filter((permission): permission is 'document-read' | 'document-edit' => permission === 'document-read' || permission === 'document-edit')]]
+          }))
+        : {},
       languageServers: project.languageServers && typeof project.languageServers === 'object'
         ? Object.fromEntries(
             Object.entries(project.languageServers)
@@ -713,7 +735,12 @@ function sanitizePlugin(value: unknown): PluginManifest | null {
         .filter((snippet): snippet is PluginManifest['snippets'][number] =>
           !!snippet && typeof snippet === 'object' && typeof snippet.label === 'string' && typeof snippet.text === 'string'
         )
-        .map((snippet) => ({ label: snippet.label.slice(0, 200), text: snippet.text.slice(0, 10_000) }))
+        .map((snippet) => ({
+          label: snippet.label.slice(0, 200),
+          text: snippet.text.slice(0, 10_000),
+          ...(typeof snippet.trigger === 'string' && /^[\w-]{1,80}$/.test(snippet.trigger) ? { trigger: snippet.trigger } : {}),
+          ...(typeof snippet.scope === 'string' ? { scope: snippet.scope.slice(0, 100) } : {})
+        }))
         .slice(0, 100)
     : []
   return {
@@ -722,7 +749,17 @@ function sanitizePlugin(value: unknown): PluginManifest | null {
     version: typeof raw.version === 'string' ? raw.version.slice(0, 50) : '0.0.0',
     enabled: raw.enabled !== false,
     commands,
-    snippets
+    snippets,
+    ...(raw.extension && typeof raw.extension === 'object' && typeof raw.extension.worker === 'string' && /^[a-zA-Z0-9._/-]+$/.test(raw.extension.worker) && !raw.extension.worker.includes('..')
+      ? {
+          extension: {
+            worker: raw.extension.worker,
+            ...(Array.isArray(raw.extension.permissions)
+              ? { permissions: raw.extension.permissions.filter((permission): permission is 'document-read' | 'document-edit' => permission === 'document-read' || permission === 'document-edit') }
+              : {})
+          }
+        }
+      : {})
   }
 }
 
@@ -823,6 +860,68 @@ async function gitDiff(root: string, relativePath: string): Promise<GitDiff> {
   if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('..')) throw new Error('Invalid Git diff path.')
   const { stdout } = await execFileAsync('git', ['-C', root, 'diff', '--no-ext-diff', '--', relativePath], { maxBuffer: 2 * 1024 * 1024 })
   return { path: relativePath, diff: stdout }
+}
+
+function validatedGitPaths(paths: unknown): string[] {
+  if (!Array.isArray(paths)) return []
+  return paths
+    .filter((item): item is string => typeof item === 'string' && item.length > 0 && !path.isAbsolute(item) && !item.includes('..'))
+    .slice(0, 500)
+}
+
+async function gitAction(request: GitActionRequest): Promise<GitStatus> {
+  const paths = validatedGitPaths(request.paths)
+  if (request.action === 'stage') {
+    if (paths.length === 0) throw new Error('Choose at least one file to stage.')
+    await execFileAsync('git', ['-C', request.root, 'add', '--', ...paths])
+  } else if (request.action === 'unstage') {
+    if (paths.length === 0) throw new Error('Choose at least one file to unstage.')
+    await execFileAsync('git', ['-C', request.root, 'restore', '--staged', '--', ...paths])
+  } else if (request.action === 'discard') {
+    if (paths.length === 0) throw new Error('Choose at least one file to discard.')
+    await execFileAsync('git', ['-C', request.root, 'restore', '--worktree', '--', ...paths])
+  } else if (request.action === 'commit') {
+    if (!request.message?.trim()) throw new Error('Commit message is required.')
+    await execFileAsync('git', ['-C', request.root, 'commit', '-m', request.message.trim()])
+  } else if (request.action === 'checkout-branch') {
+    if (!request.branch || !/^[A-Za-z0-9._/-]+$/.test(request.branch) || request.branch.includes('..')) throw new Error('Invalid branch name.')
+    await execFileAsync('git', ['-C', request.root, 'switch', request.branch])
+  } else {
+    if (!request.branch || !/^[A-Za-z0-9._/-]+$/.test(request.branch) || request.branch.includes('..')) throw new Error('Invalid branch name.')
+    await execFileAsync('git', ['-C', request.root, 'switch', '-c', request.branch])
+  }
+  return gitStatus(request.root)
+}
+
+async function gitConflicts(root: string): Promise<GitConflict[]> {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', root, 'diff', '--name-only', '--diff-filter=U'])
+    return stdout.split(/\r?\n/).filter(Boolean).map((path) => ({ path }))
+  } catch {
+    return []
+  }
+}
+
+async function checkForUpdate(): Promise<UpdateInfo> {
+  const currentVersion = app.getVersion()
+  try {
+    const response = await fetch('https://api.github.com/repos/xujieyang4j/text-editor/releases/latest', {
+      headers: { Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(10_000)
+    })
+    if (!response.ok) return { currentVersion, available: false }
+    const release = await response.json() as { tag_name?: unknown; html_url?: unknown }
+    const latestVersion = typeof release.tag_name === 'string' ? release.tag_name.replace(/^v/, '') : undefined
+    const releaseUrl = typeof release.html_url === 'string' ? release.html_url : undefined
+    return {
+      currentVersion,
+      latestVersion,
+      releaseUrl,
+      available: !!latestVersion && latestVersion.localeCompare(currentVersion, undefined, { numeric: true }) > 0
+    }
+  } catch {
+    return { currentVersion, available: false }
+  }
 }
 
 /** Run a conservative formatter/diagnostic adapter: stdin text, stdout text or JSON diagnostics. */
@@ -1487,6 +1586,53 @@ export function registerFileHandlers(): void {
     return listPlugins(root)
   })
 
+  ipcMain.handle(IPC.pluginExtensionRead, async (event, root: unknown, pluginId: unknown, worker: unknown): Promise<string> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    if (typeof pluginId !== 'string' || !/^[a-z0-9-]+$/i.test(pluginId)) throw new Error('Invalid plugin ID.')
+    if (typeof worker !== 'string' || !/^[a-z0-9._/-]+$/i.test(worker) || worker.includes('..')) throw new Error('Invalid extension worker path.')
+    const pluginRoot = path.join(root, '.lumen-plugins', pluginId)
+    const workerPath = path.resolve(pluginRoot, worker)
+    if (!isInside(pluginRoot, workerPath)) throw new Error('Extension worker must stay inside the plugin directory.')
+    const source = await fs.readFile(workerPath, 'utf8')
+    if (Buffer.byteLength(source) > 512 * 1024) throw new Error('Extension worker exceeds 512 KB limit.')
+    return source
+  })
+
+  ipcMain.handle(IPC.macroList, async (event, root: unknown): Promise<SavedMacro[]> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    const raw = await readJson<unknown>(path.join(root, '.lumen-macros.json'), [])
+    return Array.isArray(raw)
+      ? raw.flatMap((macro) => {
+          if (!macro || typeof macro !== 'object') return []
+          const source = macro as { name?: unknown; commands?: unknown; text?: unknown }
+          if (typeof source.name !== 'string' || !Array.isArray(source.commands)) return []
+          return [{
+            name: source.name.slice(0, 100),
+            commands: source.commands.filter((command): command is string => typeof command === 'string').slice(0, 200),
+            ...(typeof source.text === 'string' && source.text.length <= 2 * 1024 * 1024 ? { text: source.text } : {})
+          }]
+        }).slice(0, 100)
+      : []
+  })
+
+  ipcMain.handle(IPC.macroWrite, async (event, root: unknown, macro: SavedMacro): Promise<void> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    if (!macro || typeof macro.name !== 'string' || !Array.isArray(macro.commands)) throw new Error('Invalid macro.')
+    const next: SavedMacro = {
+      name: macro.name.slice(0, 100),
+      commands: macro.commands.filter((command): command is string => typeof command === 'string').slice(0, 200),
+      ...(typeof macro.text === 'string' && macro.text.length <= 2 * 1024 * 1024 ? { text: macro.text } : {})
+    }
+    const existing = await readJson<SavedMacro[]>(path.join(root, '.lumen-macros.json'), [])
+    await writeJson(path.join(root, '.lumen-macros.json'), [next, ...existing.filter((item) => item.name !== next.name)].slice(0, 100))
+  })
+
   ipcMain.handle(IPC.pluginInstall, async (event, request: PluginInstallRequest): Promise<PluginManifest> => {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
@@ -1529,6 +1675,25 @@ export function registerFileHandlers(): void {
     assertGrantedRoot(event, root)
     if (typeof relativePath !== 'string') throw new Error('Invalid Git diff path.')
     return gitDiff(root, relativePath)
+  })
+
+  ipcMain.handle(IPC.gitAction, async (event, request: GitActionRequest): Promise<GitStatus> => {
+    assertTrustedSender(event)
+    assertGrantedRoot(event, request.root)
+    if (!request || !['stage', 'unstage', 'discard', 'commit', 'checkout-branch', 'create-branch'].includes(request.action)) throw new Error('Invalid Git action.')
+    return gitAction(request)
+  })
+
+  ipcMain.handle(IPC.gitConflicts, async (event, root: unknown): Promise<GitConflict[]> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    return gitConflicts(root)
+  })
+
+  ipcMain.handle(IPC.updateCheck, async (event): Promise<UpdateInfo> => {
+    assertTrustedSender(event)
+    return checkForUpdate()
   })
 
   ipcMain.handle(IPC.languageToolRun, async (event, request: LanguageToolRequest): Promise<LanguageToolResult> => {

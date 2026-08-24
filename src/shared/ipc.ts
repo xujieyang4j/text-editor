@@ -43,6 +43,9 @@ export const IPC = {
   pluginList: 'plugin:list',
   pluginInstall: 'plugin:install',
   pluginRemove: 'plugin:remove',
+  pluginExtensionRead: 'plugin:extension-read',
+  macroList: 'macro:list',
+  macroWrite: 'macro:write',
   languageToolRun: 'language-tool:run',
   languageServerRun: 'language-server:run',
   languageServerSync: 'language-server:sync',
@@ -53,6 +56,9 @@ export const IPC = {
   marketplaceInstall: 'marketplace:install',
   gitStatus: 'git:status',
   gitDiff: 'git:diff',
+  gitAction: 'git:action',
+  gitConflicts: 'git:conflicts',
+  updateCheck: 'update:check',
   openPathRequested: 'app:open-path-requested',
   appNewWindow: 'app:new-window',
   // main -> renderer notifications (menu / accelerator driven)
@@ -220,14 +226,33 @@ export interface GitDiff {
   diff: string
 }
 
+export type GitAction = 'stage' | 'unstage' | 'discard' | 'commit' | 'checkout-branch' | 'create-branch'
+
+export interface GitActionRequest {
+  root: string
+  action: GitAction
+  paths?: string[]
+  message?: string
+  branch?: string
+}
+
+export interface GitConflict {
+  path: string
+  ours?: string
+  theirs?: string
+}
+
 /** A declarative local plugin manifest. Plugins register commands/snippets, not Node access. */
+export type PluginPermission = 'document-read' | 'document-edit'
+
 export interface PluginManifest {
   id: string
   name: string
   version: string
   enabled: boolean
   commands: Array<{ id: string; title: string; insertText?: string }>
-  snippets: Array<{ label: string; text: string }>
+  snippets: Array<{ label: string; text: string; trigger?: string; scope?: string }>
+  extension?: { worker: string; permissions?: PluginPermission[] }
 }
 
 export interface PluginInstallRequest {
@@ -247,6 +272,13 @@ export interface MarketplaceItem {
 export interface MarketplaceInstallRequest {
   root: string
   manifestUrl: string
+}
+
+export interface UpdateInfo {
+  currentVersion: string
+  latestVersion?: string
+  releaseUrl?: string
+  available: boolean
 }
 
 /** A single entry inside a directory listing. */
@@ -272,6 +304,12 @@ export interface RecentProject {
 export interface WindowSessionMeta {
   id: string
   updatedAt: number
+}
+
+export interface SavedMacro {
+  name: string
+  commands: string[]
+  text?: string
 }
 
 /**
@@ -372,6 +410,7 @@ export interface ProjectSettings {
   buildCommand: string
   keyBindings: Record<string, string>
   plugins: string[]
+  pluginPermissions: Record<string, PluginPermission[]>
   languageTools: Record<string, LanguageToolConfig>
   languageServers: Record<string, LanguageServerConfig>
   buildSystems: BuildSystem[]
@@ -501,7 +540,7 @@ export const EMPTY_SESSION: Session = {
   activeIndex: 0,
   folder: null,
   folders: [],
-  project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] },
+  project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], pluginPermissions: {}, languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] },
   layout: { kind: 'single', activeGroup: 0, groups: [{ docIndexes: [], activeIndex: 0 }] }
 }
 
@@ -570,12 +609,16 @@ export type MenuEvent =
   | 'open-marketplace'
   | 'toggle-git'
   | 'refresh-git'
+  | 'open-git-conflicts'
+  | 'check-for-updates'
   | 'split-editor'
   | 'toggle-bookmark'
   | 'next-bookmark'
   | 'prev-bookmark'
   | 'record-macro'
   | 'run-macro'
+  | 'save-macro'
+  | 'run-saved-macro'
   | 'insert-snippet'
   | 'build'
   | 'select-build-system'

@@ -18,6 +18,8 @@
     "test:shared": "tsc --outDir out-test --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop --skipLibCheck --types node src/shared/ipc.ts src/shared/text.ts src/shared/filePolicy.ts src/renderer/src/fuzzy.ts src/renderer/src/symbols.ts && node src/shared/text.test.mjs && node src/shared/core.test.mjs",
     "test": "npm run test:shared && npm run typecheck && npm run build",
     "smoke": "LUMEN_SMOKE=1 electron-vite preview",
+    "smoke:headless": "xvfb-run -a npm run smoke",
+    "benchmark:index": "node scripts/benchmark-index.mjs",
     "dist": "electron-vite build && electron-builder",
     "dist:win": "electron-vite build && electron-builder --win",
     "dist:mac": "electron-vite build && electron-builder --mac",
