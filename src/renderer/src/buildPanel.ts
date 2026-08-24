@@ -1,16 +1,22 @@
-import type { BuildOutput } from '../../shared/ipc.js'
+import type { BuildOutput, BuildProblem } from '../../shared/ipc.js'
+
+export interface BuildPanelCallbacks {
+  onRun: (command: string) => void
+  onCancel: () => void
+  onOpenProblem: (problem: BuildProblem) => void
+}
 
 /** Build output / diagnostic console shared by build commands and future language servers. */
 export class BuildPanel {
   private readonly root: HTMLDivElement
   private readonly output: HTMLPreElement
+  private readonly problems: HTMLUListElement
   private readonly command: HTMLInputElement
   private visible = false
 
   constructor(
     initialCommand: string,
-    private readonly onRun: (command: string) => void,
-    private readonly onCancel: () => void
+    private readonly callbacks: BuildPanelCallbacks
   ) {
     this.root = document.createElement('div')
     this.root.className = 'build-panel hidden'
@@ -20,13 +26,15 @@ export class BuildPanel {
     this.command.className = 'build-command'
     this.command.placeholder = 'Build command, e.g. npm test'
     this.command.value = initialCommand
-    const run = this.button('Run', () => this.onRun(this.command.value.trim()))
-    const cancel = this.button('Stop', this.onCancel)
+    const run = this.button('Run', () => this.callbacks.onRun(this.command.value.trim()))
+    const cancel = this.button('Stop', this.callbacks.onCancel)
     const close = this.button('×', () => this.toggle(false))
     toolbar.append(this.command, run, cancel, close)
     this.output = document.createElement('pre')
     this.output.className = 'build-output'
-    this.root.append(toolbar, this.output)
+    this.problems = document.createElement('ul')
+    this.problems.className = 'build-problems'
+    this.root.append(toolbar, this.output, this.problems)
     document.body.appendChild(this.root)
   }
 
@@ -40,7 +48,10 @@ export class BuildPanel {
 
   setCommand(command: string): void { this.command.value = command }
 
-  clear(): void { this.output.textContent = '' }
+  clear(): void {
+    this.output.textContent = ''
+    this.problems.replaceChildren()
+  }
 
   append(message: BuildOutput): void {
     this.output.textContent += message.text
@@ -49,6 +60,18 @@ export class BuildPanel {
       'has-error',
       message.kind === 'stderr' || (message.kind === 'exit' && message.code !== 0)
     )
+  }
+
+  setProblems(problems: BuildProblem[]): void {
+    this.problems.replaceChildren()
+    for (const problem of problems) {
+      const item = document.createElement('li')
+      item.className = `build-problem ${problem.severity}`
+      item.textContent = `${problem.path}:${problem.line}:${problem.column} — ${problem.message}`
+      item.title = item.textContent
+      item.addEventListener('click', () => this.callbacks.onOpenProblem(problem))
+      this.problems.appendChild(item)
+    }
   }
 
   private button(label: string, onClick: () => void): HTMLButtonElement {

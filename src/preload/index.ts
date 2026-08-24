@@ -24,6 +24,8 @@ import {
   type LanguageToolResult,
   type LanguageServerRequest,
   type LanguageServerResult,
+  type LanguageServerSyncRequest,
+  type LanguageServerDiagnosticEvent,
   type PluginInstallRequest
 } from '../shared/ipc.js'
 
@@ -137,6 +139,18 @@ const api = {
 
   runLanguageServer: (request: LanguageServerRequest): Promise<LanguageServerResult> =>
     ipcRenderer.invoke(IPC.languageServerRun, request),
+
+  syncLanguageServer: (request: LanguageServerSyncRequest): Promise<void> =>
+    ipcRenderer.invoke(IPC.languageServerSync, request),
+
+  stopLanguageServer: (root: string, config: LanguageServerSyncRequest['config']): Promise<void> =>
+    ipcRenderer.invoke(IPC.languageServerStop, root, config),
+
+  onLanguageServerDiagnostics: (handler: (event: LanguageServerDiagnosticEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, diagnostic: LanguageServerDiagnosticEvent): void => handler(diagnostic)
+    ipcRenderer.on(IPC.languageServerDiagnostics, listener)
+    return () => ipcRenderer.removeListener(IPC.languageServerDiagnostics, listener)
+  },
 
   onOpenPathRequested: (handler: (filePath: string) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, filePath: string): void => handler(filePath)

@@ -38,6 +38,9 @@ export const IPC = {
   pluginRemove: 'plugin:remove',
   languageToolRun: 'language-tool:run',
   languageServerRun: 'language-server:run',
+  languageServerSync: 'language-server:sync',
+  languageServerStop: 'language-server:stop',
+  languageServerDiagnostics: 'language-server:diagnostics',
   openPathRequested: 'app:open-path-requested',
   appNewWindow: 'app:new-window',
   // main -> renderer notifications (menu / accelerator driven)
@@ -137,12 +140,45 @@ export interface BuildRequest {
   root: string
   command: string
   args?: string[]
+  /** Label shown in the output panel. */
+  name?: string
+  /** Optional working directory relative to the project root. */
+  workingDirectory?: string
+  /** Optional regex with file/line/column/message capture groups. */
+  fileRegex?: string
 }
 
 export interface BuildOutput {
   kind: 'stdout' | 'stderr' | 'exit'
   text: string
   code?: number | null
+  systemName?: string
+}
+
+export interface BuildSystem {
+  name: string
+  command: string
+  args: string[]
+  workingDirectory?: string
+  fileRegex?: string
+  saveBeforeBuild?: boolean
+  variants?: BuildVariant[]
+}
+
+export interface BuildVariant {
+  name: string
+  command?: string
+  args?: string[]
+  workingDirectory?: string
+  fileRegex?: string
+}
+
+export interface BuildProblem {
+  path: string
+  line: number
+  column: number
+  message: string
+  severity: 'error' | 'warning' | 'info'
 }
 
 /** A declarative local plugin manifest. Plugins register commands/snippets, not Node access. */
@@ -267,6 +303,7 @@ export interface ProjectSettings {
   plugins: string[]
   languageTools: Record<string, LanguageToolConfig>
   languageServers: Record<string, LanguageServerConfig>
+  buildSystems: BuildSystem[]
 }
 
 /** Configurable LSP server command, keyed by language name in project settings. */
@@ -309,6 +346,16 @@ export interface LanguageServerRequest {
   languageId: string
 }
 
+/** An incremental document update sent to a persistent LSP process. */
+export interface LanguageServerSyncRequest extends LanguageServerRequest {
+  version: number
+}
+
+export interface LanguageServerDiagnosticEvent {
+  filePath: string
+  diagnostics: LanguageToolResult['diagnostics']
+}
+
 export interface LanguageServerResult {
   edits: Array<{
     startLine: number
@@ -325,7 +372,7 @@ export const EMPTY_SESSION: Session = {
   openFiles: [],
   activeIndex: 0,
   folder: null,
-  project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {} },
+  project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [] },
   layout: { kind: 'single', activeGroup: 0, groups: [{ docIndexes: [], activeIndex: 0 }] }
 }
 
@@ -391,6 +438,20 @@ export type MenuEvent =
   | 'run-macro'
   | 'insert-snippet'
   | 'build'
+  | 'select-build-system'
+  | 'trim-trailing-whitespace'
+  | 'convert-indent-spaces'
+  | 'convert-indent-tabs'
+  | 'convert-eol-lf'
+  | 'convert-eol-crlf'
+  | 'convert-eol-cr'
+  | 'to-upper-case'
+  | 'to-lower-case'
+  | 'to-title-case'
+  | 'join-lines'
+  | 'split-selection-lines'
+  | 'indent-selection'
+  | 'outdent-selection'
   | 'format-document'
   | 'toggle-problems'
   | 'project-settings'

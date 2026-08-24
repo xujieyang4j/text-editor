@@ -813,6 +813,7 @@ body {
 
 .build-output {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   margin: 0;
   padding: 10px 12px;
@@ -820,6 +821,33 @@ body {
   font: 12px/1.45 var(--font-mono);
   white-space: pre-wrap;
 }
+
+.build-problems {
+  max-height: 38%;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  list-style: none;
+  font: 12px var(--font-mono);
+}
+
+.build-problem {
+  padding: 4px 10px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.build-problem:hover {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.build-problem.error { color: #ff9d9d; }
+.build-problem.warning { color: #f0cf7c; }
+.build-problem.info { color: #75beff; }
 
 .build-output.has-error {
   color: #ffb3b3;

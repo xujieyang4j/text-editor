@@ -31,7 +31,11 @@ import {
   type WorkspaceMatch,
   type WorkspaceSymbol,
   type LayoutKind,
-  type SessionLayout
+  type SessionLayout,
+  type LanguageServerDiagnosticEvent,
+  type BuildSystem,
+  type BuildProblem,
+  type BuildOutput
 } from '../../shared/ipc.js'
 import './styles.css'
 
@@ -66,7 +70,7 @@ class App {
   private layoutKind: LayoutKind = 'single'
   private settings: Settings = { ...DEFAULT_SETTINGS }
   private folder: string | null = null
-  private project: ProjectSettings = { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {} }
+  private project: ProjectSettings = { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [] }
   private plugins: PluginManifest[] = []
   /** Recently-closed file paths, for Reopen Closed Tab (LIFO). */
   private closedStack: string[] = []
@@ -90,6 +94,10 @@ class App {
   private isNavigatingHistory = false
   private projectSymbols: WorkspaceSymbol[] = []
   private projectSymbolIndexAt = 0
+  private lspSyncTimer: number | null = null
+  private lspDocumentVersion = new Map<string, number>()
+  private buildOutputText = ''
+  private activeBuildSystem: BuildSystem | null = null
 
   // Cached DOM references.
   private primaryTabBar = document.getElementById('tab-bar')!
@@ -176,7 +184,8 @@ class App {
       if (this.booted) void this.openPath(filePath)
       else this.pendingLaunchPaths.push(filePath)
     })
-    window.editor.onBuildOutput((output) => this.buildPanel.append(output))
+    window.editor.onBuildOutput((output) => this.handleBuildOutput(output))
+    window.editor.onLanguageServerDiagnostics((event) => this.applyLanguageServerDiagnostics(event))
     void this.boot()
   }
 
@@ -211,7 +220,14 @@ class App {
     this.primaryGroupRoot.addEventListener('mousedown', () => this.focusGroup(0))
 
     this.preview = new MarkdownPreview(this.primaryEditorArea)
-    this.buildPanel = new BuildPanel(this.settings.buildCommand, (command) => { void this.runBuild(command) }, () => { void window.editor.cancelBuild() })
+    this.buildPanel = new BuildPanel(
+      this.settings.buildCommand,
+      {
+        onRun: (command) => { void this.runBuild(command) },
+        onCancel: () => { void window.editor.cancelBuild() },
+        onOpenProblem: (problem) => { void this.openBuildProblem(problem) }
+      }
+    )
 
     try {
       await this.restoreSession()
@@ -411,10 +427,53 @@ class App {
         this.insertSnippet()
         break
       case 'build':
-        void this.runBuild(this.buildPanel.getCommand() || this.settings.buildCommand)
+        if (this.activeBuildSystem) void this.runBuildSystem(this.activeBuildSystem)
+        else void this.runBuild(this.buildPanel.getCommand() || this.settings.buildCommand)
+        break
+      case 'select-build-system':
+        this.selectBuildSystem()
         break
       case 'format-document':
         void this.formatDocument()
+        break
+      case 'trim-trailing-whitespace':
+        this.editor.trimTrailingWhitespace()
+        break
+      case 'convert-indent-spaces':
+        this.editor.convertIndentation(false)
+        break
+      case 'convert-indent-tabs':
+        this.editor.convertIndentation(true)
+        break
+      case 'convert-eol-lf':
+        this.setDocumentEol('LF')
+        break
+      case 'convert-eol-crlf':
+        this.setDocumentEol('CRLF')
+        break
+      case 'convert-eol-cr':
+        this.setDocumentEol('CR')
+        break
+      case 'to-upper-case':
+        this.editor.changeCase('upper')
+        break
+      case 'to-lower-case':
+        this.editor.changeCase('lower')
+        break
+      case 'to-title-case':
+        this.editor.changeCase('title')
+        break
+      case 'join-lines':
+        this.editor.joinLines()
+        break
+      case 'split-selection-lines':
+        this.editor.splitSelectionIntoLines()
+        break
+      case 'indent-selection':
+        this.editor.indentSelection()
+        break
+      case 'outdent-selection':
+        this.editor.outdentSelection()
         break
       case 'toggle-problems':
         this.buildPanel.toggle()
@@ -650,6 +709,48 @@ class App {
     this.scheduleSessionSave()
   }
 
+  /** Keep the configured LSP alive and sync active saved files after edits settle. */
+  private scheduleLanguageServerSync(doc: Doc): void {
+    if (!this.folder || !doc.path || !this.project.languageServers[doc.language]) return
+    if (this.lspSyncTimer !== null) window.clearTimeout(this.lspSyncTimer)
+    this.lspSyncTimer = window.setTimeout(() => {
+      const latest = this.docs.find((candidate) => candidate.id === doc.id)
+      if (latest) void this.syncLanguageServer(latest)
+    }, 250)
+  }
+
+  private async syncLanguageServer(doc: Doc): Promise<void> {
+    if (!this.folder || !doc.path) return
+    const config = this.project.languageServers[doc.language]
+    if (!config || !this.confirmExternalTool(config.command, `language server for ${doc.language}`)) return
+    const version = (this.lspDocumentVersion.get(doc.path) ?? 0) + 1
+    this.lspDocumentVersion.set(doc.path, version)
+    try {
+      await window.editor.syncLanguageServer({
+        root: this.folder,
+        config,
+        content: doc.content,
+        filePath: doc.path,
+        languageId: doc.language.toLowerCase().replaceAll(' ', '-'),
+        version
+      })
+    } catch (error) {
+      this.showError('The configured language server could not synchronize.', error)
+    }
+  }
+
+  private applyLanguageServerDiagnostics(event: LanguageServerDiagnosticEvent): void {
+    const doc = this.docs.find((candidate) => candidate.path === event.filePath)
+    if (!doc) return
+    doc.diagnostics = event.diagnostics
+    if (this.activeId === doc.id) {
+      this.editor.setDiagnostics(event.diagnostics.map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
+      this.statusSelection.textContent = event.diagnostics.length
+        ? `${event.diagnostics.length} diagnostic${event.diagnostics.length === 1 ? '' : 's'}`
+        : ''
+    }
+  }
+
   /** Add a document to the active editor group, then focus it. */
   private addDoc(doc: Doc): void {
     this.docs.push(doc)
@@ -683,6 +784,7 @@ class App {
     this.hideFindResults()
     const activation = ++this.languageActivation
     group.editor.setDocument(doc.content, doc.editorState)
+    group.editor.setDiagnostics((doc.diagnostics ?? []).map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
 
     // File-name based actions (HTML browser / Markdown preview) must appear
     // immediately. Language support is lazy-loaded and must not delay or block
@@ -706,6 +808,7 @@ class App {
     this.updateStatus()
     group.editor.focus()
     this.scheduleSessionSave()
+    this.scheduleLanguageServerSync(doc)
     // Run again because a manually-selected HTML/Markdown language can reveal
     // an action even when the filename has no recognised extension.
     this.syncEditorChrome()
@@ -731,6 +834,7 @@ class App {
     // Persist drafts as the user types (debounced) so an unexpected quit or
     // machine crash never loses unsaved work — this is the core of hot exit.
     this.scheduleSessionSave()
+    this.scheduleLanguageServerSync(doc)
   }
 
   /**
@@ -1095,7 +1199,7 @@ class App {
 
   private async loadProject(root: string): Promise<void> {
     try {
-      this.project = (await window.editor.readProject(root)) ?? { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {} }
+      this.project = (await window.editor.readProject(root)) ?? { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [] }
       if (this.project.buildCommand) this.buildPanel?.setCommand(this.project.buildCommand)
       this.plugins = (await window.editor.listPlugins(root)).filter(
         (plugin) => plugin.enabled && (this.project.plugins.length === 0 || this.project.plugins.includes(plugin.id))
@@ -1132,7 +1236,8 @@ class App {
         keyBindings: parsed.keyBindings && typeof parsed.keyBindings === 'object' ? parsed.keyBindings : {},
         plugins: Array.isArray(parsed.plugins) ? parsed.plugins.filter((item): item is string => typeof item === 'string') : [],
         languageTools: parsed.languageTools && typeof parsed.languageTools === 'object' ? parsed.languageTools : {},
-        languageServers: parsed.languageServers && typeof parsed.languageServers === 'object' ? parsed.languageServers : {}
+        languageServers: parsed.languageServers && typeof parsed.languageServers === 'object' ? parsed.languageServers : {},
+        buildSystems: Array.isArray(parsed.buildSystems) ? parsed.buildSystems : []
       }
       this.buildPanel.setCommand(this.project.buildCommand)
       void this.saveProject()
@@ -1477,8 +1582,17 @@ class App {
     this.palette.open({
       placeholder: 'Insert snippet…',
       items: snippets,
-      onAccept: (item) => this.editor.insertText(String(item.value).replace(/\$\{\d+(?::([^}]*))?\}/g, (_token, fallback) => fallback ?? ''))
+      onAccept: (item) => this.editor.insertSnippet(String(item.value))
     })
+  }
+
+  private setDocumentEol(eol: Doc['eol']): void {
+    const doc = this.active
+    if (!doc) return
+    doc.eol = eol
+    this.updateStatus()
+    this.scheduleSessionSave()
+    this.statusSelection.textContent = `Save line endings as ${eol}`
   }
 
   /** Execute the configured build command inside the active project directory. */
@@ -1499,12 +1613,122 @@ class App {
     void this.saveProject()
     this.buildPanel.setCommand(command)
     this.buildPanel.clear()
+    this.buildOutputText = ''
     this.buildPanel.toggle(true)
     try {
       await window.editor.runBuild({ root: this.folder, command })
     } catch (error) {
       this.showError('The build could not be started.', error)
     }
+  }
+
+  private selectBuildSystem(): void {
+    const systems = this.project.buildSystems
+    if (systems.length === 0) {
+      this.showError('Add buildSystems to .lumen-project.json first.')
+      return
+    }
+    const items: PaletteItem[] = []
+    for (const system of systems) {
+      items.push({ label: system.name, detail: system.command, value: { system } })
+      for (const variant of system.variants ?? []) {
+        items.push({
+          label: `${system.name}: ${variant.name}`,
+          detail: variant.command ?? system.command,
+          value: { system: {
+            ...system,
+            name: `${system.name}: ${variant.name}`,
+            command: variant.command ?? system.command,
+            args: variant.args ?? system.args,
+            workingDirectory: variant.workingDirectory ?? system.workingDirectory,
+            fileRegex: variant.fileRegex ?? system.fileRegex
+          } as BuildSystem }
+        })
+      }
+    }
+    this.palette.open({
+      placeholder: 'Select Build System',
+      items,
+      onAccept: (item) => {
+        this.activeBuildSystem = (item.value as { system: BuildSystem }).system
+        this.buildPanel.setCommand(this.activeBuildSystem.command)
+        void this.runBuildSystem(this.activeBuildSystem)
+      }
+    })
+  }
+
+  private async runBuildSystem(system: BuildSystem): Promise<void> {
+    if (!this.folder) {
+      this.showError('Open a folder before running a build.')
+      return
+    }
+    if (system.saveBeforeBuild) await this.save(false)
+    if (!this.confirmExternalTool(system.command, `build system “${system.name}”`)) return
+    this.activeBuildSystem = system
+    this.buildPanel.setCommand(system.command)
+    this.buildPanel.clear()
+    this.buildOutputText = ''
+    this.buildPanel.toggle(true)
+    try {
+      await window.editor.runBuild({
+        root: this.folder,
+        name: system.name,
+        command: system.command,
+        args: system.args,
+        workingDirectory: system.workingDirectory,
+        fileRegex: system.fileRegex
+      })
+    } catch (error) {
+      this.showError('The build system could not be started.', error)
+    }
+  }
+
+  private handleBuildOutput(output: BuildOutput): void {
+    this.buildPanel.append(output)
+    if (output.kind === 'stdout' || output.kind === 'stderr') this.buildOutputText += output.text
+    if (output.kind === 'exit') this.buildPanel.setProblems(this.parseBuildProblems())
+  }
+
+  private parseBuildProblems(): BuildProblem[] {
+    const root = this.folder
+    if (!root) return []
+    let matcher: RegExp
+    try {
+      matcher = this.activeBuildSystem?.fileRegex
+        ? new RegExp(this.activeBuildSystem.fileRegex, 'gm')
+        : /(?:^|\n)([^:\n]+):(\d+):(\d+):\s*(?:warning:\s*)?(.*)/gm
+    } catch {
+      return []
+    }
+    const problems: BuildProblem[] = []
+    let match: RegExpExecArray | null
+    while ((match = matcher.exec(this.buildOutputText)) && problems.length < 500) {
+      const rawPath = match[1]
+      const line = Number(match[2])
+      const column = Number(match[3])
+      const message = match[4] || match[0]
+      if (!Number.isFinite(line) || !Number.isFinite(column)) continue
+      const path = rawPath.startsWith('/') ? rawPath : `${root}/${rawPath}`
+      problems.push({
+        path,
+        line: Math.max(1, line),
+        column: Math.max(1, column),
+        message: message.trim(),
+        severity: /warning/i.test(match[0]) ? 'warning' : 'error'
+      })
+      if (match[0].length === 0) matcher.lastIndex += 1
+    }
+    return problems
+  }
+
+  private async openBuildProblem(problem: BuildProblem): Promise<void> {
+    await this.openWorkspaceMatch({
+      path: problem.path,
+      line: problem.line,
+      column: problem.column,
+      lineText: '',
+      matchText: problem.message
+    })
   }
 
   /** A conservative built-in formatter for whitespace-only languages. */
@@ -1540,6 +1764,7 @@ class App {
           filePath: this.active?.path ?? null
         })
         if (typeof result.content === 'string' && result.content !== content) this.editor.replaceContent(result.content)
+        if (doc) doc.diagnostics = result.diagnostics
         this.editor.setDiagnostics(result.diagnostics.map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
         this.statusSelection.textContent = result.diagnostics.length
           ? `${result.diagnostics.length} diagnostic${result.diagnostics.length === 1 ? '' : 's'}`
@@ -1575,6 +1800,8 @@ class App {
       next = `${next.slice(0, from)}${edit.newText}${next.slice(to)}`
     }
     if (next !== this.editor.getContent()) this.editor.replaceContent(next)
+    const doc = this.active
+    if (doc) doc.diagnostics = result.diagnostics
     this.editor.setDiagnostics(result.diagnostics.map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
     this.statusSelection.textContent = result.diagnostics.length
       ? `${result.diagnostics.length} diagnostic${result.diagnostics.length === 1 ? '' : 's'}`

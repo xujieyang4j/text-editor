@@ -22,7 +22,9 @@ import {
   copyLineUp,
   copyLineDown,
   deleteLine,
-  toggleComment
+  toggleComment,
+  indentMore,
+  indentLess
 } from '@codemirror/commands'
 import {
   indentOnInput,
@@ -96,7 +98,10 @@ function fontTheme(fontSize: number): Extension {
 }
 
 /** Base set of extensions shared by every document. */
-function baseExtensions(callbacks: EditorCallbacks): Extension {
+function baseExtensions(
+  callbacks: EditorCallbacks,
+  onUpdate: (update: ViewUpdate) => void
+): Extension {
   return [
     lineNumbers(),
     highlightActiveLineGutter(),
@@ -127,6 +132,7 @@ function baseExtensions(callbacks: EditorCallbacks): Extension {
     EditorView.updateListener.of((update: ViewUpdate) => {
       if (update.docChanged) callbacks.onDocChange()
       if (update.selectionSet || update.docChanged) callbacks.onCursorChange(update.state)
+      onUpdate(update)
     })
   ]
 }
@@ -142,6 +148,9 @@ export class Editor {
   private settings: Settings
   /** In-flight language loads are versioned so stale tabs cannot reconfigure the active view. */
   private languageRequest = 0
+  private snippetRanges: Array<{ from: number; to: number; index: number }> = []
+  private snippetCursor = -1
+  private snippetFinalPos: number | null = null
 
   constructor(parent: HTMLElement, callbacks: EditorCallbacks, settings: Settings) {
     this.callbacks = callbacks
@@ -150,6 +159,11 @@ export class Editor {
       parent,
       state: this.makeState('')
     })
+    this.view.dom.addEventListener('keydown', (event) => {
+      if (event.key !== 'Tab' || this.snippetRanges.length === 0) return
+      event.preventDefault()
+      this.nextSnippetPlaceholder(event.shiftKey ? -1 : 1)
+    }, true)
   }
 
   /** Build a fresh EditorState for the given document text. */
@@ -159,7 +173,7 @@ export class Editor {
     return EditorState.create({
       doc,
       extensions: [
-        baseExtensions(this.callbacks),
+        baseExtensions(this.callbacks, (update) => this.mapSnippetRanges(update)),
         languageConf.of([]),
         themeConf.of(s.theme === 'dark' ? oneDark : []),
         wrapConf.of(s.wordWrap ? EditorView.lineWrapping : []),
@@ -176,11 +190,13 @@ export class Editor {
 
   /** Replace the entire document (used when switching tabs). */
   setDocument(doc: string, state?: EditorState): void {
+    this.clearSnippet()
     this.view.setState(state ?? this.makeState(doc))
   }
 
   /** Replace document text without discarding extensions, undo history or folds. */
   replaceContent(doc: string): void {
+    this.clearSnippet()
     const state = this.view.state
     this.view.dispatch({ changes: { from: 0, to: state.doc.length, insert: doc }, userEvent: 'input.replace' })
   }
@@ -412,6 +428,111 @@ export class Editor {
     this.view.dispatch({ changes, userEvent: 'input.snippet' })
   }
 
+  /** Insert Sublime-style ${1:default}/${0} placeholders and enable Tab navigation. */
+  insertSnippet(template: string): void {
+    const { state } = this.view
+    const selection = state.selection.main
+    const parsed = parseSnippet(template)
+    const from = selection.from
+    const to = selection.to
+    this.view.dispatch({
+      changes: { from, to, insert: parsed.text },
+      selection: EditorSelection.cursor(from + parsed.finalOffset),
+      userEvent: 'input.snippet'
+    })
+    this.snippetRanges = parsed.placeholders
+      .map((placeholder) => ({ from: from + placeholder.from, to: from + placeholder.to, index: placeholder.index }))
+      .sort((a, b) => a.index - b.index)
+    this.snippetCursor = -1
+    this.snippetFinalPos = from + parsed.finalOffset
+    if (this.snippetRanges.length > 0) this.nextSnippetPlaceholder(1)
+  }
+
+  nextSnippetPlaceholder(direction: 1 | -1): boolean {
+    if (this.snippetRanges.length === 0) return false
+    if (direction === 1 && this.snippetCursor >= this.snippetRanges.length - 1) {
+      const finalPos = this.snippetFinalPos ?? this.snippetRanges[this.snippetRanges.length - 1].to
+      this.clearSnippet()
+      this.view.dispatch({ selection: EditorSelection.cursor(finalPos), scrollIntoView: true })
+      this.view.focus()
+      return true
+    }
+    this.snippetCursor = (this.snippetCursor + direction + this.snippetRanges.length) % this.snippetRanges.length
+    const target = this.snippetRanges[this.snippetCursor]
+    this.view.dispatch({ selection: EditorSelection.range(target.from, target.to), scrollIntoView: true })
+    this.view.focus()
+    return true
+  }
+
+  clearSnippet(): void {
+    this.snippetRanges = []
+    this.snippetCursor = -1
+    this.snippetFinalPos = null
+  }
+
+  private mapSnippetRanges(update: ViewUpdate): void {
+    if (!update.docChanged || this.snippetRanges.length === 0) return
+    this.snippetRanges = this.snippetRanges.map((range) => ({
+      ...range,
+      from: update.changes.mapPos(range.from, 1),
+      to: update.changes.mapPos(range.to, -1)
+    }))
+    if (this.snippetFinalPos !== null) this.snippetFinalPos = update.changes.mapPos(this.snippetFinalPos, 1)
+  }
+
+  trimTrailingWhitespace(): void {
+    this.replaceContent(this.getContent().replace(/[ \t]+(?=\n|$)/g, ''))
+  }
+
+  convertIndentation(toTabs: boolean): void {
+    const width = this.settings.tabSize
+    const converted = this.getContent().split('\n').map((line) => {
+      const prefix = /^[ \t]*/.exec(line)?.[0] ?? ''
+      const columns = [...prefix].reduce((count, char) => char === '\t' ? count + width : count + 1, 0)
+      const indent = toTabs ? '\t'.repeat(Math.floor(columns / width)) + ' '.repeat(columns % width) : ' '.repeat(columns)
+      return indent + line.slice(prefix.length)
+    }).join('\n')
+    this.replaceContent(converted)
+  }
+
+  changeCase(kind: 'upper' | 'lower' | 'title'): void {
+    const { state } = this.view
+    const range = state.selection.main
+    const from = range.empty ? 0 : range.from
+    const to = range.empty ? state.doc.length : range.to
+    const source = state.sliceDoc(from, to)
+    const next = kind === 'upper' ? source.toUpperCase() : kind === 'lower' ? source.toLowerCase() : source.toLowerCase().replace(/\b\p{L}/gu, (char) => char.toUpperCase())
+    this.view.dispatch({ changes: { from, to, insert: next }, selection: EditorSelection.range(from, from + next.length), userEvent: 'input.case' })
+  }
+
+  joinLines(): void {
+    const { state } = this.view
+    const selection = state.selection.main
+    const from = state.doc.lineAt(selection.from).from
+    const to = state.doc.lineAt(selection.to).to
+    const joined = state.sliceDoc(from, to).replace(/\s*\n\s*/g, ' ')
+    this.view.dispatch({ changes: { from, to, insert: joined }, selection: EditorSelection.cursor(from + joined.length), userEvent: 'input.join-lines' })
+  }
+
+  splitSelectionIntoLines(): void {
+    const { state } = this.view
+    const selection = state.selection.main
+    if (selection.empty) return
+    const firstLine = state.doc.lineAt(selection.from).number
+    const lastLine = state.doc.lineAt(selection.to).number
+    const ranges: SelectionRange[] = []
+    for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber += 1) {
+      ranges.push(EditorSelection.cursor(state.doc.line(lineNumber).from))
+    }
+    this.view.dispatch({
+      selection: EditorSelection.create(ranges),
+      userEvent: 'select.split-lines'
+    })
+  }
+
+  indentSelection(): void { indentMore(this.view) }
+  outdentSelection(): void { indentLess(this.view) }
+
   /** Replace diagnostics supplied by a configured language tool. */
   setDiagnostics(diagnostics: Diagnostic[]): void {
     this.view.dispatch(setDiagnostics(this.view.state, diagnostics))
@@ -420,6 +541,36 @@ export class Editor {
   focus(): void {
     this.view.focus()
   }
+}
+
+interface ParsedSnippet {
+  text: string
+  placeholders: Array<{ from: number; to: number; index: number }>
+  finalOffset: number
+}
+
+/** Parse the practical ${1:default}, $1 and ${0} subset of Sublime snippets. */
+function parseSnippet(template: string): ParsedSnippet {
+  const placeholders: ParsedSnippet['placeholders'] = []
+  let text = ''
+  let finalOffset = 0
+  let cursor = 0
+  const matcher = /\$\{(\d+)(?::([^}]*))?\}|\$(\d+)/g
+  let match: RegExpExecArray | null
+  while ((match = matcher.exec(template))) {
+    text += template.slice(cursor, match.index)
+    const index = Number(match[1] ?? match[3])
+    const value = match[2] ?? ''
+    const from = text.length
+    text += value
+    const to = text.length
+    if (index === 0) finalOffset = from
+    else placeholders.push({ from, to, index })
+    cursor = matcher.lastIndex
+  }
+  text += template.slice(cursor)
+  if (!template.includes('$0') && !template.includes('${0}')) finalOffset = text.length
+  return { text, placeholders, finalOffset }
 }
 
 /** Match a file name against CodeMirror's language descriptions by extension. */

@@ -78,6 +78,13 @@ export function buildMenu(): void {
         item('Duplicate Line/Selection', 'duplicate-selection', 'CmdOrCtrl+Shift+D'),
         item('Delete Line', 'delete-line', 'CmdOrCtrl+Shift+K'),
         item('Sort Lines', 'sort-lines'),
+        item('Upper Case', 'to-upper-case'),
+        item('Lower Case', 'to-lower-case'),
+        item('Title Case', 'to-title-case'),
+        item('Join Lines', 'join-lines'),
+        item('Trim Trailing Whitespace', 'trim-trailing-whitespace'),
+        item('Indent Selection', 'indent-selection', 'CmdOrCtrl+]'),
+        item('Outdent Selection', 'outdent-selection', 'CmdOrCtrl+['),
         { type: 'separator' },
         item('Find', 'find', 'CmdOrCtrl+F'),
         item('Replace', 'replace', 'CmdOrCtrl+H'),
@@ -93,7 +100,8 @@ export function buildMenu(): void {
         // These map to CM6 defaults already bound in-editor; listed for
         // discoverability. selectAll is provided by the Edit role above.
         item('Duplicate Line/Selection', 'duplicate-selection', 'CmdOrCtrl+Shift+D'),
-        item('Sort Lines', 'sort-lines')
+        item('Sort Lines', 'sort-lines'),
+        item('Split Selection into Lines', 'split-selection-lines')
       ]
     },
     {
@@ -152,6 +160,7 @@ export function buildMenu(): void {
       submenu: [
         item('Build', 'build', 'CmdOrCtrl+Shift+B'),
         item('Format Document', 'format-document'),
+        item('Select Build System…', 'select-build-system'),
         item('Toggle Build Output', 'toggle-problems'),
         item('Configure Language Tool…', 'language-tools'),
         item('Install Local Plugin…', 'install-plugin'),

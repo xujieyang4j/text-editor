@@ -33,6 +33,15 @@ export interface Doc {
   }
   /** Disk version explicitly kept aside while the user continues local edits. */
   ignoredExternalContent?: string
+  /** Latest diagnostics received from an LSP or configured language tool. */
+  diagnostics?: Array<{
+    line: number
+    column: number
+    endLine?: number
+    endColumn?: number
+    severity: 'error' | 'warning' | 'info'
+    message: string
+  }>
 }
 
 let counter = 0

@@ -2,7 +2,7 @@ import { dialog, ipcMain, BrowserWindow, app, shell, type IpcMainInvokeEvent } f
 import { promises as fs, watch, type FSWatcher } from 'fs'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import path from 'path'
-import { pathToFileURL } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 import { detectLineEnding, encodeText as encodePreservedText } from '../shared/text.js'
 import { isBinaryBuffer, maxEditableBytes } from '../shared/filePolicy.js'
 import { extractWorkspaceSymbols } from '../shared/symbolIndex.js'
@@ -31,6 +31,8 @@ import {
   type LanguageToolResult,
   type LanguageServerRequest,
   type LanguageServerResult,
+  type LanguageServerSyncRequest,
+  type LanguageServerDiagnosticEvent,
   type PluginInstallRequest
   , type LayoutKind
 } from '../shared/ipc.js'
@@ -55,6 +57,19 @@ const IGNORED_ENTRIES = new Set([
 const writeQueues = new Map<string, Promise<void>>()
 const workspaceWatchers = new Map<number, FSWatcher>()
 const builds = new Map<number, ChildProcessWithoutNullStreams>()
+interface PersistentLanguageServer {
+  child: ChildProcessWithoutNullStreams
+  root: string
+  configKey: string
+  initialized: boolean
+  nextId: number
+  documents: Map<string, number>
+  pending: Map<number, (message: Record<string, unknown>) => void>
+  sender: Electron.WebContents
+  ready: Promise<void>
+  resolveReady: () => void
+}
+const languageServers = new Map<string, PersistentLanguageServer>()
 const grantedFiles = new Map<number, Set<string>>()
 const grantedRoots = new Map<number, Set<string>>()
 
@@ -274,6 +289,13 @@ async function writeJson(file: string, data: unknown): Promise<void> {
   }
 }
 
+function resolveBuildCwd(root: string, workingDirectory?: string): string {
+  if (!workingDirectory) return root
+  const candidate = path.resolve(root, workingDirectory)
+  if (!isInside(path.resolve(root), candidate)) throw new Error('Build working directory must stay inside the workspace.')
+  return candidate
+}
+
 function asFiniteInt(value: unknown, fallback: number, min: number, max: number): number {
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.max(min, Math.min(max, Math.round(value)))
@@ -401,7 +423,38 @@ function sanitizeSession(value: unknown): Session {
                 }]
               })
           )
-        : {}
+        : {},
+      buildSystems: Array.isArray(project.buildSystems)
+        ? project.buildSystems
+            .flatMap((system) => {
+              if (!system || typeof system !== 'object') return []
+              const source = system as { name?: unknown; command?: unknown; args?: unknown; workingDirectory?: unknown; fileRegex?: unknown; saveBeforeBuild?: unknown }
+              if (typeof source.name !== 'string' || typeof source.command !== 'string') return []
+              return [{
+                name: source.name.slice(0, 100),
+                command: source.command.slice(0, 1_000),
+                args: Array.isArray(source.args) ? source.args.filter((arg): arg is string => typeof arg === 'string').slice(0, 50) : [],
+                ...(typeof source.workingDirectory === 'string' ? { workingDirectory: source.workingDirectory.slice(0, 500) } : {}),
+                ...(typeof source.fileRegex === 'string' ? { fileRegex: source.fileRegex.slice(0, 1_000) } : {}),
+                ...(typeof source.saveBeforeBuild === 'boolean' ? { saveBeforeBuild: source.saveBeforeBuild } : {})
+                , variants: Array.isArray((source as { variants?: unknown }).variants)
+                  ? (source as { variants: unknown[] }).variants.flatMap((variant) => {
+                      if (!variant || typeof variant !== 'object') return []
+                      const rawVariant = variant as { name?: unknown; command?: unknown; args?: unknown; workingDirectory?: unknown; fileRegex?: unknown }
+                      if (typeof rawVariant.name !== 'string') return []
+                      return [{
+                        name: rawVariant.name.slice(0, 100),
+                        ...(typeof rawVariant.command === 'string' ? { command: rawVariant.command.slice(0, 1_000) } : {}),
+                        ...(Array.isArray(rawVariant.args) ? { args: rawVariant.args.filter((arg): arg is string => typeof arg === 'string').slice(0, 50) } : {}),
+                        ...(typeof rawVariant.workingDirectory === 'string' ? { workingDirectory: rawVariant.workingDirectory.slice(0, 500) } : {}),
+                        ...(typeof rawVariant.fileRegex === 'string' ? { fileRegex: rawVariant.fileRegex.slice(0, 1_000) } : {})
+                      }]
+                    }).slice(0, 20)
+                  : []
+              }]
+            })
+            .slice(0, 30)
+        : []
     },
     layout
   }
@@ -689,83 +742,159 @@ function lspMessage(child: ChildProcessWithoutNullStreams, payload: Record<strin
   child.stdin.write(`Content-Length: ${Buffer.byteLength(content)}\r\n\r\n${content}`)
 }
 
-/** One-shot LSP initialize/open/format handshake, including publishDiagnostics. */
-async function runLanguageServer(request: LanguageServerRequest): Promise<LanguageServerResult> {
-  assertAbsolutePath(request.root, 'workspace root')
-  assertAbsolutePath(request.filePath, 'document path')
-  if (!request.config || typeof request.config.command !== 'string' || !request.config.command.trim()) {
-    throw new Error('No language server command is configured for this language.')
+function languageServerKey(senderId: number, root: string, config: { command: string; args: string[] }): string {
+  return `${senderId}\u0000${path.resolve(root)}\u0000${config.command}\u0000${config.args.join('\u0000')}`
+}
+
+function lspDiagnostics(message: Record<string, unknown>): LanguageServerDiagnosticEvent | null {
+  if (message.method !== 'textDocument/publishDiagnostics') return null
+  const params = message.params as { uri?: unknown; diagnostics?: unknown } | undefined
+  if (typeof params?.uri !== 'string' || !params.uri.startsWith('file:') || !Array.isArray(params.diagnostics)) return null
+  let filePath: string
+  try { filePath = fileURLToPath(params.uri) } catch { return null }
+  return {
+    filePath,
+    diagnostics: params.diagnostics
+      .filter((item): item is { range?: unknown; severity?: unknown; message?: unknown } => !!item && typeof item === 'object')
+      .map((item) => {
+        const range = item.range as { start?: { line?: number; character?: number }; end?: { line?: number; character?: number } } | undefined
+        return {
+          line: (range?.start?.line ?? 0) + 1,
+          column: (range?.start?.character ?? 0) + 1,
+          endLine: (range?.end?.line ?? range?.start?.line ?? 0) + 1,
+          endColumn: (range?.end?.character ?? range?.start?.character ?? 0) + 1,
+          severity: item.severity === 2 ? 'warning' : item.severity === 3 || item.severity === 4 ? 'info' : 'error' as const,
+          message: typeof item.message === 'string' ? item.message.slice(0, 2_000) : 'Language server diagnostic'
+        }
+      })
   }
+}
+
+function startPersistentLanguageServer(
+  sender: Electron.WebContents,
+  root: string,
+  config: LanguageServerSyncRequest['config']
+): PersistentLanguageServer {
+  const key = languageServerKey(sender.id, root, config)
+  const existing = languageServers.get(key)
+  if (existing) return existing
+  const child = spawn(config.command, config.args, { cwd: root, env: process.env })
+  let resolveReady = (): void => undefined
+  const ready = new Promise<void>((resolve) => { resolveReady = resolve })
+  const server: PersistentLanguageServer = {
+    child,
+    root,
+    configKey: key,
+    initialized: false,
+    nextId: 1,
+    documents: new Map(),
+    pending: new Map(),
+    sender,
+    ready,
+    resolveReady
+  }
+  languageServers.set(key, server)
+  child.stdout.on('data', createLspReader((message) => {
+    const diagnostic = lspDiagnostics(message)
+    if (diagnostic && !sender.isDestroyed()) sender.send(IPC.languageServerDiagnostics, diagnostic)
+    if (typeof message.id === 'number') {
+      const pending = server.pending.get(message.id)
+      if (pending) {
+        server.pending.delete(message.id)
+        pending(message)
+      }
+    }
+  }))
+  const cleanup = (): void => {
+    languageServers.delete(key)
+    server.resolveReady()
+    for (const resolve of server.pending.values()) resolve({ error: { message: 'Language server stopped.' } })
+    server.pending.clear()
+  }
+  child.on('error', cleanup)
+  child.on('close', cleanup)
+  sender.once('destroyed', () => {
+    child.kill()
+    cleanup()
+  })
+  const initializeId = server.nextId++
+  const initializeTimer = setTimeout(() => {
+    if (!server.initialized) child.kill()
+  }, 15_000)
+  server.pending.set(initializeId, () => {
+    server.initialized = true
+    clearTimeout(initializeTimer)
+    server.resolveReady()
+    lspMessage(child, { jsonrpc: '2.0', method: 'initialized', params: {} })
+  })
+  lspMessage(child, {
+    jsonrpc: '2.0',
+    id: initializeId,
+    method: 'initialize',
+    params: { processId: process.pid, rootUri: pathToFileURL(root).href, capabilities: {} }
+  })
+  return server
+}
+
+async function syncPersistentLanguageServer(
+  sender: Electron.WebContents,
+  request: LanguageServerSyncRequest
+): Promise<void> {
+  const server = startPersistentLanguageServer(sender, request.root, request.config)
+  const uri = pathToFileURL(request.filePath).href
+  const previousVersion = server.documents.get(uri)
+  const sendDocument = (): void => {
+    if (previousVersion === undefined) {
+      lspMessage(server.child, {
+        jsonrpc: '2.0',
+        method: 'textDocument/didOpen',
+        params: { textDocument: { uri, languageId: request.languageId, version: request.version, text: request.content } }
+      })
+    } else {
+      lspMessage(server.child, {
+        jsonrpc: '2.0',
+        method: 'textDocument/didChange',
+        params: { textDocument: { uri, version: request.version }, contentChanges: [{ text: request.content }] }
+      })
+    }
+    server.documents.set(uri, request.version)
+  }
+  await server.ready
+  if (!server.initialized || server.child.killed) throw new Error('Language server failed to initialize.')
+  sendDocument()
+}
+
+async function formatWithPersistentLanguageServer(
+  sender: Electron.WebContents,
+  request: LanguageServerRequest
+): Promise<LanguageServerResult> {
+  const server = startPersistentLanguageServer(sender, request.root, request.config)
+  await syncPersistentLanguageServer(sender, { ...request, version: (server.documents.get(pathToFileURL(request.filePath).href) ?? 0) + 1 })
   return new Promise<LanguageServerResult>((resolve, reject) => {
-    const child = spawn(request.config.command, request.config.args ?? [], { cwd: request.root, env: process.env })
-    const uri = pathToFileURL(request.filePath).href
-    const diagnostics: LanguageServerResult['diagnostics'] = []
-    let completed = false
-    const fail = (error: Error): void => {
-      if (completed) return
-      completed = true
-      child.kill()
-      reject(error)
-    }
-    const finish = (edits: LanguageServerResult['edits']): void => {
-      if (completed) return
-      completed = true
-      child.kill()
-      resolve({ edits, diagnostics })
-    }
-    const timer = setTimeout(() => fail(new Error('Language server timed out after 15 seconds.')), 15_000)
-    child.on('error', (error) => { clearTimeout(timer); fail(error) })
-    child.stderr.on('data', () => undefined)
-    child.stdout.on('data', createLspReader((message) => {
-      if (message.method === 'textDocument/publishDiagnostics') {
-        const params = message.params as { uri?: unknown; diagnostics?: unknown } | undefined
-        if (params?.uri === uri && Array.isArray(params.diagnostics)) {
-          diagnostics.splice(0, diagnostics.length, ...params.diagnostics
-            .filter((item): item is { range?: unknown; severity?: unknown; message?: unknown } => !!item && typeof item === 'object')
+    const id = server.nextId++
+    const timer = setTimeout(() => {
+      server.pending.delete(id)
+      reject(new Error('Language server formatting request timed out.'))
+    }, 15_000)
+    server.pending.set(id, (message) => {
+      clearTimeout(timer)
+      if (message.error) { reject(new Error(String((message.error as { message?: unknown }).message ?? 'Language server error.'))); return }
+      const edits = Array.isArray(message.result)
+        ? message.result
+            .filter((item): item is { range?: unknown; newText?: unknown } => !!item && typeof item === 'object' && typeof item.newText === 'string')
             .map((item) => {
               const range = item.range as { start?: { line?: number; character?: number }; end?: { line?: number; character?: number } } | undefined
-              const severity: LanguageServerResult['diagnostics'][number]['severity'] =
-                item.severity === 2 ? 'warning' : item.severity === 3 || item.severity === 4 ? 'info' : 'error'
               return {
-                line: (range?.start?.line ?? 0) + 1,
-                column: (range?.start?.character ?? 0) + 1,
-                endLine: (range?.end?.line ?? range?.start?.line ?? 0) + 1,
-                endColumn: (range?.end?.character ?? range?.start?.character ?? 0) + 1,
-                severity,
-                message: typeof item.message === 'string' ? item.message : 'Language server diagnostic'
+                startLine: range?.start?.line ?? 0, startCharacter: range?.start?.character ?? 0,
+                endLine: range?.end?.line ?? 0, endCharacter: range?.end?.character ?? 0, newText: item.newText as string
               }
-            }))
-        }
-      }
-      if (message.id === 1 && message.result) {
-        lspMessage(child, { jsonrpc: '2.0', method: 'initialized', params: {} })
-        lspMessage(child, {
-          jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri, languageId: request.languageId, version: 1, text: request.content } }
-        })
-        lspMessage(child, { jsonrpc: '2.0', id: 2, method: 'textDocument/formatting', params: { textDocument: { uri }, options: { tabSize: 4, insertSpaces: true } } })
-      }
-      if (message.id === 2) {
-        clearTimeout(timer)
-        const edits = Array.isArray(message.result)
-          ? message.result
-              .filter((item): item is { range?: unknown; newText?: unknown } => !!item && typeof item === 'object' && typeof item.newText === 'string')
-              .map((item) => {
-                const range = item.range as { start?: { line?: number; character?: number }; end?: { line?: number; character?: number } } | undefined
-                return {
-                  startLine: range?.start?.line ?? 0, startCharacter: range?.start?.character ?? 0,
-                  endLine: range?.end?.line ?? 0, endCharacter: range?.end?.character ?? 0, newText: item.newText as string
-                }
-              })
-          : []
-        finish(edits)
-      }
-    }))
-    child.on('close', (code) => {
-      if (!completed) { clearTimeout(timer); fail(new Error(`Language server exited with code ${code}.`)) }
+            })
+        : []
+      resolve({ edits, diagnostics: [] })
     })
-    lspMessage(child, {
-      jsonrpc: '2.0', id: 1, method: 'initialize',
-      params: { processId: process.pid, rootUri: pathToFileURL(request.root).href, capabilities: {} }
+    lspMessage(server.child, {
+      jsonrpc: '2.0', id, method: 'textDocument/formatting',
+      params: { textDocument: { uri: pathToFileURL(request.filePath).href }, options: { tabSize: 4, insertSpaces: true } }
     })
   })
 }
@@ -974,17 +1103,19 @@ export function registerFileHandlers(): void {
       : []
     const senderId = event.sender.id
     builds.get(senderId)?.kill()
-    const child = spawn(request.command, args, { cwd: request.root, shell: true, env: process.env })
+    const cwd = resolveBuildCwd(request.root, request.workingDirectory)
+    const child = spawn(request.command, args, { cwd, shell: true, env: process.env })
     builds.set(senderId, child)
     const send = (payload: BuildOutput): void => {
       if (!event.sender.isDestroyed()) event.sender.send(IPC.buildOutput, payload)
     }
-    child.stdout.on('data', (data: Buffer) => send({ kind: 'stdout', text: data.toString() }))
-    child.stderr.on('data', (data: Buffer) => send({ kind: 'stderr', text: data.toString() }))
-    child.on('error', (error) => send({ kind: 'stderr', text: `${error.message}\n` }))
+    const systemName = typeof request.name === 'string' ? request.name.slice(0, 100) : undefined
+    child.stdout.on('data', (data: Buffer) => send({ kind: 'stdout', text: data.toString(), systemName }))
+    child.stderr.on('data', (data: Buffer) => send({ kind: 'stderr', text: data.toString(), systemName }))
+    child.on('error', (error) => send({ kind: 'stderr', text: `${error.message}\n`, systemName }))
     child.on('close', (code) => {
       if (builds.get(senderId) === child) builds.delete(senderId)
-      send({ kind: 'exit', text: code === 0 ? 'Build completed successfully.\n' : `Build exited with code ${code}.\n`, code })
+      send({ kind: 'exit', text: code === 0 ? 'Build completed successfully.\n' : `Build exited with code ${code}.\n`, code, systemName })
     })
   })
 
@@ -1042,7 +1173,29 @@ export function registerFileHandlers(): void {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
     assertGrantedFile(event, request.filePath)
-    return runLanguageServer(request)
+    return formatWithPersistentLanguageServer(event.sender, request)
+  })
+
+  ipcMain.handle(IPC.languageServerSync, async (event, request: LanguageServerSyncRequest): Promise<void> => {
+    assertTrustedSender(event)
+    assertGrantedRoot(event, request.root)
+    assertGrantedFile(event, request.filePath)
+    await syncPersistentLanguageServer(event.sender, request)
+  })
+
+  ipcMain.handle(IPC.languageServerStop, async (event, root: unknown, config: unknown): Promise<void> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    if (!config || typeof config !== 'object' || typeof (config as { command?: unknown }).command !== 'string') return
+    const source = config as { command: string; args?: unknown }
+    const key = languageServerKey(event.sender.id, root, {
+      command: source.command,
+      args: Array.isArray(source.args) ? source.args.filter((arg): arg is string => typeof arg === 'string') : []
+    })
+    const server = languageServers.get(key)
+    server?.child.kill()
+    languageServers.delete(key)
   })
 }
 
