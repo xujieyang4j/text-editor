@@ -8,6 +8,7 @@ import { openMarketplace } from './marketplace.js'
 import { ExtensionHost } from './extensionHost.js'
 import { incrementalChanges, revertIncrementalChange, type IncrementalChange } from './incrementalDiff.js'
 import { JsonView } from './jsonView.js'
+import { parseLosslessJson, stringifyLosslessJson } from '../../shared/losslessJson.js'
 import { BuildPanel } from './buildPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS, localizedCommands } from './commands.js'
@@ -1473,8 +1474,8 @@ class App {
       return
     }
     try {
-      const parsed = JSON.parse(this.editor.getContent())
-      this.editor.replaceContent(pretty ? `${JSON.stringify(parsed, null, 2)}\n` : JSON.stringify(parsed))
+      const parsed = parseLosslessJson(this.editor.getContent())
+      this.editor.replaceContent(pretty ? `${stringifyLosslessJson(parsed, 2)}\n` : stringifyLosslessJson(parsed))
       this.statusSelection.textContent = pretty
         ? (this.settings.locale === 'zh-CN' ? 'JSON 已格式化' : 'JSON formatted')
         : (this.settings.locale === 'zh-CN' ? 'JSON 已压缩' : 'JSON compacted')

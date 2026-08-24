@@ -1,6 +1,6 @@
 import type { UiLocale } from '../../shared/ipc.js'
+import { cloneLosslessJson, isJsonNumber, isLosslessJsonObject, parseLosslessJson, stringifyLosslessJson, type LosslessJsonValue } from '../../shared/losslessJson.js'
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 type JsonPath = Array<string | number>
 
 export interface JsonStats {
@@ -16,18 +16,14 @@ export interface JsonViewCallbacks {
   notify: (message: string) => void
 }
 
-function isRecord(value: JsonValue): value is { [key: string]: JsonValue } {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function statsFor(value: JsonValue): JsonStats {
+function statsFor(value: LosslessJsonValue): JsonStats {
   const stats: JsonStats = { keys: 0, objects: 0, arrays: 0, values: 0, maxDepth: 0 }
-  const visit = (current: JsonValue, depth: number): void => {
+  const visit = (current: LosslessJsonValue, depth: number): void => {
     stats.maxDepth = Math.max(stats.maxDepth, depth)
     if (Array.isArray(current)) {
       stats.arrays += 1
       current.forEach((item) => visit(item, depth + 1))
-    } else if (isRecord(current)) {
+    } else if (isLosslessJsonObject(current)) {
       stats.objects += 1
       const entries = Object.entries(current)
       stats.keys += entries.length
@@ -38,22 +34,18 @@ function statsFor(value: JsonValue): JsonStats {
   return stats
 }
 
-function cloneJson(value: JsonValue): JsonValue {
-  return JSON.parse(JSON.stringify(value)) as JsonValue
-}
-
-function getContainer(root: JsonValue, path: JsonPath): JsonValue | null {
+function getContainer(root: LosslessJsonValue, path: JsonPath): LosslessJsonValue | null {
   let current = root
   for (const part of path) {
     if (Array.isArray(current) && typeof part === 'number') current = current[part]
-    else if (isRecord(current) && typeof part === 'string') current = current[part]
+    else if (isLosslessJsonObject(current) && typeof part === 'string') current = current[part]
     else return null
   }
   return current
 }
 
-function parseInput(value: string): JsonValue {
-  return JSON.parse(value) as JsonValue
+function parseInput(value: string): LosslessJsonValue {
+  return parseLosslessJson(value)
 }
 
 function allowProperty(name: string): boolean {
@@ -69,7 +61,7 @@ export class JsonView {
   readonly root: HTMLElement
   private readonly summary: HTMLDivElement
   private readonly tree: HTMLDivElement
-  private value: JsonValue | null = null
+  private value: LosslessJsonValue | null = null
   private locale: UiLocale = 'zh-CN'
   private parseError = ''
 
@@ -115,7 +107,7 @@ export class JsonView {
       return
     }
     try {
-      this.value = parseInput(source)
+      this.value = parseLosslessJson(source)
       this.parseError = ''
     } catch (error) {
       this.value = null
@@ -143,10 +135,10 @@ export class JsonView {
     this.tree.appendChild(this.node(this.value, [], '$'))
   }
 
-  private node(value: JsonValue, path: JsonPath, label: string): HTMLElement {
+  private node(value: LosslessJsonValue, path: JsonPath, label: string): HTMLElement {
     const wrapper = document.createElement('div')
     wrapper.className = 'json-node'
-    if (Array.isArray(value) || isRecord(value)) {
+    if (Array.isArray(value) || isLosslessJsonObject(value)) {
       const details = document.createElement('details')
       details.open = path.length < 2
       const summary = document.createElement('summary')
@@ -182,8 +174,8 @@ export class JsonView {
     key.className = 'json-key'
     key.textContent = label
     const content = document.createElement('button')
-    content.className = `json-value json-${value === null ? 'null' : typeof value}`
-    content.textContent = typeof value === 'string' ? `"${value}"` : String(value)
+    content.className = `json-value json-${value === null ? 'null' : isJsonNumber(value) ? 'number' : typeof value}`
+    content.textContent = typeof value === 'string' ? `"${value}"` : isJsonNumber(value) ? value.raw : String(value)
     content.title = this.locale === 'zh-CN' ? '点击编辑值' : 'Click to edit value'
     content.addEventListener('click', () => this.editPrimitive(path, value))
     row.append(key, content)
@@ -198,16 +190,16 @@ export class JsonView {
     return wrapper
   }
 
-  private editPrimitive(path: JsonPath, current: JsonValue): void {
+  private editPrimitive(path: JsonPath, current: LosslessJsonValue): void {
     const prompt = this.locale === 'zh-CN' ? '输入新的 JSON 值（字符串请保留引号）:' : 'Enter a new JSON value (quote strings):'
-    const raw = window.prompt(prompt, JSON.stringify(current))
+    const raw = window.prompt(prompt, stringifyLosslessJson(current))
     if (raw === null) return
     try {
       this.mutate((root) => {
         const parent = getContainer(root, path.slice(0, -1))
         const part = path[path.length - 1]
         if (Array.isArray(parent) && typeof part === 'number') parent[part] = parseInput(raw)
-        else if (isRecord(parent) && typeof part === 'string') parent[part] = parseInput(raw)
+        else if (isLosslessJsonObject(parent) && typeof part === 'string') parent[part] = parseInput(raw)
       })
     } catch (error) {
       this.callbacks.notify(this.locale === 'zh-CN' ? `值无效：${error instanceof Error ? error.message : String(error)}` : `Invalid value: ${error instanceof Error ? error.message : String(error)}`)
@@ -223,7 +215,7 @@ export class JsonView {
     try {
       this.mutate((root) => {
         const target = getContainer(root, path)
-        if (!isRecord(target)) throw new Error('Target is not an object.')
+        if (!isLosslessJsonObject(target)) throw new Error('Target is not an object.')
         if (Object.hasOwn(target, key)) throw new Error('Key already exists.')
         Object.defineProperty(target, key, { value: parseInput(raw), enumerable: true, configurable: true, writable: true })
       })
@@ -253,14 +245,14 @@ export class JsonView {
       const parent = getContainer(root, path.slice(0, -1))
       const part = path[path.length - 1]
       if (Array.isArray(parent) && typeof part === 'number') parent.splice(part, 1)
-      else if (isRecord(parent) && typeof part === 'string') delete parent[part]
+      else if (isLosslessJsonObject(parent) && typeof part === 'string') delete parent[part]
     })
   }
 
-  private mutate(operation: (root: JsonValue) => void): void {
+  private mutate(operation: (root: LosslessJsonValue) => void): void {
     if (this.value === null) return
-    const next = cloneJson(this.value)
+    const next = cloneLosslessJson(this.value)
     operation(next)
-    this.callbacks.onReplace(`${JSON.stringify(next, null, 2)}\n`)
+    this.callbacks.onReplace(`${stringifyLosslessJson(next, 2)}\n`)
   }
 }
