@@ -435,6 +435,9 @@ class App {
       case 'import-sublime-snippet':
         void this.importSublimeSnippet()
         break
+      case 'import-sublime-keymap':
+        void this.importSublimeKeymap()
+        break
       case 'lsp-hover':
         void this.showLspHover()
         break
@@ -1921,6 +1924,29 @@ class App {
       this.statusSelection.textContent = `Imported Sublime snippet: ${imported.snippet.label}`
     } catch (error) {
       this.showError('Sublime snippet could not be imported.', error)
+    }
+  }
+
+  private async importSublimeKeymap(): Promise<void> {
+    if (!this.folder) {
+      this.showError('Open a project before importing a Sublime keymap.')
+      return
+    }
+    try {
+      const imported = await window.editor.importSublimeKeymap()
+      if (!imported) return
+      if (imported.rules.length === 0) {
+        this.showError(`No supported bindings were found. ${imported.skipped} entries were skipped.`)
+        return
+      }
+      if (!window.confirm(`Import ${imported.rules.length} supported key binding${imported.rules.length === 1 ? '' : 's'}?\n\n${imported.skipped} unsupported or parameterized entries will be skipped.`)) return
+      const keyFor = (rule: import('../../shared/ipc.js').KeyBindingRule): string => `${Array.isArray(rule.keys) ? rule.keys.join(' ') : rule.keys}\0${rule.command}`
+      const incoming = new Set(imported.rules.map(keyFor))
+      this.project.keyBindingRules = [...imported.rules, ...this.project.keyBindingRules.filter((rule) => !incoming.has(keyFor(rule)))].slice(0, 200)
+      await this.saveProject()
+      this.statusSelection.textContent = `Imported ${imported.rules.length} Sublime key bindings`
+    } catch (error) {
+      this.showError('Sublime keymap could not be imported.', error)
     }
   }
 

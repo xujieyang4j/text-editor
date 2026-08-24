@@ -203,7 +203,7 @@ export function buildMenu(): void {
     },
     {
       label: 'Preferences',
-      submenu: [item('Import Sublime Settings…', 'import-sublime-settings')]
+      submenu: [item('Import Sublime Settings…', 'import-sublime-settings'), item('Import Sublime Keymap…', 'import-sublime-keymap')]
     },
     {
       label: 'Project',

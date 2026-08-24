@@ -49,6 +49,7 @@ export const IPC = {
   projectImportSublime: 'project:import-sublime',
   projectImportSublimeAccept: 'project:import-sublime-accept',
   projectImportSublimeSnippet: 'project:import-sublime-snippet',
+  projectImportSublimeKeymap: 'project:import-sublime-keymap',
   pluginList: 'plugin:list',
   pluginInstall: 'plugin:install',
   pluginRemove: 'plugin:remove',
@@ -503,6 +504,12 @@ export interface SublimeSnippetImport {
   snippet: { label: string; text: string; trigger?: string; scope?: string }
 }
 
+export interface SublimeKeymapImport {
+  sourcePath: string
+  rules: KeyBindingRule[]
+  skipped: number
+}
+
 /** Result of a user-confirmed `.sublime-project` import. */
 export interface SublimeProjectImport {
   /** Opaque, short-lived main-process token. Roots are not authorised until accepted. */
@@ -712,6 +719,7 @@ export type MenuEvent =
   | 'import-sublime-project'
   | 'import-sublime-settings'
   | 'import-sublime-snippet'
+  | 'import-sublime-keymap'
   | 'import-sublime-build'
   | 'lsp-hover'
   | 'lsp-definition'

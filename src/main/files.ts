@@ -30,6 +30,7 @@ import {
   type BuildRequest,
   type BuildOutput,
   type BuildSystem,
+  type KeyBindingRule,
   type PluginManifest,
   type LanguageToolRequest,
   type LanguageToolResult,
@@ -62,6 +63,7 @@ import {
   , type SublimeProjectImport
   , type SublimeSnippetImport
   , type SublimeBuildImport
+  , type SublimeKeymapImport
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -570,6 +572,41 @@ function parseSublimeBuild(value: unknown, sourcePath: string): BuildSystem {
         }).slice(0, 20)
       : []
   }
+}
+
+const SUBLIME_COMMAND_MAP: Record<string, string> = {
+  save: 'save', save_as: 'save-as', close_file: 'close-tab', close_all: 'close-all-tabs',
+  reopen_last_file: 'reopen-tab', next_view: 'next-tab', prev_view: 'prev-tab',
+  goto_line: 'go-to-line',
+  toggle_comment: 'toggle-comment', toggle_block_comment: 'toggle-block-comment',
+  move_line_up: 'move-line-up', move_line_down: 'move-line-down', duplicate_line: 'duplicate-selection',
+  delete_line: 'delete-line', sort_lines: 'sort-lines', upper_case: 'to-upper-case', lower_case: 'to-lower-case',
+  join_lines: 'join-lines', indent: 'indent-selection', unindent: 'outdent-selection',
+  toggle_setting: 'toggle-word-wrap', build: 'build', toggle_side_bar: 'toggle-sidebar',
+  toggle_distraction_free: 'toggle-distraction-free', toggle_bookmark: 'toggle-bookmark',
+  next_bookmark: 'next-bookmark', prev_bookmark: 'prev-bookmark', show_scope_name: 'goto-symbol'
+}
+
+function sublimeKeyToLumen(key: string): string | null {
+  const parts = key.trim().toLowerCase().split('+').map((part) => part.trim()).filter(Boolean)
+  if (parts.length === 0) return null
+  const mapped = parts.map((part) => part === 'ctrl' || part === 'super' ? 'Mod' : part === 'alt' ? 'Alt' : part === 'shift' ? 'Shift' : part === 'enter' ? 'Enter' : part.length === 1 ? part.toUpperCase() : part)
+  return mapped.join('+')
+}
+
+function parseSublimeKeymap(value: unknown): { rules: KeyBindingRule[]; skipped: number } {
+  if (!Array.isArray(value)) throw new Error('The selected .sublime-keymap file must be a JSON array.')
+  const rules: KeyBindingRule[] = []
+  let skipped = 0
+  for (const item of value.slice(0, 500)) {
+    if (!item || typeof item !== 'object') { skipped += 1; continue }
+    const source = item as { keys?: unknown; command?: unknown; context?: unknown }
+    if (typeof source.command !== 'string' || !SUBLIME_COMMAND_MAP[source.command] || !Array.isArray(source.keys)) { skipped += 1; continue }
+    const keys = source.keys.map((key) => typeof key === 'string' ? sublimeKeyToLumen(key) : null).filter((key): key is string => !!key)
+    if (keys.length === 0) { skipped += 1; continue }
+    rules.push({ keys: keys.length === 1 ? keys[0] : keys, command: SUBLIME_COMMAND_MAP[source.command] })
+  }
+  return { rules: rules.slice(0, 200), skipped }
 }
 
 function sanitizeSession(value: unknown): Session {
@@ -2069,6 +2106,18 @@ export function registerFileHandlers(): void {
     if (result.canceled || !result.filePaths[0]) return null
     const sourcePath = result.filePaths[0]
     return { sourcePath, snippet: parseSublimeSnippet(await fs.readFile(sourcePath, 'utf8'), sourcePath) }
+  })
+
+  ipcMain.handle(IPC.projectImportSublimeKeymap, async (event): Promise<SublimeKeymapImport | null> => {
+    assertTrustedSender(event)
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, { title: 'Import Sublime Keymap', properties: ['openFile'], filters: [{ name: 'Sublime Keymap', extensions: ['sublime-keymap'] }] })
+    if (result.canceled || !result.filePaths[0]) return null
+    const sourcePath = result.filePaths[0]
+    let raw: unknown
+    try { raw = JSON.parse(stripJsonComments(await fs.readFile(sourcePath, 'utf8'))) }
+    catch { throw new Error('The selected .sublime-keymap file is not valid JSON-with-comments.') }
+    return { sourcePath, ...parseSublimeKeymap(raw) }
   })
 
   ipcMain.handle(IPC.pluginList, async (event, root: unknown): Promise<PluginManifest[]> => {

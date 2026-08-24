@@ -23,6 +23,7 @@ import {
   type ProjectSettings,
   type SublimeProjectImport,
   type SublimeSnippetImport,
+  type SublimeKeymapImport,
   type PluginManifest,
   type LanguageToolRequest,
   type LanguageToolResult,
@@ -185,6 +186,9 @@ const api = {
 
   importSublimeSnippet: (): Promise<SublimeSnippetImport | null> =>
     ipcRenderer.invoke(IPC.projectImportSublimeSnippet),
+
+  importSublimeKeymap: (): Promise<SublimeKeymapImport | null> =>
+    ipcRenderer.invoke(IPC.projectImportSublimeKeymap),
 
   listPlugins: (root: string): Promise<PluginManifest[]> => ipcRenderer.invoke(IPC.pluginList, root),
 
