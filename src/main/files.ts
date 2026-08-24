@@ -58,6 +58,7 @@ import {
   , type SavedMacro
   , type MacroStep
   , type SublimeProjectImport
+  , type SublimeSnippetImport
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -512,6 +513,27 @@ function convertSublimeSettings(value: unknown): Partial<Settings> {
   }
 }
 
+function decodeXml(value: string): string {
+  return value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+}
+
+function parseSublimeSnippet(source: string, sourcePath: string): SublimeSnippetImport['snippet'] {
+  const field = (name: string): string | undefined => {
+    const match = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, 'i').exec(source)
+    return match ? decodeXml(match[1].trim()) : undefined
+  }
+  const text = field('content')
+  if (!text || text.length > 10_000) throw new Error('The Sublime snippet must contain content no longer than 10 KB.')
+  const trigger = field('tabTrigger')
+  const scope = field('scope')
+  return {
+    label: path.basename(sourcePath, '.sublime-snippet').slice(0, 200),
+    text,
+    ...(trigger && /^[\w-]{1,80}$/.test(trigger) ? { trigger } : {}),
+    ...(scope ? { scope: scope.slice(0, 100) } : {})
+  }
+}
+
 function sanitizeSession(value: unknown): Session {
   const raw = value && typeof value === 'object' ? (value as Partial<Session>) : {}
   const openFiles = Array.isArray(raw.openFiles)
@@ -679,6 +701,14 @@ function sanitizeSession(value: unknown): Session {
         : [],
       marketplaceUrls: Array.isArray(project.marketplaceUrls)
         ? project.marketplaceUrls.filter((url): url is string => typeof url === 'string' && /^https:\/\//.test(url)).map((url) => url.slice(0, 2_000)).slice(0, 20)
+        : []
+      , snippets: Array.isArray(project.snippets)
+        ? project.snippets.flatMap((snippet) => {
+            if (!snippet || typeof snippet !== 'object') return []
+            const source = snippet as { label?: unknown; text?: unknown; trigger?: unknown; scope?: unknown }
+            if (typeof source.label !== 'string' || typeof source.text !== 'string') return []
+            return [{ label: source.label.slice(0, 200), text: source.text.slice(0, 10_000), ...(typeof source.trigger === 'string' && /^[\w-]{1,80}$/.test(source.trigger) ? { trigger: source.trigger } : {}), ...(typeof source.scope === 'string' ? { scope: source.scope.slice(0, 100) } : {}) }]
+          }).slice(0, 500)
         : []
     },
     layout
@@ -1942,6 +1972,15 @@ export function registerFileHandlers(): void {
     }
     if (folders.length === 0) throw new Error('No existing folders were found in the selected .sublime-project.')
     return folders
+  })
+
+  ipcMain.handle(IPC.projectImportSublimeSnippet, async (event): Promise<SublimeSnippetImport | null> => {
+    assertTrustedSender(event)
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, { title: 'Import Sublime Snippet', properties: ['openFile'], filters: [{ name: 'Sublime Snippet', extensions: ['sublime-snippet'] }] })
+    if (result.canceled || !result.filePaths[0]) return null
+    const sourcePath = result.filePaths[0]
+    return { sourcePath, snippet: parseSublimeSnippet(await fs.readFile(sourcePath, 'utf8'), sourcePath) }
   })
 
   ipcMain.handle(IPC.pluginList, async (event, root: unknown): Promise<PluginManifest[]> => {

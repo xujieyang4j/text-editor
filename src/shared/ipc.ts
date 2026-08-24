@@ -44,6 +44,7 @@ export const IPC = {
   projectWrite: 'project:write',
   projectImportSublime: 'project:import-sublime',
   projectImportSublimeAccept: 'project:import-sublime-accept',
+  projectImportSublimeSnippet: 'project:import-sublime-snippet',
   pluginList: 'plugin:list',
   pluginInstall: 'plugin:install',
   pluginRemove: 'plugin:remove',
@@ -479,6 +480,13 @@ export interface ProjectSettings {
   /** Legacy direct map remains supported for simple project key overrides. */
   keyBindingRules: KeyBindingRule[]
   marketplaceUrls: string[]
+  /** Project-owned declarative snippets, including imported `.sublime-snippet` files. */
+  snippets?: Array<{ label: string; text: string; trigger?: string; scope?: string }>
+}
+
+export interface SublimeSnippetImport {
+  sourcePath: string
+  snippet: { label: string; text: string; trigger?: string; scope?: string }
 }
 
 /** Result of a user-confirmed `.sublime-project` import. */
@@ -688,6 +696,7 @@ export type MenuEvent =
   | 'open-recent-project'
   | 'import-sublime-project'
   | 'import-sublime-settings'
+  | 'import-sublime-snippet'
   | 'lsp-hover'
   | 'lsp-definition'
   | 'lsp-references'

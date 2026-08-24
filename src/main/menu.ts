@@ -188,6 +188,7 @@ export function buildMenu(): void {
         item('Toggle Build Output', 'toggle-problems'),
         item('Configure Language Tool…', 'language-tools'),
         item('Install Local Plugin…', 'install-plugin'),
+        item('Import Sublime Snippet…', 'import-sublime-snippet'),
         item('Manage Plugins…', 'manage-plugins'),
         item('Browse Plugin Marketplace…', 'open-marketplace'),
         { type: 'separator' },

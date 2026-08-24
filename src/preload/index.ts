@@ -21,6 +21,7 @@ import {
   type BuildOutput,
   type ProjectSettings,
   type SublimeProjectImport,
+  type SublimeSnippetImport,
   type PluginManifest,
   type LanguageToolRequest,
   type LanguageToolResult,
@@ -170,6 +171,9 @@ const api = {
 
   acceptSublimeProjectImport: (token: string): Promise<OpenedFolder[]> =>
     ipcRenderer.invoke(IPC.projectImportSublimeAccept, token),
+
+  importSublimeSnippet: (): Promise<SublimeSnippetImport | null> =>
+    ipcRenderer.invoke(IPC.projectImportSublimeSnippet),
 
   listPlugins: (root: string): Promise<PluginManifest[]> => ipcRenderer.invoke(IPC.pluginList, root),
 

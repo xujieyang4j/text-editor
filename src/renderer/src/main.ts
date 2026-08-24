@@ -428,6 +428,9 @@ class App {
       case 'import-sublime-settings':
         void this.importSublimeSettings()
         break
+      case 'import-sublime-snippet':
+        void this.importSublimeSnippet()
+        break
       case 'lsp-hover':
         void this.showLspHover()
         break
@@ -1896,6 +1899,24 @@ class App {
     }
   }
 
+  private async importSublimeSnippet(): Promise<void> {
+    if (!this.folder) {
+      this.showError('Open a project before importing a Sublime snippet.')
+      return
+    }
+    try {
+      const imported = await window.editor.importSublimeSnippet()
+      if (!imported) return
+      const detail = `${imported.snippet.label}${imported.snippet.trigger ? ` (trigger: ${imported.snippet.trigger})` : ''}`
+      if (!window.confirm(`Import Sublime snippet: ${detail}?\n\nOnly the snippet text, trigger and scope are imported.`)) return
+      this.project.snippets = [imported.snippet, ...(this.project.snippets ?? []).filter((snippet) => snippet.label !== imported.snippet.label)].slice(0, 500)
+      await this.saveProject()
+      this.statusSelection.textContent = `Imported Sublime snippet: ${imported.snippet.label}`
+    } catch (error) {
+      this.showError('Sublime snippet could not be imported.', error)
+    }
+  }
+
   private async openRecentProject(): Promise<void> {
     const projects = await window.editor.readRecentProjects()
     if (projects.length === 0) {
@@ -1996,6 +2017,7 @@ class App {
         buildSystems: Array.isArray(parsed.buildSystems) ? parsed.buildSystems : [],
         keyBindingRules: Array.isArray(parsed.keyBindingRules) ? parsed.keyBindingRules : [],
         marketplaceUrls: Array.isArray(parsed.marketplaceUrls) ? parsed.marketplaceUrls.filter((url): url is string => typeof url === 'string') : []
+        , snippets: Array.isArray(parsed.snippets) ? parsed.snippets : []
       }
       this.buildPanel.setCommand(this.project.buildCommand)
       void this.saveProject()
@@ -2662,6 +2684,7 @@ class App {
         snippets.push({ label: `${plugin.name}: ${snippet.label}`, value: snippet.text })
       }
     }
+    for (const snippet of this.project.snippets ?? []) snippets.push({ label: `Project: ${snippet.label}`, value: snippet.text })
     this.palette.open({
       placeholder: 'Insert snippet…',
       items: snippets,
@@ -2678,7 +2701,10 @@ class App {
     const before = this.editor.view.state.sliceDoc(line.from, selection.head)
     const trigger = /([\w-]+)$/.exec(before)?.[1]
     if (!trigger) return false
-    const snippets = this.plugins.flatMap((plugin) => plugin.snippets.map((snippet) => ({ plugin, snippet })))
+    const snippets = [
+      ...this.plugins.flatMap((plugin) => plugin.snippets.map((snippet) => ({ snippet }))),
+      ...(this.project.snippets ?? []).map((snippet) => ({ snippet }))
+    ]
     const found = snippets.find(({ snippet }) => snippet.trigger === trigger && (!snippet.scope || snippet.scope === doc.language))
     if (!found) return false
     this.editor.view.dispatch({ changes: { from: selection.head - trigger.length, to: selection.head, insert: '' } })

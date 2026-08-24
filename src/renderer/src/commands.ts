@@ -126,6 +126,7 @@ export const COMMANDS: Command[] = [
   , { id: 'open-recent-project', title: 'Project: Open Recent Project…' }
   , { id: 'import-sublime-project', title: 'Project: Import Sublime Project…' }
   , { id: 'import-sublime-settings', title: 'Preferences: Import Sublime Settings…' }
+  , { id: 'import-sublime-snippet', title: 'Tools: Import Sublime Snippet…' }
   , { id: 'lsp-hover', title: 'LSP: Show Hover', hint: 'Ctrl/Cmd+Shift+Space' }
   , { id: 'lsp-definition', title: 'LSP: Go to Definition', hint: 'F12' }
   , { id: 'lsp-references', title: 'LSP: Find References', hint: 'Shift+F12' }
