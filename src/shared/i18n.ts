@@ -18,6 +18,7 @@ const ZH = {
   noFolder: '未打开文件夹', plainText: '纯文本', line: '行', column: '列', autoSave: '自动保存', noRecentFiles: '没有最近文件', noRecentProjects: '没有最近项目',
   run: '运行', stop: '停止', gitChanges: 'Git 更改', stage: '暂存', unstage: '取消暂存', discard: '丢弃', commit: '提交', history: '历史', blame: '追溯',
   findPlaceholder: '查找', replacePlaceholder: '替换', includePlaceholder: '包含：例如 **/*.ts', excludePlaceholder: '排除：例如 **/node_modules/**', findAll: '查找全部', replaceAll: '全部替换',
+  formatJson: '格式化 JSON', compactJson: '压缩 JSON', jsonView: 'JSON 视图',
   learnMore: '了解更多'
 } as const
 
@@ -37,6 +38,7 @@ const EN: Record<TranslationKey, string> = {
   noFolder: 'No Folder Opened', plainText: 'Plain Text', line: 'Ln', column: 'Col', autoSave: 'Auto Save', noRecentFiles: 'No recent files are available', noRecentProjects: 'No recent projects are available',
   run: 'Run', stop: 'Stop', gitChanges: 'Git Changes', stage: 'Stage', unstage: 'Unstage', discard: 'Discard', commit: 'Commit', history: 'History', blame: 'Blame',
   findPlaceholder: 'Find', replacePlaceholder: 'Replace', includePlaceholder: 'Include: e.g. **/*.ts', excludePlaceholder: 'Exclude: e.g. **/node_modules/**', findAll: 'Find All', replaceAll: 'Replace All',
+  formatJson: 'Format JSON', compactJson: 'Compact JSON', jsonView: 'JSON View',
   learnMore: 'Learn More'
 }
 
@@ -69,6 +71,7 @@ const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
   'project-settings': '配置项目…', 'add-folder-to-project': '添加文件夹到项目…', 'import-sublime-project': '导入 Sublime 项目…',
   'import-sublime-settings': '导入 Sublime 设置…', 'import-sublime-keymap': '导入 Sublime 快捷键…',
   'set-ui-language-zh': '切换为简体中文', 'set-ui-language-en': '切换为英文'
+  , 'format-json': '格式化 JSON', 'compact-json': '压缩 JSON', 'toggle-json-view': '切换 JSON 视图'
 }
 
 const CATEGORY_ZH: Record<string, string> = {

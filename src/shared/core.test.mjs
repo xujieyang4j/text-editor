@@ -20,4 +20,5 @@ assert.deepEqual(changes.map((change) => [change.kind, change.line, change.lineC
 assert.equal(revertIncrementalChange('one\nthree\nfour\nfive', changes[0]), 'one\ntwo\nfour\nfive')
 assert.deepEqual(incrementalChanges('one\ntwo', 'one').map((change) => [change.kind, change.line]), [['deleted', 2]])
 assert.equal(/<content>([\s\S]*?)<\/content>/i.exec('<snippet><content>line 1\nline 2</content></snippet>')?.[1], 'line 1\nline 2')
+assert.equal(JSON.stringify(JSON.parse('{"a":1,"list":[true,null]}'), null, 2), '{\n  "a": 1,\n  "list": [\n    true,\n    null\n  ]\n}')
 console.log('shared core tests passed')

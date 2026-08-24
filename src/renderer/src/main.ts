@@ -7,6 +7,7 @@ import { GitPanel } from './gitPanel.js'
 import { openMarketplace } from './marketplace.js'
 import { ExtensionHost } from './extensionHost.js'
 import { incrementalChanges, revertIncrementalChange, type IncrementalChange } from './incrementalDiff.js'
+import { JsonView } from './jsonView.js'
 import { BuildPanel } from './buildPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS, localizedCommands } from './commands.js'
@@ -89,6 +90,7 @@ class App {
   private gitPanel: GitPanel
   private buildPanel!: BuildPanel
   private preview!: MarkdownPreview
+  private jsonView!: JsonView
   private docs: Doc[] = []
   private groups: EditorGroup[] = []
   private activeGroup = 0
@@ -161,6 +163,10 @@ class App {
   private gitPanelHost = document.getElementById('git-panel-host')!
   private browserBtn = document.getElementById('browser-btn') as HTMLButtonElement
   private previewBtn = document.getElementById('preview-btn') as HTMLButtonElement
+  private jsonToolbar = document.getElementById('json-toolbar') as HTMLDivElement
+  private jsonFormatBtn = document.getElementById('json-format-btn') as HTMLButtonElement
+  private jsonCompactBtn = document.getElementById('json-compact-btn') as HTMLButtonElement
+  private jsonViewBtn = document.getElementById('json-view-btn') as HTMLButtonElement
 
   private t: (key: TranslationKey) => string = makeTranslator(DEFAULT_SETTINGS.locale)
 
@@ -246,6 +252,9 @@ class App {
     this.browserBtn.addEventListener('click', () => this.run('open-in-browser'))
     // Floating preview icon (shown only for markdown docs) → toggle preview.
     this.previewBtn.addEventListener('click', () => this.run('toggle-preview'))
+    this.jsonFormatBtn.addEventListener('click', () => this.run('format-json'))
+    this.jsonCompactBtn.addEventListener('click', () => this.run('compact-json'))
+    this.jsonViewBtn.addEventListener('click', () => this.run('toggle-json-view'))
 
     this.bindMenu()
     this.bindShortcuts()
@@ -310,6 +319,11 @@ class App {
     this.primaryGroupRoot.addEventListener('mousedown', () => this.focusGroup(0))
 
     this.preview = new MarkdownPreview(this.primaryEditorArea)
+    this.jsonView = new JsonView({
+      onReplace: (next) => this.editor.replaceContent(next),
+      notify: (message) => this.statusSelection.textContent = message
+    })
+    this.primaryEditorArea.appendChild(this.jsonView.root)
     this.buildPanel = new BuildPanel(
       this.settings.buildCommand,
       {
@@ -711,6 +725,15 @@ class App {
         this.editor.setSpellCheck(this.settings.spellCheck && !!this.active && (this.isMarkdownDoc(this.active) || this.active.language === 'Plain Text'))
         this.persistSettings()
         this.statusSelection.textContent = `Spell Check: ${this.settings.spellCheck ? 'on' : 'off'}`
+        break
+      case 'format-json':
+        this.transformJson(true)
+        break
+      case 'compact-json':
+        this.transformJson(false)
+        break
+      case 'toggle-json-view':
+        this.toggleJsonView()
         break
       case 'command-palette':
         this.openCommandPalette()
@@ -1410,6 +1433,7 @@ class App {
     this.workspaceWords = []
     this.workspaceWordIndexAt = 0
     this.refreshIncrementalDiff(doc, group.editor)
+    if (this.jsonView.visible && groupIndex === 0 && this.isJsonDoc(doc)) this.jsonView.update(doc.content)
     // Live-update the markdown preview if it's showing this doc.
     if (this.preview.isVisible && this.isMarkdownDoc(doc)) {
       this.preview.update(doc.content)
@@ -1427,6 +1451,39 @@ class App {
    */
   private isMarkdownDoc(doc: Doc): boolean {
     return isMarkdown(doc.name) || doc.language === 'Markdown'
+  }
+
+  /** JSON is enabled by extension, auto-detected syntax, or an explicit syntax choice. */
+  private isJsonDoc(doc: Doc): boolean {
+    return /\.(json|jsonc|geojson|har)$/i.test(doc.name) || doc.language === 'JSON'
+  }
+
+  private transformJson(pretty: boolean): void {
+    const doc = this.active
+    if (!doc || !this.isJsonDoc(doc)) {
+      this.showError(this.settings.locale === 'zh-CN' ? '当前文件不是 JSON。' : 'The active file is not JSON.')
+      return
+    }
+    try {
+      const parsed = JSON.parse(this.editor.getContent())
+      this.editor.replaceContent(pretty ? `${JSON.stringify(parsed, null, 2)}\n` : JSON.stringify(parsed))
+      this.statusSelection.textContent = pretty
+        ? (this.settings.locale === 'zh-CN' ? 'JSON 已格式化' : 'JSON formatted')
+        : (this.settings.locale === 'zh-CN' ? 'JSON 已压缩' : 'JSON compacted')
+    } catch (error) {
+      this.showError(this.settings.locale === 'zh-CN' ? 'JSON 无法解析，未修改源文件。' : 'Invalid JSON; source was not changed.', error)
+    }
+  }
+
+  private toggleJsonView(): void {
+    const doc = this.active
+    if (!doc || !this.isJsonDoc(doc)) {
+      this.showError(this.settings.locale === 'zh-CN' ? '当前文件不是 JSON。' : 'The active file is not JSON.')
+      return
+    }
+    if (this.jsonView.visible) this.jsonView.hide()
+    else this.jsonView.show(this.editor.getContent())
+    this.jsonViewBtn.classList.toggle('active', this.jsonView.visible)
   }
 
   /** Match Sublime's practical indentation detection without overriding user defaults on sparse files. */
@@ -1591,6 +1648,10 @@ class App {
     this.primaryHost.classList.toggle('has-minimap', this.settings.showMinimap)
     this.setActionVisible(this.browserBtn, html)
     this.setActionVisible(this.previewBtn, md)
+    const json = canShowChrome && !!doc && this.isJsonDoc(doc)
+    this.jsonToolbar.hidden = !json
+    this.jsonToolbar.classList.toggle('hidden', !json)
+    if (!json) this.jsonView.hide()
 
     // If the preview is open but the new doc isn't markdown, hide it; if it is
     // markdown, refresh it with the new content.
@@ -1599,6 +1660,7 @@ class App {
       else this.preview.hide()
     }
     this.previewBtn.classList.toggle('active', this.preview.isVisible && md)
+    this.jsonViewBtn.classList.toggle('active', this.jsonView.visible && json)
     if (doc?.externalChange) this.showExternalConflict(doc)
     else this.hideExternalConflict()
   }
@@ -3156,6 +3218,13 @@ class App {
     if (this.gitPanel) this.gitPanel.setLocale(locale)
     if (this.findResults) this.findResults.setLocale(locale)
     if (this.searchPanel) this.searchPanel.setLocale(locale)
+    if (this.jsonView) this.jsonView.setLocale(locale)
+    this.jsonFormatBtn.textContent = locale === 'zh-CN' ? '格式化' : 'Format'
+    this.jsonCompactBtn.textContent = locale === 'zh-CN' ? '压缩' : 'Compact'
+    this.jsonViewBtn.textContent = locale === 'zh-CN' ? '视图' : 'View'
+    this.jsonFormatBtn.title = this.t('formatJson')
+    this.jsonCompactBtn.title = this.t('compactJson')
+    this.jsonViewBtn.title = this.t('jsonView')
     if (this.groups.length > 0) {
       this.updateStatus()
       this.syncEditorChrome()
