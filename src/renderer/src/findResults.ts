@@ -26,6 +26,8 @@ export class FindResultsView {
     this.root.append(header, this.list)
   }
 
+  get element(): HTMLElement { return this.root }
+
   setResults(query: string, matches: WorkspaceMatch[]): void {
     this.matches = matches
     this.activeIndex = matches.length > 0 ? 0 : -1

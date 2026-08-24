@@ -146,6 +146,8 @@ export function buildMenu(): void {
         item('Toggle Minimap', 'toggle-minimap'),
         item('Toggle Word Wrap', 'toggle-word-wrap', 'Alt+Z'),
         item('Toggle Theme', 'toggle-theme', 'CmdOrCtrl+K'),
+        item('Select Color Scheme…', 'select-color-scheme'),
+        item('Toggle Git Changes', 'toggle-git'),
         { type: 'separator' },
         item('Zoom In', 'font-zoom-in', 'CmdOrCtrl+='),
         item('Zoom Out', 'font-zoom-out', 'CmdOrCtrl+-'),
@@ -165,6 +167,7 @@ export function buildMenu(): void {
         item('Configure Language Tool…', 'language-tools'),
         item('Install Local Plugin…', 'install-plugin'),
         item('Manage Plugins…', 'manage-plugins'),
+        item('Browse Plugin Marketplace…', 'open-marketplace'),
         { type: 'separator' },
         item('Start / Stop Macro Recording', 'record-macro'),
         item('Run Last Macro', 'run-macro'),
@@ -174,6 +177,10 @@ export function buildMenu(): void {
     {
       label: 'Project',
       submenu: [item('Configure Project…', 'project-settings')]
+    },
+    {
+      label: 'Git',
+      submenu: [item('Refresh Changes', 'refresh-git')]
     },
     {
       label: 'Window',

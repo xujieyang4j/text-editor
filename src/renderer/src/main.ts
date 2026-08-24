@@ -3,6 +3,8 @@ import { FileTree } from './fileTree.js'
 import { Palette, type PaletteItem } from './palette.js'
 import { WorkspaceSearchPanel } from './workspaceSearch.js'
 import { FindResultsView } from './findResults.js'
+import { GitPanel } from './gitPanel.js'
+import { openMarketplace } from './marketplace.js'
 import { BuildPanel } from './buildPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS } from './commands.js'
@@ -36,6 +38,7 @@ import {
   type BuildSystem,
   type BuildProblem,
   type BuildOutput
+  , type MarketplaceItem
 } from '../../shared/ipc.js'
 import './styles.css'
 
@@ -62,6 +65,7 @@ class App {
   private palette = new Palette()
   private searchPanel: WorkspaceSearchPanel
   private findResults: FindResultsView
+  private gitPanel: GitPanel
   private buildPanel!: BuildPanel
   private preview!: MarkdownPreview
   private docs: Doc[] = []
@@ -70,7 +74,7 @@ class App {
   private layoutKind: LayoutKind = 'single'
   private settings: Settings = { ...DEFAULT_SETTINGS }
   private folder: string | null = null
-  private project: ProjectSettings = { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [] }
+  private project: ProjectSettings = { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] }
   private plugins: PluginManifest[] = []
   /** Recently-closed file paths, for Reopen Closed Tab (LIFO). */
   private closedStack: string[] = []
@@ -98,6 +102,8 @@ class App {
   private lspDocumentVersion = new Map<string, number>()
   private buildOutputText = ''
   private activeBuildSystem: BuildSystem | null = null
+  private pendingKeySequence: string[] = []
+  private pendingKeyTimer: number | null = null
 
   // Cached DOM references.
   private primaryTabBar = document.getElementById('tab-bar')!
@@ -113,6 +119,7 @@ class App {
   private layoutRoot = document.getElementById('layout-root')!
   private primaryGroupRoot = document.getElementById('editor-group-0')!
   private findResultsHost = document.getElementById('find-results-host')!
+  private gitPanelHost = document.getElementById('git-panel-host')!
   private browserBtn = document.getElementById('browser-btn') as HTMLButtonElement
   private previewBtn = document.getElementById('preview-btn') as HTMLButtonElement
 
@@ -163,6 +170,13 @@ class App {
       onOpenMatch: (match) => { void this.openWorkspaceMatch(match) }
     })
     this.findResultsHost.appendChild(this.findResults.root)
+    this.gitPanel = new GitPanel({
+      onOpenFile: (relativePath) => {
+        if (this.folder) void this.openPath(`${this.folder}/${relativePath}`)
+      },
+      onDiff: (relativePath) => this.folder ? window.editor.gitDiff(this.folder, relativePath) : Promise.reject(new Error('No workspace open.'))
+    })
+    this.gitPanelHost.appendChild(this.gitPanel.element)
     this.createConflictBar()
     // The status-bar language field opens the syntax picker (like Sublime).
     this.statusLanguage.addEventListener('click', () => this.pickLanguage())
@@ -197,6 +211,7 @@ class App {
       this.showError('Settings could not be read; safe defaults were used.', error)
       this.settings = { ...DEFAULT_SETTINGS }
     }
+    document.documentElement.dataset.colorScheme = this.settings.colorScheme
 
     this.primaryEditor = new Editor(
       this.primaryHost,
@@ -478,6 +493,19 @@ class App {
       case 'toggle-problems':
         this.buildPanel.toggle()
         break
+      case 'select-color-scheme':
+        this.selectColorScheme()
+        break
+      case 'toggle-git':
+        this.gitPanel.toggle()
+        void this.refreshGit()
+        break
+      case 'refresh-git':
+        void this.refreshGit()
+        break
+      case 'open-marketplace':
+        void this.openMarketplace()
+        break
       case 'project-settings':
         this.configureProject()
         break
@@ -572,6 +600,7 @@ class App {
   /** Renderer-owned keyboard shortcuts not expressible as menu accelerators. */
   private bindShortcuts(): void {
     window.addEventListener('keydown', (e) => {
+      if (this.dispatchKeyBindingRule(e)) return
       const override = this.project.keyBindings[this.shortcutString(e)]
       if (override && this.isMenuEvent(override)) {
         e.preventDefault()
@@ -591,6 +620,49 @@ class App {
     })
     // Flush the session when the window is going away.
     window.addEventListener('beforeunload', () => { void this.persistSessionNow() })
+  }
+
+  private dispatchKeyBindingRule(event: KeyboardEvent): boolean {
+    const context = this.currentKeyContext()
+    const key = this.shortcutString(event)
+    const candidate = [...this.pendingKeySequence, key]
+    const rules = this.project.keyBindingRules
+    const matching = rules.filter((rule) => {
+      const sequence = Array.isArray(rule.keys) ? rule.keys : [rule.keys]
+      return (!rule.when || rule.when === context) && candidate.every((part, index) => sequence[index] === part)
+    })
+    if (matching.length === 0) {
+      this.clearKeySequence()
+      return false
+    }
+    event.preventDefault()
+    const completed = matching.find((rule) => {
+      const sequence = Array.isArray(rule.keys) ? rule.keys : [rule.keys]
+      return sequence.length === candidate.length
+    })
+    if (completed && this.isMenuEvent(completed.command)) {
+      this.clearKeySequence()
+      this.run(completed.command)
+      return true
+    }
+    this.pendingKeySequence = candidate
+    if (this.pendingKeyTimer !== null) window.clearTimeout(this.pendingKeyTimer)
+    this.pendingKeyTimer = window.setTimeout(() => this.clearKeySequence(), 1_500)
+    this.statusSelection.textContent = `Key sequence: ${candidate.join(' ')}`
+    return true
+  }
+
+  private currentKeyContext(): 'editor' | 'find-results' | 'git' | 'build' {
+    if (!this.findResults.element.classList.contains('hidden')) return 'find-results'
+    if (!this.gitPanel.element.classList.contains('hidden')) return 'git'
+    if (document.querySelector('.build-panel:not(.hidden)')) return 'build'
+    return 'editor'
+  }
+
+  private clearKeySequence(): void {
+    this.pendingKeySequence = []
+    if (this.pendingKeyTimer !== null) window.clearTimeout(this.pendingKeyTimer)
+    this.pendingKeyTimer = null
   }
 
   private shortcutString(event: KeyboardEvent): string {
@@ -1199,11 +1271,12 @@ class App {
 
   private async loadProject(root: string): Promise<void> {
     try {
-      this.project = (await window.editor.readProject(root)) ?? { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [] }
+      this.project = (await window.editor.readProject(root)) ?? { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] }
       if (this.project.buildCommand) this.buildPanel?.setCommand(this.project.buildCommand)
       this.plugins = (await window.editor.listPlugins(root)).filter(
         (plugin) => plugin.enabled && (this.project.plugins.length === 0 || this.project.plugins.includes(plugin.id))
       )
+      void this.refreshGit()
     } catch (error) {
       this.showError('Project settings could not be read.', error)
     }
@@ -1237,7 +1310,9 @@ class App {
         plugins: Array.isArray(parsed.plugins) ? parsed.plugins.filter((item): item is string => typeof item === 'string') : [],
         languageTools: parsed.languageTools && typeof parsed.languageTools === 'object' ? parsed.languageTools : {},
         languageServers: parsed.languageServers && typeof parsed.languageServers === 'object' ? parsed.languageServers : {},
-        buildSystems: Array.isArray(parsed.buildSystems) ? parsed.buildSystems : []
+        buildSystems: Array.isArray(parsed.buildSystems) ? parsed.buildSystems : [],
+        keyBindingRules: Array.isArray(parsed.keyBindingRules) ? parsed.keyBindingRules : [],
+        marketplaceUrls: Array.isArray(parsed.marketplaceUrls) ? parsed.marketplaceUrls.filter((url): url is string => typeof url === 'string') : []
       }
       this.buildPanel.setCommand(this.project.buildCommand)
       void this.saveProject()
@@ -1259,6 +1334,71 @@ class App {
     if (command.trim()) this.project.languageTools[language] = { command: command.trim(), args: [] }
     else delete this.project.languageTools[language]
     void this.saveProject()
+  }
+
+  private selectColorScheme(): void {
+    const schemes: Array<{ label: string; value: Settings['colorScheme']; detail: string }> = [
+      { label: 'Dark', value: 'dark', detail: 'Default dark UI and One Dark editor' },
+      { label: 'Light', value: 'light', detail: 'Light UI and editor' },
+      { label: 'Solarized Dark', value: 'solarized-dark', detail: 'Low-contrast Solarized palette' },
+      { label: 'Dracula', value: 'dracula', detail: 'Purple Dracula palette' }
+    ]
+    this.palette.open({
+      placeholder: 'Select color scheme…',
+      items: schemes.map((scheme) => ({ label: scheme.label, detail: scheme.detail, value: scheme.value })),
+      onAccept: (item) => {
+        const scheme = item.value as Settings['colorScheme']
+        this.settings.colorScheme = scheme
+        document.documentElement.dataset.colorScheme = scheme
+        for (const group of this.groups) group.editor.setColorScheme(scheme)
+        this.persistSettings()
+      }
+    })
+  }
+
+  private async refreshGit(): Promise<void> {
+    if (!this.folder) return
+    try {
+      this.gitPanel.setStatus(await window.editor.gitStatus(this.folder))
+    } catch (error) {
+      this.showError('Git status could not be loaded.', error)
+    }
+  }
+
+  private async openMarketplace(): Promise<void> {
+    if (!this.folder) {
+      this.showError('Open a folder before browsing plugins.')
+      return
+    }
+    if (this.project.marketplaceUrls.length === 0) {
+      this.showError('Add one or more HTTPS marketplaceUrls to .lumen-project.json first.')
+      return
+    }
+    try {
+      const items = await window.editor.listMarketplace(this.folder)
+      if (items.length === 0) {
+        this.showError('No plugins were returned by the configured marketplaces.')
+        return
+      }
+      await openMarketplace(this.palette, items, (item) => { void this.installMarketplaceItem(item) })
+    } catch (error) {
+      this.showError('Plugin marketplace could not be loaded.', error)
+    }
+  }
+
+  private async installMarketplaceItem(item: MarketplaceItem): Promise<void> {
+    if (!this.folder) return
+    const prompt = `Install declarative plugin “${item.name}” (${item.version}) from:\n\n${item.manifestUrl}\n\nOnly its manifest, snippets, and text commands will be stored.`
+    if (!window.confirm(prompt)) return
+    try {
+      const plugin = await window.editor.installMarketplacePlugin({ root: this.folder, manifestUrl: item.manifestUrl })
+      if (!this.project.plugins.includes(plugin.id)) this.project.plugins.push(plugin.id)
+      await this.saveProject()
+      await this.loadProject(this.folder)
+      this.statusSelection.textContent = `Installed plugin: ${plugin.name}`
+    } catch (error) {
+      this.showError('The marketplace plugin could not be installed.', error)
+    }
   }
 
   private async installPlugin(): Promise<void> {

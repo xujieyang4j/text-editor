@@ -27,6 +27,10 @@ import {
   type LanguageServerSyncRequest,
   type LanguageServerDiagnosticEvent,
   type PluginInstallRequest
+  , type MarketplaceItem
+  , type MarketplaceInstallRequest
+  , type GitStatus
+  , type GitDiff
 } from '../shared/ipc.js'
 
 /**
@@ -133,6 +137,16 @@ const api = {
     ipcRenderer.invoke(IPC.pluginInstall, request),
 
   removePlugin: (root: string, id: string): Promise<void> => ipcRenderer.invoke(IPC.pluginRemove, root, id),
+
+  listMarketplace: (root: string): Promise<MarketplaceItem[]> => ipcRenderer.invoke(IPC.marketplaceList, root),
+
+  installMarketplacePlugin: (request: MarketplaceInstallRequest): Promise<PluginManifest> =>
+    ipcRenderer.invoke(IPC.marketplaceInstall, request),
+
+  gitStatus: (root: string): Promise<GitStatus> => ipcRenderer.invoke(IPC.gitStatus, root),
+
+  gitDiff: (root: string, relativePath: string): Promise<GitDiff> =>
+    ipcRenderer.invoke(IPC.gitDiff, root, relativePath),
 
   runLanguageTool: (request: LanguageToolRequest): Promise<LanguageToolResult> =>
     ipcRenderer.invoke(IPC.languageToolRun, request),

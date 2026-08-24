@@ -15,6 +15,45 @@
   --font-mono: 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
+:root[data-color-scheme='light'] {
+  --bg: #ffffff;
+  --bg-elevated: #f6f8fa;
+  --bg-bar: #eaeef2;
+  --border: #d0d7de;
+  --text: #24292f;
+  --text-dim: #57606a;
+  --accent: #0969da;
+  --dirty: #9a6700;
+  --tab-active-bg: #ffffff;
+  --tab-inactive-bg: #eaeef2;
+}
+
+:root[data-color-scheme='solarized-dark'] {
+  --bg: #002b36;
+  --bg-elevated: #073642;
+  --bg-bar: #073642;
+  --border: #586e75;
+  --text: #93a1a1;
+  --text-dim: #839496;
+  --accent: #268bd2;
+  --dirty: #b58900;
+  --tab-active-bg: #002b36;
+  --tab-inactive-bg: #073642;
+}
+
+:root[data-color-scheme='dracula'] {
+  --bg: #282a36;
+  --bg-elevated: #343746;
+  --bg-bar: #44475a;
+  --border: #6272a4;
+  --text: #f8f8f2;
+  --text-dim: #b0b3c5;
+  --accent: #bd93f9;
+  --dirty: #f1fa8c;
+  --tab-active-bg: #282a36;
+  --tab-inactive-bg: #343746;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -69,6 +108,65 @@ body {
   flex: 1;
   overflow: auto;
   font-size: 13px;
+}
+
+.git-panel-host {
+  min-height: 0;
+}
+
+.git-panel {
+  display: flex;
+  max-height: 42%;
+  min-height: 140px;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.git-panel.hidden {
+  display: none;
+}
+
+.git-panel-heading {
+  padding: 7px 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.git-change-list {
+  max-height: 45%;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font: 12px var(--font-mono);
+}
+
+.git-change-item {
+  padding: 4px 10px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-change-item:hover {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.git-diff-preview {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font: 11px/1.4 var(--font-mono);
+  white-space: pre-wrap;
 }
 
 .tree-list {

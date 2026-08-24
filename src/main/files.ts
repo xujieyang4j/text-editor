@@ -1,6 +1,7 @@
 import { dialog, ipcMain, BrowserWindow, app, shell, type IpcMainInvokeEvent } from 'electron'
 import { promises as fs, watch, type FSWatcher } from 'fs'
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process'
+import { promisify } from 'util'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { detectLineEnding, encodeText as encodePreservedText } from '../shared/text.js'
@@ -35,6 +36,10 @@ import {
   type LanguageServerDiagnosticEvent,
   type PluginInstallRequest
   , type LayoutKind
+  , type MarketplaceItem
+  , type MarketplaceInstallRequest
+  , type GitStatus
+  , type GitDiff
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
@@ -70,6 +75,7 @@ interface PersistentLanguageServer {
   resolveReady: () => void
 }
 const languageServers = new Map<string, PersistentLanguageServer>()
+const execFileAsync = promisify(execFile)
 const grantedFiles = new Map<number, Set<string>>()
 const grantedRoots = new Map<number, Set<string>>()
 
@@ -320,7 +326,10 @@ function sanitizeSettings(value: unknown): Settings {
       ? raw.rulers.filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0 && n <= 500).map(Math.round).slice(0, 10)
       : DEFAULT_SETTINGS.rulers,
     maxFileSizeMB: asFiniteInt(raw.maxFileSizeMB, DEFAULT_SETTINGS.maxFileSizeMB, 1, 200),
-    buildCommand: typeof raw.buildCommand === 'string' ? raw.buildCommand.slice(0, 1_000) : ''
+    buildCommand: typeof raw.buildCommand === 'string' ? raw.buildCommand.slice(0, 1_000) : '',
+    colorScheme: raw.colorScheme === 'light' || raw.colorScheme === 'solarized-dark' || raw.colorScheme === 'dracula'
+      ? raw.colorScheme
+      : 'dark'
   }
 }
 
@@ -454,6 +463,27 @@ function sanitizeSession(value: unknown): Session {
               }]
             })
             .slice(0, 30)
+        : [],
+      keyBindingRules: Array.isArray(project.keyBindingRules)
+        ? project.keyBindingRules.flatMap((rule) => {
+            if (!rule || typeof rule !== 'object') return []
+            const source = rule as { keys?: unknown; command?: unknown; when?: unknown }
+            const keys = typeof source.keys === 'string' || (Array.isArray(source.keys) && source.keys.every((key) => typeof key === 'string'))
+              ? source.keys
+              : null
+            if (!keys || typeof source.command !== 'string') return []
+            const when: 'editor' | 'find-results' | 'git' | 'build' | undefined = source.when === 'editor' || source.when === 'find-results' || source.when === 'git' || source.when === 'build'
+              ? source.when
+              : undefined
+            return [{
+              keys,
+              command: source.command.slice(0, 100),
+              ...(when ? { when } : {})
+            }]
+          }).slice(0, 200)
+        : [],
+      marketplaceUrls: Array.isArray(project.marketplaceUrls)
+        ? project.marketplaceUrls.filter((url): url is string => typeof url === 'string' && /^https:\/\//.test(url)).map((url) => url.slice(0, 2_000)).slice(0, 20)
         : []
     },
     layout
@@ -663,6 +693,69 @@ async function installPlugin(request: PluginInstallRequest): Promise<PluginManif
   await fs.mkdir(path.dirname(target), { recursive: true })
   await fs.cp(request.source, target, { recursive: true, errorOnExist: true })
   return manifest
+}
+
+function sanitizeMarketplaceItem(value: unknown): MarketplaceItem | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Partial<MarketplaceItem>
+  if (typeof raw.id !== 'string' || !/^[a-z0-9-]+$/i.test(raw.id) || typeof raw.name !== 'string' || typeof raw.manifestUrl !== 'string') return null
+  if (!/^https:\/\//.test(raw.manifestUrl)) return null
+  return {
+    id: raw.id,
+    name: raw.name.slice(0, 200),
+    version: typeof raw.version === 'string' ? raw.version.slice(0, 50) : '0.0.0',
+    ...(typeof raw.description === 'string' ? { description: raw.description.slice(0, 500) } : {}),
+    manifestUrl: raw.manifestUrl
+  }
+}
+
+async function listMarketplace(urls: string[]): Promise<MarketplaceItem[]> {
+  const all: MarketplaceItem[] = []
+  for (const url of urls.slice(0, 20)) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+      if (!response.ok) continue
+      const payload = await response.json() as unknown
+      const entries = Array.isArray(payload) ? payload : (payload as { plugins?: unknown })?.plugins
+      if (Array.isArray(entries)) all.push(...entries.map(sanitizeMarketplaceItem).filter((item): item is MarketplaceItem => item !== null))
+    } catch {
+      // Individual marketplace failure should not hide items from other sources.
+    }
+  }
+  return [...new Map(all.map((item) => [item.id, item])).values()]
+}
+
+async function installMarketplacePlugin(request: MarketplaceInstallRequest): Promise<PluginManifest> {
+  const response = await fetch(request.manifestUrl, { signal: AbortSignal.timeout(10_000) })
+  if (!response.ok) throw new Error(`Could not download plugin manifest (${response.status}).`)
+  const manifest = sanitizePlugin(await response.json())
+  if (!manifest) throw new Error('Downloaded plugin manifest is invalid.')
+  const target = path.join(request.root, '.lumen-plugins', manifest.id)
+  await fs.mkdir(target, { recursive: false })
+  await fs.writeFile(path.join(target, 'plugin.json'), JSON.stringify(manifest, null, 2), 'utf8')
+  return manifest
+}
+
+async function gitStatus(root: string): Promise<GitStatus> {
+  try {
+    const [{ stdout: branch }, { stdout: porcelain }] = await Promise.all([
+      execFileAsync('git', ['-C', root, 'branch', '--show-current']),
+      execFileAsync('git', ['-C', root, 'status', '--porcelain=v1', '-z'])
+    ])
+    const entries = porcelain.split('\0').filter(Boolean).flatMap((entry) => {
+      if (entry.length < 4) return []
+      return [{ indexStatus: entry[0], worktreeStatus: entry[1], path: entry.slice(3) }]
+    })
+    return { available: true, branch: branch.trim() || '(detached)', entries }
+  } catch {
+    return { available: false, entries: [] }
+  }
+}
+
+async function gitDiff(root: string, relativePath: string): Promise<GitDiff> {
+  if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('..')) throw new Error('Invalid Git diff path.')
+  const { stdout } = await execFileAsync('git', ['-C', root, 'diff', '--no-ext-diff', '--', relativePath], { maxBuffer: 2 * 1024 * 1024 })
+  return { path: relativePath, diff: stdout }
 }
 
 /** Run a conservative formatter/diagnostic adapter: stdin text, stdout text or JSON diagnostics. */
@@ -1161,6 +1254,36 @@ export function registerFileHandlers(): void {
     assertGrantedRoot(event, root)
     if (typeof id !== 'string' || !/^[a-z0-9-]+$/i.test(id)) throw new Error('Invalid plugin ID.')
     await shell.trashItem(path.join(root, '.lumen-plugins', id))
+  })
+
+  ipcMain.handle(IPC.marketplaceList, async (event, root: unknown): Promise<MarketplaceItem[]> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    const project = sanitizeSession({ openFiles: [], activeIndex: 0, folder: root, project: await readJson<unknown>(path.join(root, '.lumen-project.json'), EMPTY_SESSION.project) }).project
+    return listMarketplace(project?.marketplaceUrls ?? [])
+  })
+
+  ipcMain.handle(IPC.marketplaceInstall, async (event, request: MarketplaceInstallRequest): Promise<PluginManifest> => {
+    assertTrustedSender(event)
+    assertGrantedRoot(event, request.root)
+    if (typeof request.manifestUrl !== 'string' || !/^https:\/\//.test(request.manifestUrl)) throw new Error('Marketplace manifest URL must use HTTPS.')
+    return installMarketplacePlugin(request)
+  })
+
+  ipcMain.handle(IPC.gitStatus, async (event, root: unknown): Promise<GitStatus> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    return gitStatus(root)
+  })
+
+  ipcMain.handle(IPC.gitDiff, async (event, root: unknown, relativePath: unknown): Promise<GitDiff> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(root, 'workspace root')
+    assertGrantedRoot(event, root)
+    if (typeof relativePath !== 'string') throw new Error('Invalid Git diff path.')
+    return gitDiff(root, relativePath)
   })
 
   ipcMain.handle(IPC.languageToolRun, async (event, request: LanguageToolRequest): Promise<LanguageToolResult> => {

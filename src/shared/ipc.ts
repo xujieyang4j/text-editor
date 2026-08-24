@@ -41,6 +41,10 @@ export const IPC = {
   languageServerSync: 'language-server:sync',
   languageServerStop: 'language-server:stop',
   languageServerDiagnostics: 'language-server:diagnostics',
+  marketplaceList: 'marketplace:list',
+  marketplaceInstall: 'marketplace:install',
+  gitStatus: 'git:status',
+  gitDiff: 'git:diff',
   openPathRequested: 'app:open-path-requested',
   appNewWindow: 'app:new-window',
   // main -> renderer notifications (menu / accelerator driven)
@@ -67,6 +71,9 @@ export interface OpenedFile {
 
 /** Text encodings the built-in reader/writer can preserve without native add-ons. */
 export type TextEncoding = 'utf8' | 'utf8bom' | 'utf16le' | 'utf16be'
+
+/** UI and editor color schemes are independent from language syntax selection. */
+export type ColorScheme = 'dark' | 'light' | 'solarized-dark' | 'dracula'
 
 /** Physical newline convention used when a document is saved. */
 export type LineEnding = 'LF' | 'CRLF' | 'CR'
@@ -181,6 +188,23 @@ export interface BuildProblem {
   severity: 'error' | 'warning' | 'info'
 }
 
+export interface GitStatusEntry {
+  path: string
+  indexStatus: string
+  worktreeStatus: string
+}
+
+export interface GitStatus {
+  available: boolean
+  branch?: string
+  entries: GitStatusEntry[]
+}
+
+export interface GitDiff {
+  path: string
+  diff: string
+}
+
 /** A declarative local plugin manifest. Plugins register commands/snippets, not Node access. */
 export interface PluginManifest {
   id: string
@@ -194,6 +218,20 @@ export interface PluginManifest {
 export interface PluginInstallRequest {
   root: string
   source: string
+}
+
+/** A marketplace item remains declarative—only a plugin manifest is installed. */
+export interface MarketplaceItem {
+  id: string
+  name: string
+  version: string
+  description?: string
+  manifestUrl: string
+}
+
+export interface MarketplaceInstallRequest {
+  root: string
+  manifestUrl: string
 }
 
 /** A single entry inside a directory listing. */
@@ -231,6 +269,7 @@ export interface Settings {
   maxFileSizeMB: number
   /** Optional project-specific command used by Build. */
   buildCommand: string
+  colorScheme: ColorScheme
 }
 
 /** Built-in defaults, used when no settings file exists yet. */
@@ -245,7 +284,8 @@ export const DEFAULT_SETTINGS: Settings = {
   highlightTrailingWhitespace: true,
   rulers: [],
   maxFileSizeMB: 20,
-  buildCommand: ''
+  buildCommand: '',
+  colorScheme: 'dark'
 }
 
 /**
@@ -304,6 +344,16 @@ export interface ProjectSettings {
   languageTools: Record<string, LanguageToolConfig>
   languageServers: Record<string, LanguageServerConfig>
   buildSystems: BuildSystem[]
+  /** Legacy direct map remains supported for simple project key overrides. */
+  keyBindingRules: KeyBindingRule[]
+  marketplaceUrls: string[]
+}
+
+export interface KeyBindingRule {
+  keys: string | string[]
+  command: string
+  /** Restrict the rule to an editor, find-results, Git or build context. */
+  when?: 'editor' | 'find-results' | 'git' | 'build'
 }
 
 /** Configurable LSP server command, keyed by language name in project settings. */
@@ -372,7 +422,7 @@ export const EMPTY_SESSION: Session = {
   openFiles: [],
   activeIndex: 0,
   folder: null,
-  project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [] },
+  project: { exclude: [], buildCommand: '', keyBindings: {}, plugins: [], languageTools: {}, languageServers: {}, buildSystems: [], keyBindingRules: [], marketplaceUrls: [] },
   layout: { kind: 'single', activeGroup: 0, groups: [{ docIndexes: [], activeIndex: 0 }] }
 }
 
@@ -430,6 +480,10 @@ export type MenuEvent =
   | 'focus-next-group'
   | 'focus-prev-group'
   | 'new-window'
+  | 'select-color-scheme'
+  | 'open-marketplace'
+  | 'toggle-git'
+  | 'refresh-git'
   | 'split-editor'
   | 'toggle-bookmark'
   | 'next-bookmark'

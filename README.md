@@ -32,6 +32,7 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **Workspace tools**: file create/rename/trash/reveal, external-change refresh, project build output
 - **Language tooling**: optional standard LSP formatting/diagnostics plus stdin/stdout formatters
 - **Local declarative plugins**: project-scoped snippets and command-palette text commands
+- **Schemes, Git & HTTPS marketplace**: separate UI/editor color schemes, read-only Git changes/diffs, confirmed declarative plugin sources
 - **Autocompletion**, code folding, active-line highlight, selection-match highlight
 - **Hot exit / session restore** — reopens your tabs + folder on next launch and **preserves
   unsaved edits** (even untitled buffers) across an unexpected quit; **Reopen Closed Tab**

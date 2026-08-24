@@ -59,7 +59,7 @@ import { setDiagnostics, lintGutter, type Diagnostic } from '@codemirror/lint'
 import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { rulers } from './extensions/rulers.js'
 import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
-import type { Settings } from '../../shared/ipc.js'
+import type { Settings, ColorScheme } from '../../shared/ipc.js'
 
 /** Callbacks the editor emits so the shell can update tabs/status bar. */
 export interface EditorCallbacks {
@@ -95,6 +95,27 @@ function fontTheme(fontSize: number): Extension {
   return EditorView.theme({
     '&': { fontSize: `${fontSize}px` }
   })
+}
+
+function colorSchemeTheme(scheme: ColorScheme): Extension {
+  if (scheme === 'light') return EditorView.theme({
+    '&': { backgroundColor: '#ffffff', color: '#24292f' },
+    '.cm-content': { caretColor: '#0969da' },
+    '.cm-gutters': { backgroundColor: '#f6f8fa', color: '#57606a', border: 'none' }
+  }, { dark: false })
+  if (scheme === 'solarized-dark') return EditorView.theme({
+    '&': { backgroundColor: '#002b36', color: '#93a1a1' },
+    '.cm-content': { caretColor: '#b58900' },
+    '.cm-gutters': { backgroundColor: '#073642', color: '#839496', border: 'none' },
+    '.cm-activeLine': { backgroundColor: '#073642' }
+  }, { dark: true })
+  if (scheme === 'dracula') return EditorView.theme({
+    '&': { backgroundColor: '#282a36', color: '#f8f8f2' },
+    '.cm-content': { caretColor: '#ff79c6' },
+    '.cm-gutters': { backgroundColor: '#282a36', color: '#6272a4', border: 'none' },
+    '.cm-activeLine': { backgroundColor: '#44475a' }
+  }, { dark: true })
+  return oneDark
 }
 
 /** Base set of extensions shared by every document. */
@@ -175,7 +196,7 @@ export class Editor {
       extensions: [
         baseExtensions(this.callbacks, (update) => this.mapSnippetRanges(update)),
         languageConf.of([]),
-        themeConf.of(s.theme === 'dark' ? oneDark : []),
+        themeConf.of(colorSchemeTheme(s.colorScheme)),
         wrapConf.of(s.wordWrap ? EditorView.lineWrapping : []),
         tabConf.of([indentUnit.of(indent), EditorState.tabSize.of(s.tabSize)]),
         minimapConf.of(s.showMinimap ? minimapExtension() : []),
@@ -243,7 +264,7 @@ export class Editor {
     const indent = settings.insertSpaces ? ' '.repeat(settings.tabSize) : '\t'
     this.view.dispatch({
       effects: [
-        themeConf.reconfigure(settings.theme === 'dark' ? oneDark : []),
+        themeConf.reconfigure(colorSchemeTheme(settings.colorScheme)),
         wrapConf.reconfigure(settings.wordWrap ? EditorView.lineWrapping : []),
         tabConf.reconfigure([indentUnit.of(indent), EditorState.tabSize.of(settings.tabSize)]),
         minimapConf.reconfigure(settings.showMinimap ? minimapExtension() : []),
@@ -267,9 +288,14 @@ export class Editor {
   toggleTheme(): boolean {
     this.settings.theme = this.settings.theme === 'dark' ? 'light' : 'dark'
     this.view.dispatch({
-      effects: themeConf.reconfigure(this.settings.theme === 'dark' ? oneDark : [])
+      effects: themeConf.reconfigure(colorSchemeTheme(this.settings.colorScheme))
     })
     return this.settings.theme === 'dark'
+  }
+
+  setColorScheme(scheme: ColorScheme): void {
+    this.settings.colorScheme = scheme
+    this.view.dispatch({ effects: themeConf.reconfigure(colorSchemeTheme(scheme)) })
   }
 
   toggleWordWrap(): boolean {
