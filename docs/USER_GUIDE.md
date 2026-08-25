@@ -179,6 +179,12 @@ macOS. *Selection: Select to Matching Bracket* extends the active end of the sel
 matching `()`, `[]`, or `{}` bracket. It leaves the selection untouched when no matching bracket is
 available. Both commands are available in the Selection menu and Command Palette.
 
+**Split selection into lines.** *Selection: Split Selection into Lines* turns every line covered by
+all non-empty selections into a cursor at that line's start. Overlapping selected lines are deduped,
+and a selection ending exactly at the next line's start doesn't add an extra cursor. The main
+selection's resulting cursor remains the main cursor. With no selection, nothing changes and Lumen
+shows a status message.
+
 **Transpose characters.** Put the cursor directly after two adjacent characters in the wrong order
 (for example, `teh`) and press `Ctrl+T` to swap them. The command is also available as *Edit:
 Transpose Characters*. It respects Unicode character boundaries, does nothing when there is no
@@ -559,6 +565,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 **快速选择行和括号范围。** *Selection: Select Line* 会选择光标或选区触及的完整物理行；Windows/Linux
 默认 `Alt+L`，macOS 默认 `Ctrl+L`。*Selection: Select to Matching Bracket* 会把选区活动端扩展到
 对应的 `()`、`[]`、`{}` 另一端；没有匹配括号时保持原选区。两项操作均可从选择菜单和命令面板执行。
+
+**按行拆分选区。** *Selection: Split Selection into Lines* 会把全部非空选区覆盖的每行转为行首光标。
+重叠行会去重；选区恰好结束在下一行开头时不会多生成光标。主选区生成的光标仍是主光标。没有选区时不
+改变内容或光标，并显示状态提示。
 
 **转置字符。** 当两个相邻字符的顺序写反，例如 `teh`，把光标放在它们之后并按 `Ctrl+T`，即可交换。
 也可从 *Edit: Transpose Characters* 调用。该操作遵循 Unicode 字符边界；行首等没有可交换字符的位置

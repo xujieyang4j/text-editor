@@ -751,7 +751,11 @@ class App {
         }
         break
       case 'split-selection-lines':
-        this.editor.splitSelectionIntoLines()
+        if (!this.editor.splitSelectionIntoLines()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '请先选择一个或多个文本行'
+            : 'Select one or more text lines first'
+        }
         break
       case 'indent-selection':
         this.editor.indentSelection()

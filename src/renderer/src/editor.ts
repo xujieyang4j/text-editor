@@ -892,20 +892,34 @@ export class Editor {
     return true
   }
 
-  splitSelectionIntoLines(): void {
+  /** Turn every selected line across all non-empty selections into a cursor. */
+  splitSelectionIntoLines(): boolean {
     const { state } = this.view
-    const selection = state.selection.main
-    if (selection.empty) return
-    const firstLine = state.doc.lineAt(selection.from).number
-    const lastLine = state.doc.lineAt(selection.to).number
-    const ranges: SelectionRange[] = []
-    for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber += 1) {
-      ranges.push(EditorSelection.cursor(state.doc.line(lineNumber).from))
-    }
+    const positions = new Map<number, boolean>()
+    let mainPosition: number | null = null
+    let foundSelection = false
+    state.selection.ranges.forEach((selection, index) => {
+      if (selection.empty) return
+      foundSelection = true
+      const firstLine = state.doc.lineAt(selection.from).number
+      // A selection ending at the next line's start doesn't include that line.
+      const endsAtNextLineStart = selection.to < state.doc.length && selection.to === state.doc.lineAt(selection.to).from
+      const lastLine = state.doc.lineAt(endsAtNextLineStart ? selection.to - 1 : selection.to).number
+      for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber += 1) {
+        const position = state.doc.line(lineNumber).from
+        positions.set(position, positions.get(position) === true || index === state.selection.mainIndex)
+        if (index === state.selection.mainIndex && mainPosition === null) mainPosition = position
+      }
+    })
+    if (!foundSelection) return false
+    const ordered = [...positions.keys()].sort((a, b) => a - b)
+    const ranges = ordered.map((position) => EditorSelection.cursor(position))
+    const mainIndex = mainPosition === null ? 0 : Math.max(0, ordered.indexOf(mainPosition))
     this.view.dispatch({
-      selection: EditorSelection.create(ranges),
+      selection: EditorSelection.create(ranges, mainIndex),
       userEvent: 'select.split-lines'
     })
+    return true
   }
 
   indentSelection(): void { indentMore(this.view) }
