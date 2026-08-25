@@ -190,6 +190,11 @@ shows a status message.
 Transpose Characters*. It respects Unicode character boundaries, does nothing when there is no
 swappable pair (such as at the start of a line), and is undoable like normal typing.
 
+**Insert blank line below.** *Edit: Insert Blank Line Below* (`Ctrl/Cmd+Enter`) creates a new
+indented line below the current line without splitting that line at the cursor. This is useful when
+you want to start the next line before finishing the current one. It uses the active language's
+normal indentation rules, applies at every cursor, and is undoable like regular typing.
+
 **Case conversion with multiple selections.** *Edit: Upper Case*, *Lower Case*, and *Title Case*
 apply independently to every non-empty selection, which makes multi-cursor cleanup predictable.
 When there is no selection, they keep the established behaviour of converting the entire document.
@@ -580,6 +585,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 **转置字符。** 当两个相邻字符的顺序写反，例如 `teh`，把光标放在它们之后并按 `Ctrl+T`，即可交换。
 也可从 *Edit: Transpose Characters* 调用。该操作遵循 Unicode 字符边界；行首等没有可交换字符的位置
 不会修改文本，并可像普通输入一样撤销。
+
+**在下方新建空行。** *Edit: Insert Blank Line Below*（`Ctrl/Cmd+Enter`）会在当前行下方创建一个
+自动缩进的新行，不会从光标处拆开当前行。适合当前行未写完时直接开始编辑下一行。它使用当前语言的常规
+缩进规则，对每个光标分别生效，并可像普通输入一样撤销。
 
 **多选区大小写转换。** *Edit: Upper Case*、*Lower Case*、*Title Case* 会分别作用于每个非空选区，
 使多光标清理更可预期；没有选区时，仍保持转换整个文档的行为。基于选区转换后，每个转换过的范围仍会

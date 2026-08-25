@@ -743,6 +743,7 @@ export type MenuEvent =
   | 'copy-line-up'
   | 'copy-line-down'
   | 'delete-line'
+  | 'insert-blank-line'
   | 'duplicate-selection'
   | 'transpose-characters'
   | 'sort-lines'

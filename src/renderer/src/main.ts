@@ -929,6 +929,9 @@ class App {
       case 'delete-line':
         this.editor.deleteLine()
         break
+      case 'insert-blank-line':
+        this.editor.insertBlankLineBelow()
+        break
       case 'transpose-characters':
         if (!this.editor.transposeCharacters()) {
           this.statusSelection.textContent = this.settings.locale === 'zh-CN' ? '当前位置无法转置字符' : 'No characters to transpose at the cursor'
