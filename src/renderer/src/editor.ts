@@ -25,6 +25,8 @@ import {
   copyLineUp,
   copyLineDown,
   deleteLine,
+  deleteToLineStart,
+  deleteToLineEnd,
   insertBlankLine,
   transposeChars,
   toggleComment,
@@ -480,6 +482,8 @@ export class Editor {
   deleteLine(): void {
     deleteLine(this.view)
   }
+  deleteToStartOfLine(): boolean { return deleteToLineStart(this.view) }
+  deleteToEndOfLine(): boolean { return deleteToLineEnd(this.view) }
   insertBlankLineBelow(): boolean {
     return insertBlankLine(this.view)
   }

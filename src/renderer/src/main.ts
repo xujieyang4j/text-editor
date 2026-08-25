@@ -929,6 +929,12 @@ class App {
       case 'delete-line':
         this.editor.deleteLine()
         break
+      case 'delete-to-line-start':
+        this.editor.deleteToStartOfLine()
+        break
+      case 'delete-to-line-end':
+        this.editor.deleteToEndOfLine()
+        break
       case 'insert-blank-line':
         this.editor.insertBlankLineBelow()
         break

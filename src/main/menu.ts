@@ -93,6 +93,8 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Copy Line Down', 'copy-line-down', 'Shift+Alt+Down'),
         item('Duplicate Line/Selection', 'duplicate-selection', 'CmdOrCtrl+Shift+D'),
         item('Delete Line', 'delete-line', 'CmdOrCtrl+Shift+K'),
+        item('Delete to Line Start', 'delete-to-line-start', 'CmdOrCtrl+Shift+Backspace'),
+        item('Delete to Line End', 'delete-to-line-end', 'CmdOrCtrl+Shift+Delete'),
         item('Insert Blank Line Below', 'insert-blank-line', 'CmdOrCtrl+Enter'),
         item('Transpose Characters', 'transpose-characters', 'Ctrl+T'),
         item('Sort Lines', 'sort-lines'),

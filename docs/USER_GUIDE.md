@@ -195,6 +195,12 @@ indented line below the current line without splitting that line at the cursor. 
 you want to start the next line before finishing the current one. It uses the active language's
 normal indentation rules, applies at every cursor, and is undoable like regular typing.
 
+**Delete to line start / end.** *Edit: Delete to Line Start* and *Delete to Line End* use
+`Ctrl/Cmd+Shift+Backspace` and `Ctrl/Cmd+Shift+Delete`. With a selection, they delete that
+selection. With cursors, they delete from each cursor to the corresponding line boundary. At a line
+boundary they remove the preceding or following line break, joining lines. Both operations work at
+multiple cursors and are undoable in one step.
+
 **Case conversion with multiple selections.** *Edit: Upper Case*, *Lower Case*, and *Title Case*
 apply independently to every non-empty selection, which makes multi-cursor cleanup predictable.
 When there is no selection, they keep the established behaviour of converting the entire document.
@@ -589,6 +595,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 **在下方新建空行。** *Edit: Insert Blank Line Below*（`Ctrl/Cmd+Enter`）会在当前行下方创建一个
 自动缩进的新行，不会从光标处拆开当前行。适合当前行未写完时直接开始编辑下一行。它使用当前语言的常规
 缩进规则，对每个光标分别生效，并可像普通输入一样撤销。
+
+**删除至行首 / 行尾。** *Edit: Delete to Line Start*、*Delete to Line End* 对应
+`Ctrl/Cmd+Shift+Backspace`、`Ctrl/Cmd+Shift+Delete`。有选区时直接删除选区；单光标时分别删除至
+当前行首或行尾；光标已在边界时会删除相邻换行、连接两行。它们支持多光标，并可一次撤销。
 
 **多选区大小写转换。** *Edit: Upper Case*、*Lower Case*、*Title Case* 会分别作用于每个非空选区，
 使多光标清理更可预期；没有选区时，仍保持转换整个文档的行为。基于选区转换后，每个转换过的范围仍会
