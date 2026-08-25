@@ -765,6 +765,18 @@ class App {
         if (this.settings.showOutline && !this.settings.distractionFree) this.sidebar.classList.remove('hidden')
         this.applyUserSettings(this.settings)
         break
+      case 'fold-current':
+        this.runFoldCommand('fold-current')
+        break
+      case 'unfold-current':
+        this.runFoldCommand('unfold-current')
+        break
+      case 'fold-all':
+        this.runFoldCommand('fold-all')
+        break
+      case 'unfold-all':
+        this.runFoldCommand('unfold-all')
+        break
       case 'select-color-scheme':
         this.selectColorScheme()
         break
@@ -1819,6 +1831,22 @@ class App {
     const doc = this.active
     const cursor = this.editor?.view.state.selection.main.head ?? 0
     this.outlinePanel.setDocument(doc?.name ?? '', doc?.content ?? '', cursor, immediate)
+  }
+
+  /** Run a code-folding command and keep unsuccessful requests visible to the user. */
+  private runFoldCommand(command: 'fold-current' | 'unfold-current' | 'fold-all' | 'unfold-all'): void {
+    const changed = command === 'fold-current'
+      ? this.editor.foldCurrent()
+      : command === 'unfold-current'
+        ? this.editor.unfoldCurrent()
+        : command === 'fold-all'
+          ? this.editor.foldEverywhere()
+          : this.editor.unfoldEverywhere()
+    if (!changed) {
+      this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+        ? (command.startsWith('unfold') ? '没有可展开的代码块' : '当前位置没有可折叠的代码块')
+        : (command.startsWith('unfold') ? 'No folded code blocks to unfold' : 'No foldable code block at the cursor')
+    }
   }
 
   /** Toggle the markdown preview for the active document. */

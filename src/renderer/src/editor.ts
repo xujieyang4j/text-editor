@@ -39,6 +39,10 @@ import {
   indentUnit,
   bracketMatching,
   foldGutter,
+  foldCode,
+  unfoldCode,
+  foldAll,
+  unfoldAll,
   foldKeymap,
   syntaxHighlighting,
   defaultHighlightStyle,
@@ -517,6 +521,11 @@ export class Editor {
     if (moved) this.view.focus()
     return moved
   }
+
+  foldCurrent(): boolean { return foldCode(this.view) }
+  unfoldCurrent(): boolean { return unfoldCode(this.view) }
+  foldEverywhere(): boolean { return foldAll(this.view) }
+  unfoldEverywhere(): boolean { return unfoldAll(this.view) }
 
   /**
    * Grow each cursor/selection to the next useful boundary. Syntax-tree parent

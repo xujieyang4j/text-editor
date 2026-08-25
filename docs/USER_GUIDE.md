@@ -187,6 +187,13 @@ Also included: undo/redo (`Ctrl/Cmd+Z` / `Ctrl/Cmd+Y`), auto-close brackets, aut
 input, code folding (fold gutter in the margin), bracket matching, and autocompletion
 (`Ctrl/Cmd+Space` to trigger).
 
+**Code folding.** Use the fold gutter, or run *View: Fold Current*, *Unfold Current*, *Fold All*,
+and *Unfold All* from the Command Palette or View menu. Current-block folding uses
+`Ctrl+Shift+[` / `]` on Windows/Linux and `Cmd+Alt+[` / `]` on macOS. Folding or unfolding every
+available block uses `Ctrl+Alt+[` / `]`. When the cursor is not in a foldable block (or nothing is
+folded), the document is left unchanged and Lumen shows a status message. Fold state stays with the
+tab and editor group during the session.
+
 <a id="en-search"></a>
 
 ## 6. Search & Replace
@@ -528,6 +535,11 @@ npm run dist:linux   # Linux：AppImage + .deb
 
 另含：撤销/重做（`Ctrl/Cmd+Z` / `Ctrl/Cmd+Y`）、自动闭合括号、输入自动缩进、代码折叠
 （左侧折叠槽）、括号匹配、自动补全（`Ctrl/Cmd+Space` 触发）。
+
+**代码折叠。** 可使用左侧折叠槽，也可从命令面板或“视图”执行 *Fold Current*、*Unfold Current*、
+*Fold All*、*Unfold All*。当前块在 Windows/Linux 使用 `Ctrl+Shift+[` / `]`，在 macOS 使用
+`Cmd+Alt+[` / `]`；全部折叠/展开使用 `Ctrl+Alt+[` / `]`。光标处无可折叠块或没有已折叠内容时，
+文档保持不变并显示状态提示。折叠状态会在本次会话中随标签和编辑组保留。
 
 <a id="zh-search"></a>
 

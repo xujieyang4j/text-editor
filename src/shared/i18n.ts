@@ -61,7 +61,7 @@ const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
   'next-tab': '下一个标签页', 'prev-tab': '上一个标签页', 'toggle-bookmark': '切换书签', 'next-bookmark': '下一个书签', 'prev-bookmark': '上一个书签', 'next-change': '下一个更改', 'prev-change': '上一个更改', 'revert-current-change': '还原当前更改',
   'toggle-sidebar': '切换侧边栏', 'split-editor': '切换分屏编辑器', 'split-selected-tabs': '将选中标签拆分到分组', 'layout-single': '单栏布局', 'layout-columns2': '两栏布局', 'layout-columns3': '三栏布局', 'layout-grid4': '四宫格布局',
   'move-file-next-group': '将文件移到下一分组', 'clone-file-next-group': '将文件复制到下一分组', 'focus-next-group': '聚焦下一分组', 'focus-prev-group': '聚焦上一分组',
-  'toggle-minimap': '切换缩略图', 'toggle-outline': '切换大纲', 'toggle-distraction-free': '切换专注模式', 'toggle-spell-check': '切换拼写检查', 'toggle-word-wrap': '切换自动换行', 'toggle-theme': '切换明暗主题', 'select-color-scheme': '选择配色方案…', 'font-zoom-in': '放大字体', 'font-zoom-out': '缩小字体', 'font-zoom-reset': '重置字体大小',
+  'toggle-minimap': '切换缩略图', 'toggle-outline': '切换大纲', 'fold-current': '折叠当前代码块', 'unfold-current': '展开当前代码块', 'fold-all': '折叠全部代码块', 'unfold-all': '展开全部代码块', 'toggle-distraction-free': '切换专注模式', 'toggle-spell-check': '切换拼写检查', 'toggle-word-wrap': '切换自动换行', 'toggle-theme': '切换明暗主题', 'select-color-scheme': '选择配色方案…', 'font-zoom-in': '放大字体', 'font-zoom-out': '缩小字体', 'font-zoom-reset': '重置字体大小',
   'toggle-preview': '切换 Markdown 预览', 'open-in-browser': '在浏览器中打开', 'select-language': '设置语法…', 'command-palette': '命令面板…',
   build: '构建', 'toggle-terminal': '切换终端', 'select-build-system': '选择构建系统…', 'import-sublime-build': '导入 Sublime 构建系统…', 'format-document': '格式化文档', 'toggle-problems': '切换构建输出', 'language-tools': '配置语言工具…',
   'lsp-hover': '显示悬停信息', 'lsp-definition': '转到定义', 'lsp-references': '查找引用', 'lsp-rename': '重命名符号',
