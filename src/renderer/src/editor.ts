@@ -826,12 +826,31 @@ export class Editor {
 
   changeCase(kind: 'upper' | 'lower' | 'title'): void {
     const { state } = this.view
-    const range = state.selection.main
-    const from = range.empty ? 0 : range.from
-    const to = range.empty ? state.doc.length : range.to
-    const source = state.sliceDoc(from, to)
-    const next = kind === 'upper' ? source.toUpperCase() : kind === 'lower' ? source.toLowerCase() : source.toLowerCase().replace(/\b\p{L}/gu, (char) => char.toUpperCase())
-    this.view.dispatch({ changes: { from, to, insert: next }, selection: EditorSelection.range(from, from + next.length), userEvent: 'input.case' })
+    const targets = state.selection.ranges.filter((range) => !range.empty)
+    // No selection follows the established editor behaviour: transform the full document.
+    const ranges = targets.length > 0 ? targets : [EditorSelection.range(0, state.doc.length)]
+    const changes = ranges
+      .map((range) => ({ from: range.from, to: range.to, insert: this.transformCase(state.sliceDoc(range.from, range.to), kind) }))
+      .filter((change) => state.sliceDoc(change.from, change.to) !== change.insert)
+      .sort((a, b) => a.from - b.from)
+    if (changes.length === 0) return
+    const changeSet = state.changes(changes)
+    const selections = targets.length > 0
+      ? state.selection.ranges.map((range) => range.empty
+        ? EditorSelection.cursor(changeSet.mapPos(range.head, 1))
+        : EditorSelection.range(changeSet.mapPos(range.from, -1), changeSet.mapPos(range.to, 1)))
+      : [EditorSelection.range(0, changeSet.newLength)]
+    this.view.dispatch({
+      changes: changeSet,
+      selection: EditorSelection.create(selections, state.selection.mainIndex),
+      userEvent: 'input.case'
+    })
+  }
+
+  private transformCase(source: string, kind: 'upper' | 'lower' | 'title'): string {
+    if (kind === 'upper') return source.toUpperCase()
+    if (kind === 'lower') return source.toLowerCase()
+    return source.toLowerCase().replace(/\b\p{L}/gu, (char) => char.toUpperCase())
   }
 
   joinLines(): void {

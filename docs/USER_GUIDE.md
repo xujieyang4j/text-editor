@@ -184,6 +184,11 @@ available. Both commands are available in the Selection menu and Command Palette
 Transpose Characters*. It respects Unicode character boundaries, does nothing when there is no
 swappable pair (such as at the start of a line), and is undoable like normal typing.
 
+**Case conversion with multiple selections.** *Edit: Upper Case*, *Lower Case*, and *Title Case*
+apply independently to every non-empty selection, which makes multi-cursor cleanup predictable.
+When there is no selection, they keep the established behaviour of converting the entire document.
+After a selection-based conversion, each converted selection remains selected and the edit is undoable.
+
 **Line operations:**
 
 | Action | Shortcut |
@@ -551,6 +556,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 **转置字符。** 当两个相邻字符的顺序写反，例如 `teh`，把光标放在它们之后并按 `Ctrl+T`，即可交换。
 也可从 *Edit: Transpose Characters* 调用。该操作遵循 Unicode 字符边界；行首等没有可交换字符的位置
 不会修改文本，并可像普通输入一样撤销。
+
+**多选区大小写转换。** *Edit: Upper Case*、*Lower Case*、*Title Case* 会分别作用于每个非空选区，
+使多光标清理更可预期；没有选区时，仍保持转换整个文档的行为。基于选区转换后，每个转换过的范围仍会
+保持选中，并可撤销。
 
 **行操作：**
 
