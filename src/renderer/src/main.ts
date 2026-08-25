@@ -885,6 +885,14 @@ class App {
       case 'select-all-occurrences':
         this.editor.selectAllOccurrences()
         break
+      case 'select-line':
+        this.editor.selectCurrentLine()
+        break
+      case 'select-matching-bracket':
+        if (!this.editor.selectToMatchingBracket()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN' ? '当前位置没有匹配括号' : 'No matching bracket at the cursor'
+        }
+        break
       case 'expand-selection':
         this.editor.expandSelection()
         break

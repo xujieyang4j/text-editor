@@ -60,6 +60,8 @@ export const COMMANDS: Command[] = [
   { id: 'add-cursor-below', title: 'Selection: Add Cursor Below', hint: 'Ctrl/Cmd+Alt+Down' },
   { id: 'select-next-occurrence', title: 'Selection: Add Next Occurrence', hint: 'Ctrl/Cmd+D' },
   { id: 'select-all-occurrences', title: 'Selection: Select All Occurrences', hint: 'Alt+F3' },
+  { id: 'select-line', title: 'Selection: Select Line', hint: 'Alt+L / macOS: Ctrl+L' },
+  { id: 'select-matching-bracket', title: 'Selection: Select to Matching Bracket' },
   { id: 'expand-selection', title: 'Selection: Expand Selection', hint: 'Shift+Alt+Right' },
   { id: 'shrink-selection', title: 'Selection: Shrink Selection', hint: 'Shift+Alt+Left' },
   { id: 'move-line-up', title: 'Edit: Move Line Up', hint: 'Alt+Up' },

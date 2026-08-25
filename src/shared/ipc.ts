@@ -39,6 +39,7 @@ export const IPC = {
   workspaceSymbols: 'workspace:symbols',
   workspaceWords: 'workspace:words',
   fileCreate: 'file:create',
+  fileCopy: 'file:copy',
   fileRename: 'file:rename',
   fileMove: 'file:move',
   fileDelete: 'file:delete',
@@ -733,6 +734,8 @@ export type MenuEvent =
   | 'add-cursor-below'
   | 'select-next-occurrence'
   | 'select-all-occurrences'
+  | 'select-line'
+  | 'select-matching-bracket'
   | 'expand-selection'
   | 'shrink-selection'
   | 'move-line-up'

@@ -57,7 +57,7 @@ const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
   'goto-anything': '转到任意位置…', 'goto-symbol': '转到文件符号…', 'goto-project-symbol': '转到项目符号…', 'go-to-line': '转到行…', 'goto-matching-bracket': '转到匹配括号', 'navigate-back': '后退', 'navigate-forward': '前进',
   'toggle-comment': '切换行注释', 'toggle-block-comment': '切换块注释', 'move-line-up': '上移行', 'move-line-down': '下移行', 'copy-line-up': '向上复制行', 'copy-line-down': '向下复制行', 'duplicate-selection': '复制行/选区', 'delete-line': '删除行', 'sort-lines': '排序行',
   'to-upper-case': '转为大写', 'to-lower-case': '转为小写', 'to-title-case': '转为标题格式', 'join-lines': '合并行', 'trim-trailing-whitespace': '删除行尾空白', 'indent-selection': '增加缩进', 'outdent-selection': '减少缩进',
-  'add-cursor-above': '在上方添加光标', 'add-cursor-below': '在下方添加光标', 'select-next-occurrence': '选择下一个匹配项', 'select-all-occurrences': '选择全部匹配项', 'expand-selection': '扩展选区', 'shrink-selection': '缩小选区', 'split-selection-lines': '按行拆分选区',
+  'add-cursor-above': '在上方添加光标', 'add-cursor-below': '在下方添加光标', 'select-next-occurrence': '选择下一个匹配项', 'select-all-occurrences': '选择全部匹配项', 'select-line': '选中整行', 'select-matching-bracket': '选中至匹配括号', 'expand-selection': '扩展选区', 'shrink-selection': '缩小选区', 'split-selection-lines': '按行拆分选区',
   'next-tab': '下一个标签页', 'prev-tab': '上一个标签页', 'toggle-bookmark': '切换书签', 'next-bookmark': '下一个书签', 'prev-bookmark': '上一个书签', 'next-change': '下一个更改', 'prev-change': '上一个更改', 'revert-current-change': '还原当前更改',
   'toggle-sidebar': '切换侧边栏', 'split-editor': '切换分屏编辑器', 'split-selected-tabs': '将选中标签拆分到分组', 'layout-single': '单栏布局', 'layout-columns2': '两栏布局', 'layout-columns3': '三栏布局', 'layout-grid4': '四宫格布局',
   'move-file-next-group': '将文件移到下一分组', 'clone-file-next-group': '将文件复制到下一分组', 'focus-next-group': '聚焦下一分组', 'focus-prev-group': '聚焦上一分组',

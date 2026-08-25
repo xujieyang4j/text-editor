@@ -30,6 +30,8 @@ import {
   addCursorAbove,
   addCursorBelow,
   cursorMatchingBracket,
+  selectMatchingBracket,
+  selectLine,
   selectParentSyntax,
   indentMore,
   indentLess
@@ -521,6 +523,12 @@ export class Editor {
     if (moved) this.view.focus()
     return moved
   }
+
+  /** Select the full physical line(s) touched by the current selection. */
+  selectCurrentLine(): boolean { return selectLine(this.view) }
+
+  /** Extend each selection to the bracket matching its active end. */
+  selectToMatchingBracket(): boolean { return selectMatchingBracket(this.view) }
 
   foldCurrent(): boolean { return foldCode(this.view) }
   unfoldCurrent(): boolean { return unfoldCode(this.view) }

@@ -173,6 +173,12 @@ to **word → current line → whole document**. Moving the cursor, making a man
 changing text starts a new expansion path. The commands are also available as *Selection: Expand
 Selection* and *Selection: Shrink Selection* in the Command Palette.
 
+**Quick line and bracket selections.** *Selection: Select Line* selects the full physical line(s)
+touched by the cursor or selection. Its default key is `Alt+L` on Windows/Linux and `Ctrl+L` on
+macOS. *Selection: Select to Matching Bracket* extends the active end of the selection to its
+matching `()`, `[]`, or `{}` bracket. It leaves the selection untouched when no matching bracket is
+available. Both commands are available in the Selection menu and Command Palette.
+
 **Line operations:**
 
 | Action | Shortcut |
@@ -531,6 +537,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 对于已识别语言，会优先选择外层语法结构，例如标识符、表达式、参数列表或代码块；纯文本、未完成代码或
 语法结构已到顶时，则按**单词 → 当前行 → 全文**回退。移动光标、手动选择文本或修改内容会开启新的扩展
 路径。也可以在命令面板执行 *Selection: Expand Selection* / *Selection: Shrink Selection*。
+
+**快速选择行和括号范围。** *Selection: Select Line* 会选择光标或选区触及的完整物理行；Windows/Linux
+默认 `Alt+L`，macOS 默认 `Ctrl+L`。*Selection: Select to Matching Bracket* 会把选区活动端扩展到
+对应的 `()`、`[]`、`{}` 另一端；没有匹配括号时保持原选区。两项操作均可从选择菜单和命令面板执行。
 
 **行操作：**
 
