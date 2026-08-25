@@ -133,8 +133,11 @@ sub-modes triggered by a prefix in the same input:
 | Type | Mode | Example |
 | --- | --- | --- |
 | *(text)* | Fuzzy file path | `maints` → `src/renderer/src/main.ts` |
-| `:` + number | Go to line in current file | `:120` |
+| `:` + `line[:column]` | Go to a location in the current file | `:120:8` |
 | `@` + name | Go to symbol in current file | `@openFolder` |
+
+You can also type `file:line:column` (for example, `main.ts:120:8`) to open a matched workspace
+file at an exact location.
 
 **Goto Symbol — `Ctrl/Cmd+R`.** Same as the `@` mode directly. Symbols are extracted with a
 fast per-line scan: JS/TS functions, classes, methods and arrow-consts; Python `def`/`class`;
@@ -145,7 +148,7 @@ matching `()`, `[]` or `{}` pair, jumps to the other end. When no pair is availa
 stays in place. The command is also available through *Goto: Goto Matching Bracket*.
 
 > Goto Anything's file list requires an open folder (`Ctrl/Cmd+Shift+O`). With no workspace,
-> use `Ctrl/Cmd+P` for `:line`/`@symbol` in the current file, or the sidebar to open files.
+> use `Ctrl/Cmd+P` for `:line[:column]`/`@symbol` in the current file, or the sidebar to open files.
 
 <a id="en-editing"></a>
 
@@ -495,8 +498,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 | 输入 | 模式 | 示例 |
 | --- | --- | --- |
 | *(文字)* | 模糊匹配文件路径 | `maints` → `src/renderer/src/main.ts` |
-| `:` + 数字 | 跳到当前文件的某行 | `:120` |
+| `:` + `行[:列]` | 跳到当前文件的位置 | `:120:8` |
 | `@` + 名称 | 跳到当前文件的符号 | `@openFolder` |
+
+也可输入 `文件名:行号:列号`（例如 `main.ts:120:8`），直接打开匹配的工作区文件并精确定位。
 
 **跳转到符号 —— `Ctrl/Cmd+R`。** 等同直接进入 `@` 模式。符号用快速逐行扫描抽取：JS/TS 的
 函数/类/方法/箭头常量、Python 的 `def`/`class`、Go 的 `func`、Rust 的 `fn`，以及 Markdown 标题。
@@ -505,7 +510,7 @@ npm run dist:linux   # Linux：AppImage + .deb
 另一端；没有可匹配括号时光标保持不动。命令面板中也可执行 *Goto: Goto Matching Bracket*。
 
 > Goto Anything 的文件列表需要先打开文件夹（`Ctrl/Cmd+Shift+O`）。没有工作区时，`Ctrl/Cmd+P`
-> 仍可用 `:行号`/`@符号` 在当前文件内跳转，或用侧边栏打开文件。
+> 仍可用 `:行号[:列号]`/`@符号` 在当前文件内跳转，或用侧边栏打开文件。
 
 <a id="zh-editing"></a>
 

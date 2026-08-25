@@ -675,10 +675,15 @@ export class Editor {
 
   /** Move the cursor to a 1-based line number and reveal it. */
   gotoLineNumber(line: number): void {
+    this.gotoLineColumn(line, 1)
+  }
+
+  /** Move the cursor to a 1-based line and column, clamping within the document. */
+  gotoLineColumn(line: number, column = 1): void {
     const clamped = Math.max(1, Math.min(this.view.state.doc.lines, line))
     const info = this.view.state.doc.line(clamped)
     this.view.dispatch({
-      selection: EditorSelection.cursor(info.from),
+      selection: EditorSelection.cursor(Math.max(info.from, Math.min(info.to, info.from + Math.max(0, column - 1)))),
       scrollIntoView: true
     })
     this.view.focus()

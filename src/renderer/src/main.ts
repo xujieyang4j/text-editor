@@ -3710,7 +3710,7 @@ class App {
     this.statusSelection.textContent = locale === 'zh-CN' ? '界面语言：简体中文' : 'Interface language: English'
   }
 
-  /** Ctrl/Cmd+P — fuzzy list of workspace files, with :line, @symbol and #project-symbol modes. */
+  /** Ctrl/Cmd+P — fuzzy workspace files, :line[:column], @symbol and #project-symbol modes. */
   private async openGotoAnything(): Promise<void> {
     let files: string[] = []
     if (this.folders.length > 0) {
@@ -3722,7 +3722,7 @@ class App {
     }
     const root = this.folder
     this.palette.open({
-      placeholder: 'Goto Anything — file, :line, @symbol, #project symbol',
+      placeholder: 'Goto Anything — file, :line[:column], @symbol, #project symbol',
       onQuery: async (query) => {
         if (query.startsWith('#')) await this.ensureProjectSymbols()
         return this.gotoAnythingItems(query, files, root)
@@ -3756,10 +3756,11 @@ class App {
 
   /** Compute palette rows for a Goto Anything query based on its mode prefix. */
   private gotoAnythingItems(query: string, files: string[], root: string | null): PaletteItem[] {
-    // ":123" → go to line in the current file.
+    // ":123" / ":123:8" → go to a line / column in the current file.
     if (query.startsWith(':')) {
-      const line = query.slice(1)
-      return [{ label: `Go to line ${line || '…'}`, value: { kind: 'line', line: Number(line) } }]
+      const location = this.parseGotoLocation(query.slice(1))
+      const suffix = location ? ` ${location.line}${location.column ? `:${location.column}` : ''}` : ' …'
+      return [{ label: `Go to${suffix}`, value: { kind: 'line', line: location?.line ?? Number.NaN, column: location?.column } }]
     }
     // "@sym" → symbols in the current file.
     if (query.startsWith('@')) {
@@ -3776,15 +3777,16 @@ class App {
         value: { kind: 'file-line', path: item.path, line: item.line }
       }))
     }
-    // "path/to/file:42" opens a fuzzy-matched file at the requested line.
-    const fileLine = /^(.*):(\d+)$/.exec(query)
+    // "path/to/file:42" / "path/to/file:42:8" opens a fuzzy-matched file at the requested location.
+    const fileLine = /^(.*):(\d+)(?::(\d+))?$/.exec(query)
     if (fileLine && fileLine[1].trim()) {
       const line = Number(fileLine[2])
+      const column = fileLine[3] ? Number(fileLine[3]) : undefined
       const relForLine = (p: string): string => root && p.startsWith(root) ? p.slice(root.length + 1) : p
       return fuzzyFilter(fileLine[1], files, relForLine).slice(0, 200).map(({ item }) => ({
         label: baseName(item),
-        detail: `${relForLine(item)}:${line}`,
-        value: { kind: 'file-line', path: item, line }
+        detail: `${relForLine(item)}:${line}${column ? `:${column}` : ''}`,
+        value: { kind: 'file-line', path: item, line, column }
       }))
     }
     // Otherwise fuzzy-match file paths relative to the workspace root.
@@ -3796,6 +3798,16 @@ class App {
       detail: rel(item),
       value: { kind: 'file', path: item }
     }))
+  }
+
+  /** Parse positive 1-based line[:column] text shared by current-file Goto mode. */
+  private parseGotoLocation(input: string): { line: number; column?: number } | null {
+    const match = /^(\d+)(?::(\d+))?$/.exec(input.trim())
+    if (!match) return null
+    const line = Number(match[1])
+    const column = match[2] ? Number(match[2]) : undefined
+    if (!Number.isSafeInteger(line) || line < 1 || (column !== undefined && (!Number.isSafeInteger(column) || column < 1))) return null
+    return { line, column }
   }
 
   /** Ctrl/Cmd+R — symbols in the current document. */
@@ -3824,15 +3836,15 @@ class App {
   private acceptGoto(item: PaletteItem): void {
     const v = item.value as
       | { kind: 'file'; path: string }
-      | { kind: 'line'; line: number }
-      | { kind: 'file-line'; path: string; line: number }
+      | { kind: 'line'; line: number; column?: number }
+      | { kind: 'file-line'; path: string; line: number; column?: number }
       | { kind: 'pos'; pos: number }
     if (v.kind === 'file') {
       void this.openPath(v.path)
     } else if (v.kind === 'line') {
-      if (Number.isFinite(v.line) && v.line > 0) this.editor.gotoLineNumber(v.line)
+      if (Number.isFinite(v.line) && v.line > 0) this.editor.gotoLineColumn(v.line, v.column)
     } else if (v.kind === 'file-line') {
-      void this.openPath(v.path).then(() => this.editor.gotoLineNumber(v.line))
+      void this.openPath(v.path).then(() => this.editor.gotoLineColumn(v.line, v.column))
     } else {
       this.editor.gotoPos(v.pos)
     }
