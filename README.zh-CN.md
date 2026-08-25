@@ -1,6 +1,6 @@
 # Lumen Editor
 
-> [English](./README.md) | **中文** ｜ 详细使用说明见 [`docs/使用说明.md`](./docs/使用说明.md)
+> [English](./README.md) | **中文** ｜ [图文编辑器使用指南](./docs/编辑器使用指南.md) ｜ [安装与使用说明](./docs/使用说明.md)
 
 一款基于 **Electron + TypeScript + CodeMirror 6** 的跨平台桌面文本编辑器，
 单一代码库即可在 **Linux、Windows、macOS** 上运行。
