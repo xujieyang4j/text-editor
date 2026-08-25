@@ -179,6 +179,11 @@ macOS. *Selection: Select to Matching Bracket* extends the active end of the sel
 matching `()`, `[]`, or `{}` bracket. It leaves the selection untouched when no matching bracket is
 available. Both commands are available in the Selection menu and Command Palette.
 
+**Transpose characters.** Put the cursor directly after two adjacent characters in the wrong order
+(for example, `teh`) and press `Ctrl+T` to swap them. The command is also available as *Edit:
+Transpose Characters*. It respects Unicode character boundaries, does nothing when there is no
+swappable pair (such as at the start of a line), and is undoable like normal typing.
+
 **Line operations:**
 
 | Action | Shortcut |
@@ -188,6 +193,7 @@ available. Both commands are available in the Selection menu and Command Palette
 | Copy line up / down | `Shift+Alt+↑` / `Shift+Alt+↓` |
 | Duplicate line / selection | `Ctrl/Cmd+Shift+D` |
 | Delete line | `Ctrl/Cmd+Shift+K` |
+| Transpose adjacent characters | `Ctrl+T` |
 | Sort lines (selection, or whole doc) | Command Palette → *Edit: Sort Lines* |
 | Select line | `Alt+L` |
 | Select enclosing syntax | `Ctrl/Cmd+I` |
@@ -542,6 +548,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 默认 `Alt+L`，macOS 默认 `Ctrl+L`。*Selection: Select to Matching Bracket* 会把选区活动端扩展到
 对应的 `()`、`[]`、`{}` 另一端；没有匹配括号时保持原选区。两项操作均可从选择菜单和命令面板执行。
 
+**转置字符。** 当两个相邻字符的顺序写反，例如 `teh`，把光标放在它们之后并按 `Ctrl+T`，即可交换。
+也可从 *Edit: Transpose Characters* 调用。该操作遵循 Unicode 字符边界；行首等没有可交换字符的位置
+不会修改文本，并可像普通输入一样撤销。
+
 **行操作：**
 
 | 操作 | 快捷键 |
@@ -551,6 +561,7 @@ npm run dist:linux   # Linux：AppImage + .deb
 | 向上 / 向下复制行 | `Shift+Alt+↑` / `Shift+Alt+↓` |
 | 复制行 / 选区 | `Ctrl/Cmd+Shift+D` |
 | 删除行 | `Ctrl/Cmd+Shift+K` |
+| 转置相邻字符 | `Ctrl+T` |
 | 行排序（选区或整篇） | 命令面板 → *Edit: Sort Lines* |
 | 选中整行 | `Alt+L` |
 | 选中所在语法块 | `Ctrl/Cmd+I` |

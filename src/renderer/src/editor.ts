@@ -25,6 +25,7 @@ import {
   copyLineUp,
   copyLineDown,
   deleteLine,
+  transposeChars,
   toggleComment,
   toggleBlockComment,
   addCursorAbove,
@@ -476,6 +477,9 @@ export class Editor {
   }
   deleteLine(): void {
     deleteLine(this.view)
+  }
+  transposeCharacters(): boolean {
+    return transposeChars(this.view)
   }
   toggleComment(): void {
     toggleComment(this.view)

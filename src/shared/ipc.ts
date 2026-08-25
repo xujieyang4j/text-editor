@@ -744,6 +744,7 @@ export type MenuEvent =
   | 'copy-line-down'
   | 'delete-line'
   | 'duplicate-selection'
+  | 'transpose-characters'
   | 'sort-lines'
   | 'font-zoom-in'
   | 'font-zoom-out'

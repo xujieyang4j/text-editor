@@ -70,6 +70,7 @@ export const COMMANDS: Command[] = [
   { id: 'copy-line-down', title: 'Edit: Copy Line Down', hint: 'Shift+Alt+Down' },
   { id: 'duplicate-selection', title: 'Edit: Duplicate Line/Selection', hint: 'Ctrl/Cmd+Shift+D' },
   { id: 'delete-line', title: 'Edit: Delete Line', hint: 'Ctrl/Cmd+Shift+K' },
+  { id: 'transpose-characters', title: 'Edit: Transpose Characters', hint: 'Ctrl+T' },
   { id: 'sort-lines', title: 'Edit: Sort Lines' },
   { id: 'toggle-bookmark', title: 'Navigate: Toggle Bookmark', hint: 'Ctrl/Cmd+F2' },
   { id: 'next-bookmark', title: 'Navigate: Next Bookmark', hint: 'F2' },

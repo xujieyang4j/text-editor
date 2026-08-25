@@ -93,6 +93,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Copy Line Down', 'copy-line-down', 'Shift+Alt+Down'),
         item('Duplicate Line/Selection', 'duplicate-selection', 'CmdOrCtrl+Shift+D'),
         item('Delete Line', 'delete-line', 'CmdOrCtrl+Shift+K'),
+        item('Transpose Characters', 'transpose-characters', 'Ctrl+T'),
         item('Sort Lines', 'sort-lines'),
         item('Upper Case', 'to-upper-case'),
         item('Lower Case', 'to-lower-case'),
