@@ -137,6 +137,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Go to Definition', 'lsp-definition', 'F12'),
         item('Find References', 'lsp-references', 'Shift+F12'),
         item('Goto Line…', 'go-to-line', 'CmdOrCtrl+G'),
+        item('Goto Matching Bracket', 'goto-matching-bracket', 'CmdOrCtrl+Shift+\\'),
         { type: 'separator' },
         item('Back', 'navigate-back', 'Alt+Left'),
         item('Forward', 'navigate-forward', 'Alt+Right'),

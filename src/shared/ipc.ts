@@ -756,6 +756,7 @@ export type MenuEvent =
   | 'prev-change'
   | 'revert-current-change'
   | 'goto-project-symbol'
+  | 'goto-matching-bracket'
   | 'navigate-back'
   | 'navigate-forward'
   | 'layout-single'

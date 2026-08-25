@@ -29,6 +29,7 @@ import {
   toggleBlockComment,
   addCursorAbove,
   addCursorBelow,
+  cursorMatchingBracket,
   selectParentSyntax,
   indentMore,
   indentLess
@@ -508,6 +509,13 @@ export class Editor {
       index = found + Math.max(1, selected.length)
     }
     if (ranges.length > 0) this.view.dispatch({ selection: EditorSelection.create(ranges) })
+  }
+
+  /** Move each cursor to its matching bracket, returning false when none match. */
+  gotoMatchingBracket(): boolean {
+    const moved = cursorMatchingBracket(this.view)
+    if (moved) this.view.focus()
+    return moved
   }
 
   /**

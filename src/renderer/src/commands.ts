@@ -39,6 +39,7 @@ export const COMMANDS: Command[] = [
   { id: 'goto-symbol', title: 'Goto: Goto Symbol…', hint: 'Ctrl/Cmd+R' },
   { id: 'goto-project-symbol', title: 'Goto: Goto Symbol in Project…', hint: 'Ctrl/Cmd+Shift+R' },
   { id: 'go-to-line', title: 'Goto: Goto Line…', hint: 'Ctrl/Cmd+G' },
+  { id: 'goto-matching-bracket', title: 'Goto: Goto Matching Bracket', hint: 'Ctrl/Cmd+Shift+\\' },
   { id: 'navigate-back', title: 'Goto: Back', hint: 'Alt+Left' },
   { id: 'navigate-forward', title: 'Goto: Forward', hint: 'Alt+Right' },
 

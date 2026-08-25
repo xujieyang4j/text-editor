@@ -799,6 +799,12 @@ class App {
       case 'go-to-line':
         this.editor.goToLine()
         break
+      case 'goto-matching-bracket':
+        this.recordNavigation()
+        if (!this.editor.gotoMatchingBracket()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN' ? '当前位置没有匹配括号' : 'No matching bracket at the cursor'
+        }
+        break
       case 'toggle-sidebar':
         this.toggleSidebar()
         break

@@ -140,6 +140,10 @@ sub-modes triggered by a prefix in the same input:
 fast per-line scan: JS/TS functions, classes, methods and arrow-consts; Python `def`/`class`;
 Go `func`; Rust `fn`; and Markdown headings.
 
+**Goto Matching Bracket — `Ctrl/Cmd+Shift+\`.** With the cursor on, or directly beside, a
+matching `()`, `[]` or `{}` pair, jumps to the other end. When no pair is available, the cursor
+stays in place. The command is also available through *Goto: Goto Matching Bracket*.
+
 > Goto Anything's file list requires an open folder (`Ctrl/Cmd+Shift+O`). With no workspace,
 > use `Ctrl/Cmd+P` for `:line`/`@symbol` in the current file, or the sidebar to open files.
 
@@ -313,6 +317,7 @@ settings as `session.json` (see [Settings Reference](#en-settings)).
 | Goto Anything | `Ctrl+P` | `Cmd+P` |
 | Goto Symbol | `Ctrl+R` | `Cmd+R` |
 | Goto Line | `Ctrl+G` | `Cmd+G` |
+| Goto Matching Bracket | `Ctrl+Shift+\` | `Cmd+Shift+\` |
 | New / Open file | `Ctrl+N` / `Ctrl+O` | `Cmd+N` / `Cmd+O` |
 | Open folder | `Ctrl+Shift+O` | `Cmd+Shift+O` |
 | Save / Save As | `Ctrl+S` / `Ctrl+Shift+S` | `Cmd+S` / `Cmd+Shift+S` |
@@ -482,6 +487,9 @@ npm run dist:linux   # Linux：AppImage + .deb
 **跳转到符号 —— `Ctrl/Cmd+R`。** 等同直接进入 `@` 模式。符号用快速逐行扫描抽取：JS/TS 的
 函数/类/方法/箭头常量、Python 的 `def`/`class`、Go 的 `func`、Rust 的 `fn`，以及 Markdown 标题。
 
+**转到匹配括号 —— `Ctrl/Cmd+Shift+\`。** 光标位于或紧邻 `()`、`[]`、`{}` 等成对括号时，会跳到
+另一端；没有可匹配括号时光标保持不动。命令面板中也可执行 *Goto: Goto Matching Bracket*。
+
 > Goto Anything 的文件列表需要先打开文件夹（`Ctrl/Cmd+Shift+O`）。没有工作区时，`Ctrl/Cmd+P`
 > 仍可用 `:行号`/`@符号` 在当前文件内跳转，或用侧边栏打开文件。
 
@@ -627,6 +635,7 @@ Sublime 的 “hot exit”）。
 | Goto Anything | `Ctrl+P` | `Cmd+P` |
 | 跳转到符号 | `Ctrl+R` | `Cmd+R` |
 | 跳转到行 | `Ctrl+G` | `Cmd+G` |
+| 跳转到匹配括号 | `Ctrl+Shift+\` | `Cmd+Shift+\` |
 | 新建 / 打开文件 | `Ctrl+N` / `Ctrl+O` | `Cmd+N` / `Cmd+O` |
 | 打开文件夹 | `Ctrl+Shift+O` | `Cmd+Shift+O` |
 | 保存 / 另存为 | `Ctrl+S` / `Ctrl+Shift+S` | `Cmd+S` / `Cmd+Shift+S` |
