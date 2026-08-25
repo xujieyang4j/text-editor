@@ -935,6 +935,9 @@ class App {
       case 'delete-to-line-end':
         this.editor.deleteToEndOfLine()
         break
+      case 'insert-blank-line-above':
+        this.editor.insertBlankLineAbove()
+        break
       case 'insert-blank-line':
         this.editor.insertBlankLineBelow()
         break

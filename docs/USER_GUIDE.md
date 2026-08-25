@@ -195,6 +195,12 @@ indented line below the current line without splitting that line at the cursor. 
 you want to start the next line before finishing the current one. It uses the active language's
 normal indentation rules, applies at every cursor, and is undoable like regular typing.
 
+**Insert blank line above.** *Edit: Insert Blank Line Above* (`Ctrl/Cmd+Shift+Enter`) is the
+matching operation above the current line. It creates one blank line before each cursor's line,
+preserving that line's existing leading indentation without splitting or moving its contents.
+Multiple cursors on the same line create one blank line; cursors on different lines create their own
+lines. The operation is undoable in one step.
+
 **Delete to line start / end.** *Edit: Delete to Line Start* and *Delete to Line End* use
 `Ctrl/Cmd+Shift+Backspace` and `Ctrl/Cmd+Shift+Delete`. With a selection, they delete that
 selection. With cursors, they delete from each cursor to the corresponding line boundary. At a line
@@ -595,6 +601,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 **在下方新建空行。** *Edit: Insert Blank Line Below*（`Ctrl/Cmd+Enter`）会在当前行下方创建一个
 自动缩进的新行，不会从光标处拆开当前行。适合当前行未写完时直接开始编辑下一行。它使用当前语言的常规
 缩进规则，对每个光标分别生效，并可像普通输入一样撤销。
+
+**在上方新建空行。** *Edit: Insert Blank Line Above*（`Ctrl/Cmd+Shift+Enter`）是在当前行上方的
+对称操作：它会在每个光标所在行前创建一个空行，保留该行已有的前导缩进，不拆分或移动当前行内容。
+多个光标位于同一行时只创建一行，位于不同的行时分别创建；整个操作可一次撤销。
 
 **删除至行首 / 行尾。** *Edit: Delete to Line Start*、*Delete to Line End* 对应
 `Ctrl/Cmd+Shift+Backspace`、`Ctrl/Cmd+Shift+Delete`。有选区时直接删除选区；单光标时分别删除至

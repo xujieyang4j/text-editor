@@ -745,6 +745,7 @@ export type MenuEvent =
   | 'delete-line'
   | 'delete-to-line-start'
   | 'delete-to-line-end'
+  | 'insert-blank-line-above'
   | 'insert-blank-line'
   | 'duplicate-selection'
   | 'transpose-characters'

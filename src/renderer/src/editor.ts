@@ -484,6 +484,28 @@ export class Editor {
   }
   deleteToStartOfLine(): boolean { return deleteToLineStart(this.view) }
   deleteToEndOfLine(): boolean { return deleteToLineEnd(this.view) }
+
+  /** Insert one matching-indentation blank line above each cursor's line. */
+  insertBlankLineAbove(): boolean {
+    const { state } = this.view
+    const lines = new Map<number, { indent: string }>()
+    for (const range of state.selection.ranges) {
+      const line = state.doc.lineAt(range.from)
+      if (!lines.has(line.from)) lines.set(line.from, { indent: /^\s*/.exec(line.text)?.[0] ?? '' })
+    }
+    const changes = [...lines.entries()]
+      .map(([from, { indent }]) => ({ from, insert: `${indent}${state.lineBreak}`, indentLength: indent.length }))
+      .sort((a, b) => a.from - b.from)
+    if (changes.length === 0) return false
+    const changeSet = state.changes(changes)
+    const selections = changes.map((change) => EditorSelection.cursor(changeSet.mapPos(change.from, -1) + change.indentLength))
+    this.view.dispatch({
+      changes: changeSet,
+      selection: EditorSelection.create(selections),
+      userEvent: 'input.insert-blank-line'
+    })
+    return true
+  }
   insertBlankLineBelow(): boolean {
     return insertBlankLine(this.view)
   }
