@@ -189,6 +189,13 @@ apply independently to every non-empty selection, which makes multi-cursor clean
 When there is no selection, they keep the established behaviour of converting the entire document.
 After a selection-based conversion, each converted selection remains selected and the edit is undoable.
 
+**Join lines.** *Edit: Join Lines* removes the line break and surrounding whitespace between lines.
+For a selection, it joins all lines the selection covers; multiple independent selections are handled
+separately, and overlapping spans are joined only once. With no selection, it joins the cursor's
+current line to the next line. It leaves the document untouched and shows a status message when
+there is no following line or no line break to join. The resulting line blocks keep a cursor and the
+whole action is undoable in one step.
+
 **Line operations:**
 
 | Action | Shortcut |
@@ -560,6 +567,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 **多选区大小写转换。** *Edit: Upper Case*、*Lower Case*、*Title Case* 会分别作用于每个非空选区，
 使多光标清理更可预期；没有选区时，仍保持转换整个文档的行为。基于选区转换后，每个转换过的范围仍会
 保持选中，并可撤销。
+
+**合并行。** *Edit: Join Lines* 会移除行间换行和两侧多余空白。存在选区时，它合并选区覆盖的所有行；
+多个独立选区分别处理，重叠范围只合并一次。没有选区时，合并光标所在行与下一行。最后一行等没有可合并
+换行的位置会保持文本不变并显示状态提示。每个合并后的行块保留一个光标，整个操作可一次撤销。
 
 **行操作：**
 

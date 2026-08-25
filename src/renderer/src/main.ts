@@ -744,7 +744,11 @@ class App {
         this.editor.changeCase('title')
         break
       case 'join-lines':
-        this.editor.joinLines()
+        if (!this.editor.joinLines()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '没有可合并的相邻行'
+            : 'No adjacent lines to join'
+        }
         break
       case 'split-selection-lines':
         this.editor.splitSelectionIntoLines()

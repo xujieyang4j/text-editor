@@ -853,13 +853,43 @@ export class Editor {
     return source.toLowerCase().replace(/\b\p{L}/gu, (char) => char.toUpperCase())
   }
 
-  joinLines(): void {
+  /**
+   * Join every selected line block. With only cursors, each cursor joins its
+   * current line to the following line; overlapping multi-cursor spans merge
+   * into one safe replacement.
+   */
+  joinLines(): boolean {
     const { state } = this.view
-    const selection = state.selection.main
-    const from = state.doc.lineAt(selection.from).from
-    const to = state.doc.lineAt(selection.to).to
-    const joined = state.sliceDoc(from, to).replace(/\s*\n\s*/g, ' ')
-    this.view.dispatch({ changes: { from, to, insert: joined }, selection: EditorSelection.cursor(from + joined.length), userEvent: 'input.join-lines' })
+    const spans = state.selection.ranges.flatMap((range) => {
+      const first = state.doc.lineAt(range.from)
+      if (range.empty) {
+        if (first.number >= state.doc.lines) return []
+        return [{ from: first.from, to: state.doc.line(first.number + 1).to }]
+      }
+      const last = state.doc.lineAt(range.to)
+      return [{ from: first.from, to: last.to }]
+    }).sort((a, b) => a.from - b.from)
+    const merged: Array<{ from: number; to: number }> = []
+    for (const span of spans) {
+      const previous = merged[merged.length - 1]
+      if (previous && span.from <= previous.to) previous.to = Math.max(previous.to, span.to)
+      else merged.push({ ...span })
+    }
+    const changes = merged
+      .map((span) => ({ ...span, insert: state.sliceDoc(span.from, span.to).replace(/\s*\n\s*/g, ' ') }))
+      .filter((change) => state.sliceDoc(change.from, change.to) !== change.insert)
+    if (changes.length === 0) return false
+    const changeSet = state.changes(changes)
+    const selections = changes.map((change) => {
+      const from = changeSet.mapPos(change.from, 1)
+      return EditorSelection.cursor(from + change.insert.length)
+    })
+    this.view.dispatch({
+      changes: changeSet,
+      selection: EditorSelection.create(selections),
+      userEvent: 'input.join-lines'
+    })
+    return true
   }
 
   splitSelectionIntoLines(): void {
