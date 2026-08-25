@@ -743,6 +743,8 @@ export type MenuEvent =
   | 'copy-line-up'
   | 'copy-line-down'
   | 'delete-line'
+  | 'delete-word-backward'
+  | 'delete-word-forward'
   | 'delete-to-line-start'
   | 'delete-to-line-end'
   | 'insert-blank-line-above'

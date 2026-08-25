@@ -207,6 +207,12 @@ selection. With cursors, they delete from each cursor to the corresponding line 
 boundary they remove the preceding or following line break, joining lines. Both operations work at
 multiple cursors and are undoable in one step.
 
+**Delete previous / next word.** *Edit: Delete Previous Word* and *Delete Next Word* use
+`Ctrl+Backspace` / `Ctrl+Delete` on Windows/Linux and `Alt+Backspace` / `Alt+Delete` on macOS.
+They delete a selection directly, or otherwise delete one editor-recognised word group at each
+cursor. This makes repeated cleanup of identifiers, parameters, prose, and nearby punctuation fast
+and consistent across multiple cursors.
+
 **Case conversion with multiple selections.** *Edit: Upper Case*, *Lower Case*, and *Title Case*
 apply independently to every non-empty selection, which makes multi-cursor cleanup predictable.
 When there is no selection, they keep the established behaviour of converting the entire document.
@@ -609,6 +615,11 @@ npm run dist:linux   # Linux：AppImage + .deb
 **删除至行首 / 行尾。** *Edit: Delete to Line Start*、*Delete to Line End* 对应
 `Ctrl/Cmd+Shift+Backspace`、`Ctrl/Cmd+Shift+Delete`。有选区时直接删除选区；单光标时分别删除至
 当前行首或行尾；光标已在边界时会删除相邻换行、连接两行。它们支持多光标，并可一次撤销。
+
+**删除前一个 / 后一个单词。** *Edit: Delete Previous Word*、*Delete Next Word* 在 Windows/Linux
+使用 `Ctrl+Backspace` / `Ctrl+Delete`，macOS 使用 `Alt+Backspace` / `Alt+Delete`。有选区时直接
+删除选区；没有选区时，每个光标会删除一个编辑器识别的词组边界，适合连续清理标识符、参数、普通文字
+和相邻标点，并支持多光标。
 
 **多选区大小写转换。** *Edit: Upper Case*、*Lower Case*、*Title Case* 会分别作用于每个非空选区，
 使多光标清理更可预期；没有选区时，仍保持转换整个文档的行为。基于选区转换后，每个转换过的范围仍会

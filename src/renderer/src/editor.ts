@@ -25,6 +25,8 @@ import {
   copyLineUp,
   copyLineDown,
   deleteLine,
+  deleteGroupBackward,
+  deleteGroupForward,
   deleteToLineStart,
   deleteToLineEnd,
   insertBlankLine,
@@ -482,6 +484,8 @@ export class Editor {
   deleteLine(): void {
     deleteLine(this.view)
   }
+  deletePreviousWord(): boolean { return deleteGroupBackward(this.view) }
+  deleteNextWord(): boolean { return deleteGroupForward(this.view) }
   deleteToStartOfLine(): boolean { return deleteToLineStart(this.view) }
   deleteToEndOfLine(): boolean { return deleteToLineEnd(this.view) }
 

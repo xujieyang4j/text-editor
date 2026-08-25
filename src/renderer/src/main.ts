@@ -929,6 +929,12 @@ class App {
       case 'delete-line':
         this.editor.deleteLine()
         break
+      case 'delete-word-backward':
+        this.editor.deletePreviousWord()
+        break
+      case 'delete-word-forward':
+        this.editor.deleteNextWord()
+        break
       case 'delete-to-line-start':
         this.editor.deleteToStartOfLine()
         break
