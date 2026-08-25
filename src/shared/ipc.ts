@@ -736,6 +736,7 @@ export type MenuEvent =
   | 'select-all-occurrences'
   | 'select-line'
   | 'select-matching-bracket'
+  | 'select-parent-syntax'
   | 'expand-selection'
   | 'shrink-selection'
   | 'move-line-up'

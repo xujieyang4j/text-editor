@@ -179,6 +179,13 @@ macOS. *Selection: Select to Matching Bracket* extends the active end of the sel
 matching `()`, `[]`, or `{}` bracket. It leaves the selection untouched when no matching bracket is
 available. Both commands are available in the Selection menu and Command Palette.
 
+**Select enclosing syntax.** *Selection: Select Enclosing Syntax* (`Ctrl/Cmd+I`) uses the active
+language's syntax tree to select the next outer structure around the cursor or selection—such as
+an expression, argument, call, condition, or block. It is useful before copying, deleting, wrapping,
+or refactoring a precise code unit. Plain text, incomplete syntax, or an already outermost structure
+leave the selection unchanged and show a status message; use Expand Selection to continue growing
+where applicable.
+
 **Split selection into lines.** *Selection: Split Selection into Lines* turns every line covered by
 all non-empty selections into a cursor at that line's start. Overlapping selected lines are deduped,
 and a selection ending exactly at the next line's start doesn't add an extra cursor. The main
@@ -595,6 +602,11 @@ npm run dist:linux   # Linux：AppImage + .deb
 **快速选择行和括号范围。** *Selection: Select Line* 会选择光标或选区触及的完整物理行；Windows/Linux
 默认 `Alt+L`，macOS 默认 `Ctrl+L`。*Selection: Select to Matching Bracket* 会把选区活动端扩展到
 对应的 `()`、`[]`、`{}` 另一端；没有匹配括号时保持原选区。两项操作均可从选择菜单和命令面板执行。
+
+**选中外层语法结构。** *Selection: Select Enclosing Syntax*（`Ctrl/Cmd+I`）利用当前语言语法树选择
+光标或选区所在的下一层外部结构，例如表达式、参数、调用、条件或代码块。它适合在精确代码单元上进行
+复制、删除、包裹或重构。纯文本、未解析语法或已经位于最大结构时保持原选区并显示提示；需要继续扩大时
+可使用 Expand Selection。
 
 **按行拆分选区。** *Selection: Split Selection into Lines* 会把全部非空选区覆盖的每行转为行首光标。
 重叠行会去重；选区恰好结束在下一行开头时不会多生成光标。主选区生成的光标仍是主光标。没有选区时不

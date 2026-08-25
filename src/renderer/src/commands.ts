@@ -62,6 +62,7 @@ export const COMMANDS: Command[] = [
   { id: 'select-all-occurrences', title: 'Selection: Select All Occurrences', hint: 'Alt+F3' },
   { id: 'select-line', title: 'Selection: Select Line', hint: 'Alt+L / macOS: Ctrl+L' },
   { id: 'select-matching-bracket', title: 'Selection: Select to Matching Bracket' },
+  { id: 'select-parent-syntax', title: 'Selection: Select Enclosing Syntax', hint: 'Ctrl/Cmd+I' },
   { id: 'expand-selection', title: 'Selection: Expand Selection', hint: 'Shift+Alt+Right' },
   { id: 'shrink-selection', title: 'Selection: Shrink Selection', hint: 'Shift+Alt+Left' },
   { id: 'move-line-up', title: 'Edit: Move Line Up', hint: 'Alt+Up' },

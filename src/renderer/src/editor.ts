@@ -569,6 +569,9 @@ export class Editor {
   /** Extend each selection to the bracket matching its active end. */
   selectToMatchingBracket(): boolean { return selectMatchingBracket(this.view) }
 
+  /** Select the immediately enclosing syntax-tree node when the active language provides one. */
+  selectEnclosingSyntax(): boolean { return selectParentSyntax(this.view) }
+
   foldCurrent(): boolean { return foldCode(this.view) }
   unfoldCurrent(): boolean { return unfoldCode(this.view) }
   foldEverywhere(): boolean { return foldAll(this.view) }

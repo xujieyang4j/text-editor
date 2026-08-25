@@ -908,6 +908,13 @@ class App {
           this.statusSelection.textContent = this.settings.locale === 'zh-CN' ? '当前位置没有匹配括号' : 'No matching bracket at the cursor'
         }
         break
+      case 'select-parent-syntax':
+        if (!this.editor.selectEnclosingSyntax()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '当前位置没有可选中的外层语法结构'
+            : 'No enclosing syntax structure at the cursor'
+        }
+        break
       case 'expand-selection':
         this.editor.expandSelection()
         break

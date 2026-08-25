@@ -132,6 +132,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         , item('Select All Occurrences', 'select-all-occurrences', 'Alt+F3')
         , item('Select Line', 'select-line')
         , item('Select to Matching Bracket', 'select-matching-bracket')
+        , item('Select Enclosing Syntax', 'select-parent-syntax', 'CmdOrCtrl+I')
         , item('Expand Selection', 'expand-selection', 'Shift+Alt+Right')
         , item('Shrink Selection', 'shrink-selection', 'Shift+Alt+Left')
         , item('Add Cursor Above', 'add-cursor-above', 'CmdOrCtrl+Alt+Up')
