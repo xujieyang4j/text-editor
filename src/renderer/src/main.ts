@@ -763,6 +763,13 @@ class App {
       case 'outdent-selection':
         this.editor.outdentSelection()
         break
+      case 'reindent-selection':
+        if (!this.editor.reindentSelection()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '当前选区没有可重新缩进的行'
+            : 'No selected lines could be reindented'
+        }
+        break
       case 'toggle-problems':
         this.buildPanel.toggle()
         break

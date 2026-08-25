@@ -202,6 +202,13 @@ current line to the next line. It leaves the document untouched and shows a stat
 there is no following line or no line break to join. The resulting line blocks keep a cursor and the
 whole action is undoable in one step.
 
+**Reindent selection.** *Edit: Reindent Selection* (`Ctrl/Cmd+Alt+\`) uses the active language's
+local syntax indentation service to recalculate the leading whitespace of selected lines. Unlike
+manual indent/outdent, it is useful after pasting a malformed block or changing braces, Python
+blocks, lists, or branches. It does not start an LSP, terminal, or external formatter. When the
+language has no applicable indentation information, the text is left unchanged and Lumen shows a
+status message.
+
 **Line operations:**
 
 | Action | Shortcut |
@@ -581,6 +588,11 @@ npm run dist:linux   # Linux：AppImage + .deb
 **合并行。** *Edit: Join Lines* 会移除行间换行和两侧多余空白。存在选区时，它合并选区覆盖的所有行；
 多个独立选区分别处理，重叠范围只合并一次。没有选区时，合并光标所在行与下一行。最后一行等没有可合并
 换行的位置会保持文本不变并显示状态提示。每个合并后的行块保留一个光标，整个操作可一次撤销。
+
+**自动重新缩进选区。** *Edit: Reindent Selection*（`Ctrl/Cmd+Alt+\`）利用当前语言的本地语法缩进
+服务重新计算选中行前导空白。它区别于手工增加/减少一级缩进，适合粘贴错位代码或修改括号、Python 块、
+列表、分支后恢复结构。它不会启动 LSP、终端或外部格式化器；语言没有可用缩进信息时，文本保持不变并
+显示状态提示。
 
 **行操作：**
 

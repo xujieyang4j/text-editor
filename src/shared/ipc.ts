@@ -824,6 +824,7 @@ export type MenuEvent =
   | 'split-selection-lines'
   | 'indent-selection'
   | 'outdent-selection'
+  | 'reindent-selection'
   | 'format-document'
   | 'toggle-problems'
   | 'project-settings'

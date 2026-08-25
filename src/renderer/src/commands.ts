@@ -122,6 +122,7 @@ export const COMMANDS: Command[] = [
   { id: 'split-selection-lines', title: 'Selection: Split Selection into Lines', hint: 'Ctrl/Cmd+Shift+L' },
   { id: 'indent-selection', title: 'Edit: Indent Selection' },
   { id: 'outdent-selection', title: 'Edit: Outdent Selection' },
+  { id: 'reindent-selection', title: 'Edit: Reindent Selection', hint: 'Ctrl/Cmd+Alt+\\' },
   { id: 'toggle-problems', title: 'View: Toggle Build Output' },
   { id: 'select-color-scheme', title: 'View: Select Color Scheme…' },
   { id: 'toggle-git', title: 'View: Toggle Git Changes' },

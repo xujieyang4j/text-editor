@@ -103,6 +103,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Trim Trailing Whitespace', 'trim-trailing-whitespace'),
         item('Indent Selection', 'indent-selection', 'CmdOrCtrl+]'),
         item('Outdent Selection', 'outdent-selection', 'CmdOrCtrl+['),
+        item('Reindent Selection', 'reindent-selection', 'CmdOrCtrl+Alt+\\'),
         { type: 'separator' },
         item('Find', 'find', 'CmdOrCtrl+F'),
         item('Replace', 'replace', 'CmdOrCtrl+H'),

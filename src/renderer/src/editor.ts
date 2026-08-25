@@ -35,7 +35,8 @@ import {
   selectLine,
   selectParentSyntax,
   indentMore,
-  indentLess
+  indentLess,
+  indentSelection as reindentBySyntax
 } from '@codemirror/commands'
 import {
   indentOnInput,
@@ -924,6 +925,7 @@ export class Editor {
 
   indentSelection(): void { indentMore(this.view) }
   outdentSelection(): void { indentLess(this.view) }
+  reindentSelection(): boolean { return reindentBySyntax(this.view) }
 
   /** Replace diagnostics supplied by a configured language tool. */
   setDiagnostics(diagnostics: Diagnostic[]): void {
