@@ -153,10 +153,18 @@ Go `func`; Rust `fn`; and Markdown headings.
 | --- | --- |
 | Add next occurrence of selection to cursors | `Ctrl/Cmd+D` |
 | Add cursor above / below | `Ctrl/Cmd+Alt+↑` / `Ctrl/Cmd+Alt+↓` |
-| Select all occurrences of selection | `Ctrl/Cmd+Shift+L` |
+| Select all occurrences of selection | `Alt+F3` |
 | Add a cursor at click point | `Alt`+Click |
 | Column (rectangular) selection | `Alt`+Drag |
 | Collapse back to a single cursor | `Esc` |
+
+**Expand / shrink selection.** Use `Shift+Alt+→` to grow the current selection and
+`Shift+Alt+←` to walk back through the exact expansion path. In a recognised language, Lumen
+prefers the next enclosing syntax-tree construct (for example, an identifier, expression, argument
+list, or block). In plain text, incomplete code, or once syntax expansion is exhausted, it falls back
+to **word → current line → whole document**. Moving the cursor, making a manual selection, or
+changing text starts a new expansion path. The commands are also available as *Selection: Expand
+Selection* and *Selection: Shrink Selection* in the Command Palette.
 
 **Line operations:**
 
@@ -184,7 +192,7 @@ input, code folding (fold gutter in the margin), bracket matching, and autocompl
 - **Find next** — `F3` (or `Enter` while the search field is focused).
 - **Replace** — `Ctrl/Cmd+H` opens the panel with the replace row; use its *Replace* /
   *Replace All* buttons.
-- **Select all matches** — `Ctrl/Cmd+Shift+L` turns every match of the current selection into a
+- **Select all matches** — `Alt+F3` turns every match of the current selection into a
   cursor for bulk editing.
 
 > Note: `Ctrl/Cmd+G` is bound to **Goto Line** in Lumen (not "find next"), so use `F3` to step
@@ -315,7 +323,8 @@ settings as `session.json` (see [Settings Reference](#en-settings)).
 | Toggle Markdown preview | `Ctrl+Shift+V` | `Cmd+Shift+V` |
 | Add next occurrence | `Ctrl+D` | `Cmd+D` |
 | Add cursor above / below | `Ctrl+Alt+↑/↓` | `Cmd+Alt+↑/↓` |
-| Select all occurrences | `Ctrl+Shift+L` | `Cmd+Shift+L` |
+| Select all occurrences | `Alt+F3` | `Alt+F3` |
+| Expand / shrink selection | `Shift+Alt+→/←` | `Shift+Alt+→/←` |
 | Toggle comment | `Ctrl+/` | `Cmd+/` |
 | Move / Copy line | `Alt+↑↓` / `Shift+Alt+↑↓` | `Alt+↑↓` / `Shift+Alt+↑↓` |
 | Duplicate / Delete line | `Ctrl+Shift+D` / `Ctrl+Shift+K` | `Cmd+Shift+D` / `Cmd+Shift+K` |
@@ -486,10 +495,15 @@ npm run dist:linux   # Linux：AppImage + .deb
 | --- | --- |
 | 把选区的下一个匹配加入光标 | `Ctrl/Cmd+D` |
 | 在上方 / 下方加光标 | `Ctrl/Cmd+Alt+↑` / `Ctrl/Cmd+Alt+↓` |
-| 选中选区的所有匹配 | `Ctrl/Cmd+Shift+L` |
+| 选中选区的所有匹配 | `Alt+F3` |
 | 在点击处加光标 | `Alt`+单击 |
 | 列（矩形）选择 | `Alt`+拖拽 |
 | 收回为单光标 | `Esc` |
+
+**逐级扩展 / 缩小选区。** `Shift+Alt+→` 会逐级扩大当前选区，`Shift+Alt+←` 会沿本次路径逐级缩小。
+对于已识别语言，会优先选择外层语法结构，例如标识符、表达式、参数列表或代码块；纯文本、未完成代码或
+语法结构已到顶时，则按**单词 → 当前行 → 全文**回退。移动光标、手动选择文本或修改内容会开启新的扩展
+路径。也可以在命令面板执行 *Selection: Expand Selection* / *Selection: Shrink Selection*。
 
 **行操作：**
 

@@ -122,6 +122,8 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Split Selection into Lines', 'split-selection-lines')
         , item('Add Next Occurrence', 'select-next-occurrence', 'CmdOrCtrl+D')
         , item('Select All Occurrences', 'select-all-occurrences', 'Alt+F3')
+        , item('Expand Selection', 'expand-selection', 'Shift+Alt+Right')
+        , item('Shrink Selection', 'shrink-selection', 'Shift+Alt+Left')
         , item('Add Cursor Above', 'add-cursor-above', 'CmdOrCtrl+Alt+Up')
         , item('Add Cursor Below', 'add-cursor-below', 'CmdOrCtrl+Alt+Down')
       ]

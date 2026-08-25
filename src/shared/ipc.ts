@@ -733,6 +733,8 @@ export type MenuEvent =
   | 'add-cursor-below'
   | 'select-next-occurrence'
   | 'select-all-occurrences'
+  | 'expand-selection'
+  | 'shrink-selection'
   | 'move-line-up'
   | 'move-line-down'
   | 'copy-line-up'

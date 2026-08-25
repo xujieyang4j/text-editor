@@ -863,6 +863,12 @@ class App {
       case 'select-all-occurrences':
         this.editor.selectAllOccurrences()
         break
+      case 'expand-selection':
+        this.editor.expandSelection()
+        break
+      case 'shrink-selection':
+        this.editor.shrinkSelection()
+        break
       case 'move-line-up':
         this.editor.moveLineUp()
         break

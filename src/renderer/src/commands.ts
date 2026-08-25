@@ -59,6 +59,8 @@ export const COMMANDS: Command[] = [
   { id: 'add-cursor-below', title: 'Selection: Add Cursor Below', hint: 'Ctrl/Cmd+Alt+Down' },
   { id: 'select-next-occurrence', title: 'Selection: Add Next Occurrence', hint: 'Ctrl/Cmd+D' },
   { id: 'select-all-occurrences', title: 'Selection: Select All Occurrences', hint: 'Alt+F3' },
+  { id: 'expand-selection', title: 'Selection: Expand Selection', hint: 'Shift+Alt+Right' },
+  { id: 'shrink-selection', title: 'Selection: Shrink Selection', hint: 'Shift+Alt+Left' },
   { id: 'move-line-up', title: 'Edit: Move Line Up', hint: 'Alt+Up' },
   { id: 'move-line-down', title: 'Edit: Move Line Down', hint: 'Alt+Down' },
   { id: 'copy-line-up', title: 'Edit: Copy Line Up', hint: 'Shift+Alt+Up' },
