@@ -194,6 +194,13 @@ available block uses `Ctrl+Alt+[` / `]`. When the cursor is not in a foldable bl
 folded), the document is left unchanged and Lumen shows a status message. Fold state stays with the
 tab and editor group during the session.
 
+**Document statistics.** Run *Tools: Document Statistics* from the Command Palette or Tools menu
+to see the active buffer's lines, user-visible characters, non-whitespace characters, and words /
+tokens. When the main selection is non-empty, the same counts are shown for the selection too. The
+tool reads only the in-memory buffer: it does not require a saved file or a workspace and never
+modifies text. Counts use Unicode graphemes and word segments, so CJK runs, combining characters,
+and emoji are handled without relying on an ASCII whitespace split.
+
 <a id="en-search"></a>
 
 ## 6. Search & Replace
@@ -540,6 +547,11 @@ npm run dist:linux   # Linux：AppImage + .deb
 *Fold All*、*Unfold All*。当前块在 Windows/Linux 使用 `Ctrl+Shift+[` / `]`，在 macOS 使用
 `Cmd+Alt+[` / `]`；全部折叠/展开使用 `Ctrl+Alt+[` / `]`。光标处无可折叠块或没有已折叠内容时，
 文档保持不变并显示状态提示。折叠状态会在本次会话中随标签和编辑组保留。
+
+**文档统计。** 从命令面板或“工具”执行 *Tools: Document Statistics*，可查看当前缓冲区的行数、
+用户可见字符数、非空白字符数与词/标记数；主选区非空时，也会显示选区的同类统计。该工具只读取
+内存缓冲区，不需要保存文件或打开工作区，也不会修改文本。统计采用 Unicode 字素和词段，可正确处理
+中文连续文本、组合字符和 emoji，而不是依赖 ASCII 空白分词。
 
 <a id="zh-search"></a>
 

@@ -1,5 +1,37 @@
 import type { LineEnding, TextEncoding } from './ipc.js'
 
+/** Unicode-aware statistics for a document or a selected text range. */
+export interface TextStatistics {
+  lines: number
+  characters: number
+  charactersExcludingWhitespace: number
+  words: number
+}
+
+/**
+ * Count user-visible characters (grapheme clusters) and word-like segments.
+ * Intl.Segmenter handles CJK text, combining marks, and emoji more faithfully
+ * than UTF-16 string length or an ASCII-only whitespace split.
+ */
+export function textStatistics(text: string): TextStatistics {
+  const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  const words = new Intl.Segmenter(undefined, { granularity: 'word' })
+  let characters = 0
+  let charactersExcludingWhitespace = 0
+  for (const segment of graphemes.segment(text)) {
+    characters += 1
+    if (!/^\s$/u.test(segment.segment)) charactersExcludingWhitespace += 1
+  }
+  let wordCount = 0
+  for (const segment of words.segment(text)) if (segment.isWordLike) wordCount += 1
+  return {
+    lines: text === '' ? 0 : text.split(/\r\n|\r|\n/).length,
+    characters,
+    charactersExcludingWhitespace,
+    words: wordCount
+  }
+}
+
 /** Detect the physical newline convention before CodeMirror normalises it. */
 export function detectLineEnding(text: string): LineEnding {
   if (/\r\n/.test(text)) return 'CRLF'

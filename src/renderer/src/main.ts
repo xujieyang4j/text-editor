@@ -10,6 +10,7 @@ import { incrementalChanges, revertIncrementalChange, type IncrementalChange } f
 import { JsonView } from './jsonView.js'
 import { OutlinePanel } from './outlinePanel.js'
 import { parseLosslessJson, stringifyLosslessJson } from '../../shared/losslessJson.js'
+import { textStatistics, type TextStatistics } from '../../shared/text.js'
 import { BuildPanel } from './buildPanel.js'
 import { TerminalPanel } from './terminalPanel.js'
 import { SettingsPanel } from './settingsPanel.js'
@@ -759,6 +760,9 @@ class App {
         break
       case 'toggle-terminal':
         this.toggleTerminal()
+        break
+      case 'document-statistics':
+        this.showDocumentStatistics()
         break
       case 'toggle-outline':
         this.settings.showOutline = !this.settings.showOutline
@@ -1847,6 +1851,27 @@ class App {
         ? (command.startsWith('unfold') ? '没有可展开的代码块' : '当前位置没有可折叠的代码块')
         : (command.startsWith('unfold') ? 'No folded code blocks to unfold' : 'No foldable code block at the cursor')
     }
+  }
+
+  /** Show Unicode-aware counts for the active buffer and its main selection. */
+  private showDocumentStatistics(): void {
+    const state = this.editor.view.state
+    const selection = state.selection.main
+    const documentStats = textStatistics(state.doc.toString())
+    const selectedStats = selection.empty ? null : textStatistics(state.sliceDoc(selection.from, selection.to))
+    const zh = this.settings.locale === 'zh-CN'
+    const render = (stats: TextStatistics): string => {
+      const fields = zh
+        ? [`行：${stats.lines}`, `字符：${stats.characters}`, `非空白字符：${stats.charactersExcludingWhitespace}`, `词 / 标记：${stats.words}`]
+        : [`Lines: ${stats.lines}`, `Characters: ${stats.characters}`, `Characters (excluding whitespace): ${stats.charactersExcludingWhitespace}`, `Words / tokens: ${stats.words}`]
+      return fields.join(String.fromCharCode(10))
+    }
+    const title = zh ? '文档统计' : 'Document Statistics'
+    const documentLabel = zh ? '全文' : 'Document'
+    const selectionLabel = zh ? '选区' : 'Selection'
+    const sections = [title, '', documentLabel, render(documentStats)]
+    if (selectedStats) sections.push('', selectionLabel, render(selectedStats))
+    window.alert(sections.join(String.fromCharCode(10)))
   }
 
   /** Toggle the markdown preview for the active document. */

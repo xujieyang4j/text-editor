@@ -778,6 +778,7 @@ export type MenuEvent =
   | 'import-sublime-keymap'
   | 'import-sublime-build'
   | 'toggle-terminal'
+  | 'document-statistics'
   | 'toggle-outline'
   | 'fold-current'
   | 'unfold-current'

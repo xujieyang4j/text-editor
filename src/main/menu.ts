@@ -200,6 +200,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
       submenu: [
         item('Build', 'build', 'CmdOrCtrl+Shift+B'),
         item('Toggle Terminal', 'toggle-terminal', 'CmdOrCtrl+Alt+T'),
+        item('Document Statistics', 'document-statistics'),
         item('Format Document', 'format-document'),
         item('Show Hover', 'lsp-hover', 'CmdOrCtrl+Shift+Space'),
         item('Rename Symbol', 'lsp-rename', 'F2'),
