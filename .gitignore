@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+.npm-cache/
+
+# Build output
+out/
+out-test/
+dist/
+release/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Local-only git dir (this sandbox's real .git is read-only; see docs)
+.gitrepo/
+*.bundle

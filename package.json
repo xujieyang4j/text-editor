@@ -1,0 +1,51 @@
+{
+  "name": "lumen-editor",
+  "version": "0.1.0",
+  "description": "A cross-platform text editor built with Electron, TypeScript and CodeMirror 6",
+  "main": "./out/main/index.js",
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "fix:mac": "node scripts/fix-macos-electron.mjs",
+    "dev:mac": "npm run fix:mac && npm run dev",
+    "start": "electron-vite preview",
+    "build": "electron-vite build",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test:shared": "tsc --outDir out-test --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop --skipLibCheck --types node src/shared/ipc.ts src/shared/text.ts src/shared/filePolicy.ts src/shared/losslessJson.ts src/renderer/src/fuzzy.ts src/renderer/src/symbols.ts src/renderer/src/incrementalDiff.ts && node src/shared/text.test.mjs && node src/shared/core.test.mjs",
+    "test": "npm run test:shared && npm run typecheck && npm run build",
+    "smoke": "LUMEN_SMOKE=1 electron-vite preview",
+    "smoke:headless": "xvfb-run -a npm run smoke",
+    "benchmark:index": "node scripts/benchmark-index.mjs",
+    "dist": "electron-vite build && electron-builder",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:linux": "electron-vite build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.18.6",
+    "@codemirror/commands": "^6.8.1",
+    "@codemirror/language": "^6.11.0",
+    "@codemirror/language-data": "^6.5.1",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/search": "^6.5.11",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/theme-one-dark": "^6.1.2",
+    "@codemirror/view": "^6.36.8",
+    "@replit/codemirror-indentation-markers": "6.5.3",
+    "@replit/codemirror-minimap": "0.5.2",
+    "codemirror": "^6.0.1",
+    "dompurify": "3.4.14",
+    "marked": "18.0.10"
+  },
+  "devDependencies": {
+    "electron": "31.7.7",
+    "electron-builder": "24.13.3",
+    "electron-vite": "2.3.0",
+    "typescript": "5.9.3",
+    "vite": "5.4.21"
+  }
+}
