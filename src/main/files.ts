@@ -2112,21 +2112,6 @@ export function registerFileHandlers(): void {
     return { name: path.basename(target), path: target, isDirectory }
   })
 
-  ipcMain.handle(IPC.fileCopy, async (event, source: unknown, target: unknown): Promise<DirEntry> => {
-    assertTrustedSender(event)
-    assertAbsolutePath(source, 'copy source')
-    assertAbsolutePath(target, 'copy destination')
-    assertGrantedFile(event, source)
-    assertGrantedFile(event, path.dirname(target))
-    if (path.resolve(source) === path.resolve(target)) throw new Error('Choose a different name for the copied file.')
-    if (path.dirname(source) !== path.dirname(target)) throw new Error('Copied files must stay in the same folder.')
-    const sourceStat = await fs.stat(source)
-    if (!sourceStat.isFile()) throw new Error('Only regular files can be copied.')
-    await fs.copyFile(source, target, fs.constants.COPYFILE_EXCL)
-    grantFile(event.sender.id, target)
-    return { name: path.basename(target), path: target, isDirectory: false }
-  })
-
   ipcMain.handle(IPC.fileRename, async (event, source: unknown, target: unknown): Promise<void> => {
     assertTrustedSender(event)
     assertAbsolutePath(source, 'source path')

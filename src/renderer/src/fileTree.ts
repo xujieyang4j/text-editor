@@ -6,7 +6,6 @@ type FileOpenHandler = (path: string) => void
 export interface FileTreeHandlers {
   onOpenFile: FileOpenHandler
   onCreate: (parent: string, isDirectory: boolean) => void
-  onCopy: (path: string) => void
   onRename: (path: string) => void
   onMove: (path: string) => void
   onDelete: (path: string) => void
@@ -165,7 +164,6 @@ export class FileTree {
       action(this.locale === 'zh-CN' ? '新建文件…' : 'New File…', () => this.handlers.onCreate(entry.path, false))
       action(this.locale === 'zh-CN' ? '新建文件夹…' : 'New Folder…', () => this.handlers.onCreate(entry.path, true))
     }
-    if (!entry.isDirectory) action(this.locale === 'zh-CN' ? '复制文件…' : 'Duplicate File…', () => this.handlers.onCopy(entry.path))
     action(this.locale === 'zh-CN' ? '重命名…' : 'Rename…', () => this.handlers.onRename(entry.path))
     action(this.locale === 'zh-CN' ? '移动到…' : 'Move To…', () => this.handlers.onMove(entry.path))
     action(this.locale === 'zh-CN' ? '移到废纸篓' : 'Move to Trash', () => this.handlers.onDelete(entry.path))

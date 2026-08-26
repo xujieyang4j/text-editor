@@ -160,9 +160,6 @@ const api = {
   createPath: (target: string, isDirectory: boolean): Promise<DirEntry> =>
     ipcRenderer.invoke(IPC.fileCreate, target, isDirectory),
 
-  duplicateFile: (source: string, target: string): Promise<DirEntry> =>
-    ipcRenderer.invoke(IPC.fileCopy, source, target),
-
   renamePath: (source: string, target: string): Promise<void> =>
     ipcRenderer.invoke(IPC.fileRename, source, target),
 

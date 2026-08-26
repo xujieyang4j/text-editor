@@ -212,7 +212,6 @@ class App {
     this.tree = new FileTree(document.getElementById('file-tree')!, {
       onOpenFile: (path) => this.openPath(path),
       onCreate: (parent, isDirectory) => { void this.createPath(parent, isDirectory) },
-      onCopy: (path) => { void this.copyFile(path) },
       onRename: (path) => { void this.renamePath(path) },
       onMove: (path) => { void this.movePath(path) },
       onDelete: (path) => { void this.deletePath(path) },
@@ -1564,17 +1563,12 @@ class App {
     this.scheduleSessionSave()
   }
 
-  /**
-   * Switch a group to a document, preserving the previous group's editor state.
-   *
-   * A closing tab has already been removed from its group before activation, so
-   * its editor content must not be assigned to the newly selected tab.
-   */
-  private async activate(id: string, groupIndex = this.activeGroup, preservePrevious = true): Promise<void> {
+  /** Switch a group to a document, preserving the previous group's editor state. */
+  private async activate(id: string, groupIndex = this.activeGroup): Promise<void> {
     const previousGroup = this.groups[this.activeGroup]
     const previousId = previousGroup?.activeId
     const previous = previousId ? this.docs.find((doc) => doc.id === previousId) : undefined
-    if (preservePrevious && previous && previousGroup) {
+    if (previous && previousGroup) {
       previous.content = previousGroup.editor.getContent()
       previous.editorState = previousGroup.editor.getState()
       previous.groupStates.set(previousGroup.id, previousGroup.editor.getState())
@@ -2867,30 +2861,6 @@ class App {
     }
   }
 
-  /** Duplicate one authorised file in place, never recursively or over an existing destination. */
-  private async copyFile(source: string): Promise<void> {
-    const original = baseName(source)
-    const dot = original.lastIndexOf('.')
-    const suggested = dot > 0 ? `${original.slice(0, dot)} copy${original.slice(dot)}` : `${original} copy`
-    const nextName = window.prompt(this.settings.locale === 'zh-CN' ? '复制为：' : 'Copy as:', suggested)?.trim()
-    if (!nextName || nextName === original) return
-    if (nextName.includes('/') || nextName.includes('\\') || nextName === '.' || nextName === '..') {
-      this.showError(this.settings.locale === 'zh-CN' ? '请使用简单的文件名。' : 'Use a simple file name.')
-      return
-    }
-    const target = `${source.slice(0, source.length - original.length)}${nextName}`
-    try {
-      const entry = await window.editor.duplicateFile(source, target)
-      await this.reloadWorkspaceTree()
-      await this.openPath(entry.path)
-      this.statusSelection.textContent = this.settings.locale === 'zh-CN'
-        ? `已复制文件：${entry.name}`
-        : `Copied file: ${entry.name}`
-    } catch (error) {
-      this.showError(this.settings.locale === 'zh-CN' ? '文件无法复制。' : 'The file could not be copied.', error)
-    }
-  }
-
   private async renamePath(source: string): Promise<void> {
     const nextName = window.prompt('Rename to:', baseName(source))?.trim()
     if (!nextName || nextName === baseName(source)) return
@@ -3104,7 +3074,7 @@ class App {
     }
     if (groupIndex === this.activeGroup) {
       const next = group.activeId ?? this.docs[0].id
-      void this.activate(next, groupIndex, false)
+      void this.activate(next, groupIndex)
     }
     this.scheduleSessionSave()
   }

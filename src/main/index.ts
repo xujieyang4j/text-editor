@@ -1,5 +1,4 @@
 import { app, BrowserWindow, ipcMain, type WebContents } from 'electron'
-import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { authorizePathForRenderer, authorizeWorkspaceForRenderer, clearWindowSessionId, listWindowSessionIds, registerFileHandlers, setWindowSessionId } from './files.js'
@@ -137,11 +136,7 @@ function createWindow(sessionId = newSessionId()): void {
     })
     win.webContents.once('did-finish-load', async () => {
       try {
-        const smokeRoot = path.join(app.getPath('userData'), 'workspace')
-        const smokeSource = path.join(smokeRoot, 'source.txt')
-        const smokeCopy = path.join(smokeRoot, 'source-copy.txt')
-        await fs.mkdir(smokeRoot, { recursive: true })
-        await fs.writeFile(smokeSource, 'LUMEN_FILE_COPY_SMOKE', 'utf8')
+        const smokeRoot = process.cwd()
         authorizeWorkspaceForRenderer(win.webContents.id, smokeRoot)
         const result = await win.webContents.executeJavaScript(`(async () => {
           const deadline = Date.now() + 3_000
@@ -207,31 +202,16 @@ function createWindow(sessionId = newSessionId()): void {
           return getComputedStyle(editor).fontSize === '17px'
         })()`, true)
         if (!settingsResult) throw new Error('Settings panel did not apply a font-size change')
-        await win.webContents.executeJavaScript('window.confirm = () => true', true)
-        win.webContents.send(IPC.menuEvent, 'close-all-tabs' as MenuEvent)
-        await new Promise<void>((resolve) => setTimeout(resolve, 80))
-        const closeAllTabsResult = await win.webContents.executeJavaScript(`(() => {
-          const tabs = [...document.querySelectorAll('#tab-bar > .tab')]
-          const content = document.querySelector('.cm-content')
-          return tabs.length === 1 &&
-            tabs[0]?.querySelector('.tab-label')?.textContent?.startsWith('Untitled-') === true &&
-            content?.textContent === ''
-        })()`, true)
-        if (!closeAllTabsResult) throw new Error('Closing the final tab did not create an empty untitled buffer')
-        const fileWorkflowResult = await win.webContents.executeJavaScript(`(async () => {
+        const copiedPath = await win.webContents.executeJavaScript(`(async () => {
           try {
-            const source = ${JSON.stringify(smokeSource)}
-            const target = ${JSON.stringify(smokeCopy)}
-            await window.editor.copyPath(source)
-            await window.editor.copyPath(source, ${JSON.stringify(smokeRoot)})
-            const copy = await window.editor.duplicateFile(source, target)
-            const opened = await window.editor.openPath(copy.path)
-            return opened.content === 'LUMEN_FILE_COPY_SMOKE'
+            await window.editor.copyPath(${JSON.stringify(path.join(process.cwd(), 'package.json'))})
+            await window.editor.copyPath(${JSON.stringify(path.join(process.cwd(), 'package.json'))}, ${JSON.stringify(smokeRoot)})
+            return true
           } catch {
             return false
           }
         })()`, true)
-        if (!fileWorkflowResult) throw new Error('Authorised path copy or file duplication failed')
+        if (!copiedPath) throw new Error('Authorised path could not be copied to the clipboard')
         const terminalSmokeScript = [
           '(() => {',
           '  const api = window.editor',

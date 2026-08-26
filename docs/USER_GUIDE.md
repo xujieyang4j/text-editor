@@ -120,9 +120,6 @@ and the order is restored in the next session.
 Right-click a file/tree entry or an open tab to copy its full path or project-relative path. The
 copy action writes only an already authorised path and does not grant clipboard-read access.
 
-The file-tree context menu also offers **Duplicate File…**, which creates a non-overwriting copy
-in the same folder and opens it in a new tab.
-
 <a id="en-palette"></a>
 
 ## 4. Command Palette & Goto
