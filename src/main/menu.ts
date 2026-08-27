@@ -202,6 +202,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Clone File to Next Group', 'clone-file-next-group'),
         item('Focus Next Group', 'focus-next-group', 'CmdOrCtrl+Alt+]'),
         item('Focus Previous Group', 'focus-prev-group', 'CmdOrCtrl+Alt+['),
+        item('Toggle Line Numbers', 'toggle-line-numbers'),
         item('Toggle Minimap', 'toggle-minimap'),
         item('Toggle Whitespace Characters', 'toggle-whitespace'),
         item('Toggle Outline', 'toggle-outline'),

@@ -887,6 +887,7 @@ function sanitizeSettings(value: unknown): Settings {
     insertSpaces: typeof raw.insertSpaces === 'boolean' ? raw.insertSpaces : DEFAULT_SETTINGS.insertSpaces,
     theme: raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : DEFAULT_SETTINGS.theme,
     wordWrap: typeof raw.wordWrap === 'boolean' ? raw.wordWrap : DEFAULT_SETTINGS.wordWrap,
+    showLineNumbers: typeof raw.showLineNumbers === 'boolean' ? raw.showLineNumbers : DEFAULT_SETTINGS.showLineNumbers,
     showMinimap: typeof raw.showMinimap === 'boolean' ? raw.showMinimap : DEFAULT_SETTINGS.showMinimap,
     showIndentGuides: typeof raw.showIndentGuides === 'boolean' ? raw.showIndentGuides : DEFAULT_SETTINGS.showIndentGuides,
     showWhitespace: typeof raw.showWhitespace === 'boolean' ? raw.showWhitespace : DEFAULT_SETTINGS.showWhitespace,
@@ -957,6 +958,7 @@ function convertSublimeSettings(value: unknown): Partial<Settings> {
     ...(typeof raw.tab_size === 'number' ? { tabSize: raw.tab_size } : {}),
     ...(typeof raw.translate_tabs_to_spaces === 'boolean' ? { insertSpaces: raw.translate_tabs_to_spaces } : {}),
     ...(typeof raw.word_wrap === 'boolean' ? { wordWrap: raw.word_wrap } : {}),
+    ...(typeof raw.line_numbers === 'boolean' ? { showLineNumbers: raw.line_numbers } : {}),
     ...(typeof raw.draw_white_space === 'string'
       ? { showWhitespace: raw.draw_white_space === 'all' || raw.draw_white_space === 'selection' }
       : {}),

@@ -384,7 +384,7 @@ you trust.
 
 <a id="en-view"></a>
 
-## 8. View: Minimap, Guides, Rulers, Zoom, Theme
+## 8. View: Minimap, Line Numbers, Guides, Rulers, Zoom, Theme
 
 ### Markdown preview & Open in browser
 
@@ -406,6 +406,7 @@ you trust.
 | Feature | How | Setting key |
 | --- | --- | --- |
 | Minimap (right-edge overview) | *View: Toggle Minimap* | `showMinimap` |
+| Line numbers | *View → Toggle Line Numbers* or Command Palette: *View: Toggle Line Numbers* | `showLineNumbers` |
 | Indentation guides | always on unless disabled | `showIndentGuides` |
 | Spaces and tab markers | *View → Toggle Whitespace Characters* or Command Palette: *View: Toggle Whitespace Characters* | `showWhitespace` |
 | Trailing-whitespace highlight | always on unless disabled | `highlightTrailingWhitespace` |
@@ -418,7 +419,11 @@ you trust.
 or its Settings checkbox to draw visual markers for spaces and tabs without changing document text.
 It is independent of trailing-whitespace highlighting, so either display aid can be enabled on its own.
 
-Toggles you flip at runtime (theme, wrap, minimap, whitespace markers, font size) are written straight
+*Toggle Line Numbers* controls the `showLineNumbers` checkbox in Settings. It is on by default and
+persisted across restarts. The option changes only the line-number gutter display, never document text,
+and applies to every tab and split editor group.
+
+Toggles you flip at runtime (theme, wrap, minimap, line numbers, whitespace markers, font size) are written straight
 back to the settings file, so they persist across restarts.
 
 Use **Preferences: Open Settings…** (`Ctrl/Cmd+,`) for a graphical editor of these preferences;
@@ -451,6 +456,7 @@ Settings are stored as JSON in the OS user-data directory and applied live:
   "theme": "dark",                      // "dark" | "light"
   "wordWrap": false,                    // soft wrap long lines
   "showMinimap": true,                  // right-edge minimap
+  "showLineNumbers": true,              // show line numbers in every editor
   "showOutline": false,                 // active-file structure outline in sidebar
   "showIndentGuides": true,             // indentation guide lines
   "showWhitespace": false,               // show visual markers for spaces/tabs
@@ -465,7 +471,8 @@ folder.
 
 When importing Sublime Text settings, `draw_white_space` values `all` and `selection` map to
 `showWhitespace: true`; `none` maps to `false`. This mapping changes only `showWhitespace`;
-`highlightTrailingWhitespace` keeps its current value.
+`highlightTrailingWhitespace` keeps its current value. A boolean `line_numbers` value maps to
+`showLineNumbers` and does not change any other visual setting.
 
 <a id="en-session"></a>
 
@@ -867,7 +874,7 @@ Tab。内部的逻辑 `LF` 会在保存时按当前选择写为 `LF`、`CRLF` �
 
 <a id="zh-view"></a>
 
-## 8. 视图：Minimap / 参考线 / 标尺 / 缩放 / 主题
+## 8. 视图：Minimap / 行号 / 参考线 / 标尺 / 缩放 / 主题
 
 ### Markdown 预览 & 在浏览器打开
 
@@ -886,6 +893,7 @@ Tab。内部的逻辑 `LF` 会在保存时按当前选择写为 `LF`、`CRLF` �
 | 功能 | 方式 | 设置项 |
 | --- | --- | --- |
 | Minimap（右侧缩略图） | *View: Toggle Minimap* | `showMinimap` |
+| 行号 | *View → Toggle Line Numbers*，或命令面板：*View: Toggle Line Numbers* | `showLineNumbers` |
 | 缩进参考线 | 默认开，可禁用 | `showIndentGuides` |
 | 空格和 Tab 标记 | *View → Toggle Whitespace Characters*，或命令面板：*View: Toggle Whitespace Characters* | `showWhitespace` |
 | 行尾空白高亮 | 默认开，可禁用 | `highlightTrailingWhitespace` |
@@ -900,7 +908,10 @@ Git 面板会显示当前分支、已配置的上游以及本地缓存的领先/
 *Toggle Whitespace Characters* 控制的选项默认关闭，可从“视图”菜单、命令面板或设置中的复选框启用；
 它只为空格和 Tab 绘制视觉标记，不会改动文档文本。此功能与行尾空白高亮互不影响，可以分别开关。
 
-运行时切换的项（主题、换行、Minimap、空白字符标记、字号）会立即写回设置文件，重启后保留。
+*Toggle Line Numbers* 控制设置中的 `showLineNumbers` 复选框。该选项默认开启并持久保存，只改变
+行号边栏显示，不会修改文档文本，并统一作用于所有标签和分栏编辑组。
+
+运行时切换的项（主题、换行、Minimap、行号、空白字符标记、字号）会立即写回设置文件，重启后保留。
 
 <a id="zh-settings"></a>
 
@@ -920,6 +931,7 @@ Git 面板会显示当前分支、已配置的上游以及本地缓存的领先/
   "theme": "dark",                      // "dark" | "light"
   "wordWrap": false,                    // 长行软换行
   "showMinimap": true,                  // 右侧 Minimap
+  "showLineNumbers": true,              // 在所有编辑器中显示行号
   "showIndentGuides": true,             // 缩进参考线
   "showWhitespace": false,               // 显示空格和 Tab 的视觉标记
   "highlightTrailingWhitespace": true,  // 标记行尾空白
@@ -932,7 +944,8 @@ Git 面板会显示当前分支、已配置的上游以及本地缓存的领先/
 
 导入 Sublime Text 设置时，`draw_white_space` 的 `all` / `selection` 均映射为
 `showWhitespace: true`，`none` 映射为 `false`。此映射只更改 `showWhitespace`，
-`highlightTrailingWhitespace` 保持当前值不变。
+`highlightTrailingWhitespace` 保持当前值不变。布尔类型的 `line_numbers` 会映射为
+`showLineNumbers`，且不会更改其他视觉设置。
 
 <a id="zh-session"></a>
 

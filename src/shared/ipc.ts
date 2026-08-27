@@ -454,6 +454,7 @@ export interface Settings {
   insertSpaces: boolean
   theme: 'dark' | 'light'
   wordWrap: boolean
+  showLineNumbers: boolean
   showMinimap: boolean
   showIndentGuides: boolean
   /** Render ordinary spaces and tabs with visible markers. */
@@ -487,6 +488,7 @@ export const DEFAULT_SETTINGS: Settings = {
   insertSpaces: true,
   theme: 'dark',
   wordWrap: false,
+  showLineNumbers: true,
   showMinimap: true,
   showIndentGuides: true,
   showWhitespace: false,
@@ -783,6 +785,7 @@ export type MenuEvent =
   | 'toggle-sidebar'
   | 'toggle-word-wrap'
   | 'toggle-theme'
+  | 'toggle-line-numbers'
   | 'toggle-minimap'
   | 'toggle-whitespace'
   | 'toggle-distraction-free'

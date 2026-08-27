@@ -969,6 +969,13 @@ class App {
         this.settings.theme = this.settings.colorScheme === 'light' ? 'light' : 'dark'
         this.applyUserSettings(this.settings)
         break
+      case 'toggle-line-numbers':
+        this.settings.showLineNumbers = !this.settings.showLineNumbers
+        this.applyUserSettings(this.settings)
+        this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+          ? `行号：${this.settings.showLineNumbers ? '开' : '关'}`
+          : `Line numbers: ${this.settings.showLineNumbers ? 'on' : 'off'}`
+        break
       case 'toggle-minimap':
         this.settings.showMinimap = !this.settings.showMinimap
         this.applyUserSettings(this.settings)

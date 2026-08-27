@@ -1099,6 +1099,145 @@ function createWindow(sessionId = newSessionId()): void {
           || firstWhitespaceTabRestored.dirty !== whitespaceDirtyBefore) {
           throw new Error(`Cached first tab restored stale whitespace settings: ${JSON.stringify(firstWhitespaceTabRestored)}`)
         }
+        const lineNumbersDefault = await win.webContents.executeJavaScript(`(async () => {
+          const active = document.querySelector('#tab-bar > .tab.active')
+          const checkbox = document.querySelector('input[data-setting="showLineNumbers"]')
+          const settings = await window.editor.readSettings()
+          const numbers = [...document.querySelectorAll('.cm-lineNumbers .cm-gutterElement')]
+            .filter((element) => element instanceof HTMLElement && getComputedStyle(element).visibility !== 'hidden')
+            .map((element) => element.textContent?.trim() ?? '').filter(Boolean)
+          return {
+            gutter: document.querySelector('.cm-lineNumbers') instanceof HTMLElement,
+            numbers,
+            persisted: settings.showLineNumbers === true,
+            checked: checkbox instanceof HTMLInputElement && checkbox.checked,
+            text: [...document.querySelectorAll('.cm-content .cm-line')]
+              .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+            dirty: active?.classList.contains('dirty') ?? false
+          }
+        })()`, true)
+        if (!lineNumbersDefault.gutter || !lineNumbersDefault.numbers.includes('1')
+          || !lineNumbersDefault.persisted || !lineNumbersDefault.checked) {
+          throw new Error(`Line numbers were not enabled by default: ${JSON.stringify(lineNumbersDefault)}`)
+        }
+        win.webContents.send(IPC.menuEvent, 'toggle-line-numbers' as MenuEvent)
+        const lineNumbersDisabled = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          let persisted = false
+          while (Date.now() < deadline) {
+            const settings = await window.editor.readSettings()
+            persisted = settings.showLineNumbers === false
+            const checkbox = document.querySelector('input[data-setting="showLineNumbers"]')
+            if (!document.querySelector('.cm-lineNumbers') && persisted
+              && checkbox instanceof HTMLInputElement && !checkbox.checked) {
+              const active = document.querySelector('#tab-bar > .tab.active')
+              return {
+                ok: true,
+                persisted,
+                text: [...document.querySelectorAll('.cm-content .cm-line')]
+                  .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+                dirty: active?.classList.contains('dirty') ?? false
+              }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, persisted, text: '', dirty: false }
+        })()`, true)
+        if (!lineNumbersDisabled.ok || !lineNumbersDisabled.persisted
+          || lineNumbersDisabled.text !== lineNumbersDefault.text
+          || lineNumbersDisabled.dirty !== lineNumbersDefault.dirty) {
+          throw new Error(`Line-number menu toggle changed editor state: ${JSON.stringify({ lineNumbersDefault, lineNumbersDisabled })}`)
+        }
+        const cachedTabWithoutLineNumbers = await win.webContents.executeJavaScript(`(async () => {
+          const tab = document.querySelector('#tab-bar > .tab[data-doc-id=${JSON.stringify(secondWhitespaceTab.id)}]')
+          if (!(tab instanceof HTMLElement)) return { ok: false, gutter: true, text: '', dirty: true }
+          tab.click()
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const active = document.querySelector('#tab-bar > .tab.active')
+            const gutter = document.querySelector('.cm-lineNumbers') instanceof HTMLElement
+            if (active?.getAttribute('data-doc-id') === ${JSON.stringify(secondWhitespaceTab.id)} && !gutter) {
+              return {
+                ok: true,
+                gutter,
+                text: [...document.querySelectorAll('.cm-content .cm-line')]
+                  .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+                dirty: active.classList.contains('dirty')
+              }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, gutter: true, text: '', dirty: true }
+        })()`, true)
+        if (!cachedTabWithoutLineNumbers.ok || cachedTabWithoutLineNumbers.gutter
+          || cachedTabWithoutLineNumbers.text !== secondWhitespaceTab.text || cachedTabWithoutLineNumbers.dirty) {
+          throw new Error(`Cached clean tab restored stale line numbers: ${JSON.stringify(cachedTabWithoutLineNumbers)}`)
+        }
+        const lineNumbersCheckbox = await win.webContents.executeJavaScript(`(() => {
+          const input = document.querySelector('input[data-setting="showLineNumbers"]')
+          if (!(input instanceof HTMLInputElement) || input.checked) return false
+          input.click()
+          return input.checked
+        })()`, true)
+        if (!lineNumbersCheckbox) throw new Error('Settings panel did not toggle line numbers on')
+        const lineNumbersEnabled = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          let persisted = false
+          while (Date.now() < deadline) {
+            const settings = await window.editor.readSettings()
+            persisted = settings.showLineNumbers === true
+            const numbers = [...document.querySelectorAll('.cm-lineNumbers .cm-gutterElement')]
+              .filter((element) => element instanceof HTMLElement && getComputedStyle(element).visibility !== 'hidden')
+              .map((element) => element.textContent?.trim() ?? '').filter(Boolean)
+            if (document.querySelector('.cm-lineNumbers') && numbers.includes('1') && persisted) {
+              const active = document.querySelector('#tab-bar > .tab.active')
+              return {
+                ok: true,
+                numbers,
+                persisted,
+                text: [...document.querySelectorAll('.cm-content .cm-line')]
+                  .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+                dirty: active?.classList.contains('dirty') ?? false
+              }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, numbers: [], persisted, text: '', dirty: true }
+        })()`, true)
+        if (!lineNumbersEnabled.ok || !lineNumbersEnabled.persisted
+          || lineNumbersEnabled.text !== secondWhitespaceTab.text || lineNumbersEnabled.dirty) {
+          throw new Error(`Settings checkbox did not restore line numbers cleanly: ${JSON.stringify(lineNumbersEnabled)}`)
+        }
+        const cachedTabWithLineNumbers = await win.webContents.executeJavaScript(`(async () => {
+          const tab = document.querySelector('#tab-bar > .tab[data-doc-id=${JSON.stringify(firstWhitespaceTab.id)}]')
+          if (!(tab instanceof HTMLElement)) return { ok: false, gutter: false, numbers: [], text: '', dirty: false }
+          tab.click()
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const active = document.querySelector('#tab-bar > .tab.active')
+            const numbers = [...document.querySelectorAll('.cm-lineNumbers .cm-gutterElement')]
+              .filter((element) => element instanceof HTMLElement && getComputedStyle(element).visibility !== 'hidden')
+              .map((element) => element.textContent?.trim() ?? '').filter(Boolean)
+            if (active?.getAttribute('data-doc-id') === ${JSON.stringify(firstWhitespaceTab.id)}
+              && document.querySelector('.cm-lineNumbers') && numbers.includes('1')) {
+              return {
+                ok: true,
+                gutter: true,
+                numbers,
+                text: [...document.querySelectorAll('.cm-content .cm-line')]
+                  .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+                dirty: active.classList.contains('dirty')
+              }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, gutter: false, numbers: [], text: '', dirty: false }
+        })()`, true)
+        if (!cachedTabWithLineNumbers.ok || !cachedTabWithLineNumbers.gutter
+          || cachedTabWithLineNumbers.text !== lineNumbersDefault.text
+          || cachedTabWithLineNumbers.dirty !== lineNumbersDefault.dirty) {
+          throw new Error(`Cached first tab restored stale line-number settings: ${JSON.stringify(cachedTabWithLineNumbers)}`)
+        }
         await replaceEditorText('beta\nalpha\ngamma\n')
         const settingsA11yResult = await win.webContents.executeJavaScript(`(() => {
           const panel = document.querySelector('.settings-panel')

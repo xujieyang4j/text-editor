@@ -109,6 +109,7 @@ export const COMMANDS: Command[] = [
   { id: 'toggle-sidebar', title: 'View: Toggle Sidebar', hint: 'Ctrl/Cmd+B' },
   { id: 'split-editor', title: 'View: Toggle Split Editor', hint: 'Ctrl/Cmd+Alt+2' },
   { id: 'split-selected-tabs', title: 'View: Split Selected Tabs into Groups' },
+  { id: 'toggle-line-numbers', title: 'View: Toggle Line Numbers' },
   { id: 'toggle-minimap', title: 'View: Toggle Minimap' },
   { id: 'toggle-whitespace', title: 'View: Toggle Whitespace Characters' },
   { id: 'toggle-outline', title: 'View: Toggle Outline' },

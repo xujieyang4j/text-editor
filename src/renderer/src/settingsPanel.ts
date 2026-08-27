@@ -4,7 +4,7 @@ export interface SettingsPanelCallbacks {
   onChange: (settings: Settings) => void
 }
 
-type CheckKey = 'insertSpaces' | 'wordWrap' | 'showMinimap' | 'showOutline' | 'showIndentGuides' | 'showWhitespace' | 'highlightTrailingWhitespace' | 'spellCheck' | 'distractionFree'
+type CheckKey = 'insertSpaces' | 'wordWrap' | 'showLineNumbers' | 'showMinimap' | 'showOutline' | 'showIndentGuides' | 'showWhitespace' | 'highlightTrailingWhitespace' | 'spellCheck' | 'distractionFree'
 
 /**
  * Immediate, local user-preferences editor. It never touches project commands
@@ -82,6 +82,7 @@ export class SettingsPanel {
       this.field('maxFileSize', this.maxFileSize),
       this.check('insertSpaces'),
       this.check('wordWrap'),
+      this.check('showLineNumbers'),
       this.check('showMinimap'),
       this.check('showOutline'),
       this.check('showIndentGuides'),
@@ -145,8 +146,8 @@ export class SettingsPanel {
     this.close.title = zh ? '关闭设置' : 'Close settings'
     this.close.setAttribute('aria-label', this.close.title)
     const text: Record<string, string> = zh
-      ? { locale: '界面语言', colorScheme: '配色方案', fontSize: '字号（px）', tabSize: '默认缩进宽度', autoSave: '自动保存', autoSaveDelay: '自动保存延迟（毫秒）', maxFileSize: '文件大小上限（MB）', insertSpaces: '使用空格缩进', wordWrap: '自动换行', showMinimap: '显示缩略图', showOutline: '显示当前文件大纲', showIndentGuides: '显示缩进参考线', showWhitespace: '显示空白字符', highlightTrailingWhitespace: '高亮行尾空白', spellCheck: '启用拼写检查', distractionFree: '专注模式' }
-      : { locale: 'Interface language', colorScheme: 'Color scheme', fontSize: 'Font size (px)', tabSize: 'Default tab size', autoSave: 'Auto save', autoSaveDelay: 'Auto-save delay (ms)', maxFileSize: 'File size limit (MB)', insertSpaces: 'Insert spaces', wordWrap: 'Word wrap', showMinimap: 'Show minimap', showOutline: 'Show active-file outline', showIndentGuides: 'Show indent guides', showWhitespace: 'Show whitespace characters', highlightTrailingWhitespace: 'Highlight trailing whitespace', spellCheck: 'Enable spell check', distractionFree: 'Distraction free mode' }
+      ? { locale: '界面语言', colorScheme: '配色方案', fontSize: '字号（px）', tabSize: '默认缩进宽度', autoSave: '自动保存', autoSaveDelay: '自动保存延迟（毫秒）', maxFileSize: '文件大小上限（MB）', insertSpaces: '使用空格缩进', wordWrap: '自动换行', showLineNumbers: '显示行号', showMinimap: '显示缩略图', showOutline: '显示当前文件大纲', showIndentGuides: '显示缩进参考线', showWhitespace: '显示空白字符', highlightTrailingWhitespace: '高亮行尾空白', spellCheck: '启用拼写检查', distractionFree: '专注模式' }
+      : { locale: 'Interface language', colorScheme: 'Color scheme', fontSize: 'Font size (px)', tabSize: 'Default tab size', autoSave: 'Auto save', autoSaveDelay: 'Auto-save delay (ms)', maxFileSize: 'File size limit (MB)', insertSpaces: 'Insert spaces', wordWrap: 'Word wrap', showLineNumbers: 'Show line numbers', showMinimap: 'Show minimap', showOutline: 'Show active-file outline', showIndentGuides: 'Show indent guides', showWhitespace: 'Show whitespace characters', highlightTrailingWhitespace: 'Highlight trailing whitespace', spellCheck: 'Enable spell check', distractionFree: 'Distraction free mode' }
     for (const [key, label] of this.labels) label.textContent = text[key] ?? key
     this.autoSave.options[0].textContent = zh ? '关闭' : 'Off'
     this.autoSave.options[1].textContent = zh ? '延时保存' : 'After delay'

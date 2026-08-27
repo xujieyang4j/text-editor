@@ -114,6 +114,7 @@ const languageConf = new Compartment()
 const themeConf = new Compartment()
 const wrapConf = new Compartment()
 const tabConf = new Compartment()
+const lineNumbersConf = new Compartment()
 const minimapConf = new Compartment()
 const indentGuideConf = new Compartment()
 const whitespaceConf = new Compartment()
@@ -194,7 +195,6 @@ function baseExtensions(
   onUpdate: (update: ViewUpdate) => void
 ): Extension {
   return [
-    lineNumbers(),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
     history(),
@@ -295,6 +295,7 @@ export class Editor {
     return EditorState.create({
       doc,
       extensions: [
+        lineNumbersConf.of(s.showLineNumbers ? lineNumbers() : []),
         baseExtensions(this.callbacks, (update) => {
           this.mapSnippetRanges(update)
           if (!this.applyingSelectionHistory && (update.docChanged || update.selectionSet)) this.selectionHistory = []
@@ -417,6 +418,7 @@ export class Editor {
       effects: [
         themeConf.reconfigure(colorSchemeTheme(settings.colorScheme)),
         wrapConf.reconfigure(settings.wordWrap ? EditorView.lineWrapping : []),
+        lineNumbersConf.reconfigure(settings.showLineNumbers ? lineNumbers() : []),
         tabConf.reconfigure([indentUnit.of(indent), EditorState.tabSize.of(settings.tabSize)]),
         minimapConf.reconfigure(settings.showMinimap ? minimapExtension() : []),
         indentGuideConf.reconfigure(settings.showIndentGuides ? indentationMarkers() : []),
