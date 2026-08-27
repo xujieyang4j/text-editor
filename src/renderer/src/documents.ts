@@ -9,6 +9,8 @@ export interface Doc {
   path: string | null
   /** Display name shown on the tab. */
   name: string
+  /** Keep this document visible at the front of every editor group's tab row. */
+  pinned: boolean
   /** Cached text content (kept in sync with the editor for the active tab). */
   content: string
   /** Text last written to / read from disk, used to compute the dirty flag. */
@@ -57,6 +59,7 @@ export function createUntitled(): Doc {
     id: `doc-${counter}`,
     path: null,
     name: `Untitled-${counter}`,
+    pinned: false,
     content: '',
     savedContent: '',
     language: 'Plain Text',
@@ -81,6 +84,7 @@ export function createFromFile(
     id: `doc-${counter}`,
     path,
     name: baseName(path),
+    pinned: false,
     content,
     savedContent: content,
     language: 'Plain Text',
@@ -110,6 +114,7 @@ export function createFromSession(
     name: string
     language: string
     languageLocked: boolean
+    pinned?: boolean
     draft?: string
     encoding?: import('../../shared/ipc.js').TextEncoding
     eol?: import('../../shared/ipc.js').LineEnding
@@ -123,6 +128,7 @@ export function createFromSession(
     id: `doc-${counter}`,
     path: sf.path,
     name: sf.name,
+    pinned: sf.pinned === true,
     content: hasDraft ? sf.draft! : diskContent,
     savedContent: diskContent,
     language: sf.language,

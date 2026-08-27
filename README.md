@@ -19,7 +19,7 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **Multi-group layouts & windows** — single, 2/3-column and 4-grid layouts with independent tab groups
 - **Find Results & project symbols** — persistent workspace results (`F4` navigation), project-wide symbols and back/forward history
 - **Goto Symbol** (`Ctrl/Cmd+R`) and **Goto Line** (`Ctrl/Cmd+G`)
-- **Multi-tab editing** with dirty (unsaved) indicators and close buttons
+- **Multi-tab editing** with dirty (unsaved) indicators, pinned tabs, close buttons, and restored tab order
 - **Syntax highlighting** for 100+ languages, auto-detected by extension; manual override via
   the status-bar language button or **Set Syntax…**
 - **Minimap** and **indentation guides**, **vertical rulers**, trailing-whitespace highlight
@@ -151,6 +151,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Open folder         | `Ctrl/Cmd+Shift+O`          |
 | Save                | `Ctrl/Cmd+S`                |
 | Save as             | `Ctrl/Cmd+Shift+S`          |
+| Pin / unpin tab      | `Ctrl/Cmd+Alt+P`            |
 | Close tab           | `Ctrl/Cmd+W`                |
 | Reopen closed tab   | `Ctrl/Cmd+Shift+T`          |
 | Switch tab          | `Ctrl/Cmd+1..9`             |

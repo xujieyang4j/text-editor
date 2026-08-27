@@ -6,7 +6,7 @@ const ZH = {
   appTitle: 'Lumen 编辑器',
   file: '文件', edit: '编辑', selection: '选择', goto: '转到', view: '视图', tools: '工具', preferences: '偏好设置', project: '项目', git: 'Git', window: '窗口', help: '帮助',
   newFile: '新建文件', newWindow: '新建窗口', openFile: '打开文件…', openFolder: '打开文件夹…', openRecentFile: '打开最近文件…', openRecentProject: '打开最近项目…',
-  save: '保存', saveAs: '另存为…', saveAll: '全部保存', cycleAutoSave: '切换自动保存模式', closeTab: '关闭标签页', closeOtherTabs: '关闭其他标签页', closeTabsRight: '关闭右侧标签页', closeAllTabs: '关闭全部标签页', reopenTab: '重新打开已关闭标签页',
+  save: '保存', saveAs: '另存为…', saveAll: '全部保存', pinTab: '固定/取消固定标签页', cycleAutoSave: '切换自动保存模式', closeTab: '关闭标签页', closeOtherTabs: '关闭其他标签页', closeTabsRight: '关闭右侧标签页', closeAllTabs: '关闭全部标签页', reopenTab: '重新打开已关闭标签页',
   undo: '撤销', redo: '重做', cut: '剪切', copy: '复制', paste: '粘贴', selectAll: '全选',
   commandPalette: '命令面板…', setSyntax: '设置语法…', toggleSidebar: '切换侧边栏', toggleMinimap: '切换缩略图', toggleOutline: '切换大纲', distractionFree: '专注模式', toggleSpellCheck: '切换拼写检查', toggleWrap: '切换自动换行', toggleTheme: '切换主题', selectColorScheme: '选择配色方案…',
   gotoAnything: '转到任意位置…', gotoSymbol: '转到文件符号…', gotoProjectSymbol: '转到项目符号…', gotoLine: '转到行…', back: '后退', forward: '前进',
@@ -26,7 +26,7 @@ const EN: Record<TranslationKey, string> = {
   appTitle: 'Lumen Editor',
   file: 'File', edit: 'Edit', selection: 'Selection', goto: 'Goto', view: 'View', tools: 'Tools', preferences: 'Preferences', project: 'Project', git: 'Git', window: 'Window', help: 'Help',
   newFile: 'New File', newWindow: 'New Window', openFile: 'Open File…', openFolder: 'Open Folder…', openRecentFile: 'Open Recent File…', openRecentProject: 'Open Recent Project…',
-  save: 'Save', saveAs: 'Save As…', saveAll: 'Save All', cycleAutoSave: 'Cycle Auto Save Mode', closeTab: 'Close Tab', closeOtherTabs: 'Close Other Tabs', closeTabsRight: 'Close Tabs to the Right', closeAllTabs: 'Close All Tabs', reopenTab: 'Reopen Closed Tab',
+  save: 'Save', saveAs: 'Save As…', saveAll: 'Save All', pinTab: 'Pin / Unpin Tab', cycleAutoSave: 'Cycle Auto Save Mode', closeTab: 'Close Tab', closeOtherTabs: 'Close Other Tabs', closeTabsRight: 'Close Tabs to the Right', closeAllTabs: 'Close All Tabs', reopenTab: 'Reopen Closed Tab',
   undo: 'Undo', redo: 'Redo', cut: 'Cut', copy: 'Copy', paste: 'Paste', selectAll: 'Select All',
   commandPalette: 'Command Palette…', setSyntax: 'Set Syntax…', toggleSidebar: 'Toggle Sidebar', toggleMinimap: 'Toggle Minimap', toggleOutline: 'Toggle Outline', distractionFree: 'Distraction Free Mode', toggleSpellCheck: 'Toggle Spell Check', toggleWrap: 'Toggle Word Wrap', toggleTheme: 'Toggle Theme', selectColorScheme: 'Select Color Scheme…',
   gotoAnything: 'Goto Anything…', gotoSymbol: 'Goto Symbol…', gotoProjectSymbol: 'Goto Symbol in Project…', gotoLine: 'Goto Line…', back: 'Back', forward: 'Forward',
@@ -52,7 +52,7 @@ export function makeTranslator(locale: UiLocale): (key: TranslationKey) => strin
 
 const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
   'new-file': '新建文件', 'new-window': '新建窗口', 'open-file': '打开文件…', 'open-folder': '打开文件夹…', 'open-recent-file': '打开最近文件…', 'open-recent-project': '打开最近项目…', 'copy-file-path': '复制文件路径', 'copy-relative-file-path': '复制相对文件路径',
-  save: '保存', 'save-as': '另存为…', 'save-all': '全部保存', 'cycle-auto-save': '切换自动保存模式', 'close-tab': '关闭标签页', 'close-other-tabs': '关闭其他标签页', 'close-tabs-to-right': '关闭右侧标签页', 'close-all-tabs': '关闭全部标签页', 'reopen-tab': '重新打开已关闭标签页',
+  save: '保存', 'save-as': '另存为…', 'save-all': '全部保存', 'toggle-pin-tab': '固定/取消固定标签页', 'cycle-auto-save': '切换自动保存模式', 'close-tab': '关闭标签页', 'close-other-tabs': '关闭其他标签页', 'close-tabs-to-right': '关闭右侧标签页', 'close-all-tabs': '关闭全部标签页', 'reopen-tab': '重新打开已关闭标签页',
   find: '查找', replace: '替换', 'find-in-files': '在文件中查找…', 'replace-in-files': '在文件中替换…', 'undo-replace-in-files': '撤销上次文件替换', 'find-results-next': '下一个查找结果', 'find-results-prev': '上一个查找结果',
   'goto-anything': '转到任意位置…', 'goto-symbol': '转到文件符号…', 'goto-project-symbol': '转到项目符号…', 'go-to-line': '转到行…', 'goto-matching-bracket': '转到匹配括号', 'navigate-back': '后退', 'navigate-forward': '前进',
   'toggle-comment': '切换行注释', 'toggle-block-comment': '切换块注释', 'move-line-up': '上移行', 'move-line-down': '下移行', 'copy-line-up': '向上复制行', 'copy-line-down': '向下复制行', 'duplicate-selection': '复制行/选区', 'delete-line': '删除行', 'delete-word-backward': '删除前一个单词', 'delete-word-forward': '删除后一个单词', 'delete-to-line-start': '删除至行首', 'delete-to-line-end': '删除至行尾', 'insert-blank-line-above': '在上方新建空行', 'insert-blank-line': '在下方新建空行', 'transpose-characters': '转置相邻字符', 'sort-lines': '排序行',

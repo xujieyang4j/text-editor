@@ -64,6 +64,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Save', 'save', 'CmdOrCtrl+S'),
         item('Save As…', 'save-as', 'CmdOrCtrl+Shift+S'),
         item('Save All', 'save-all', 'CmdOrCtrl+Alt+S'),
+        item('Pin / Unpin Tab', 'toggle-pin-tab', 'CmdOrCtrl+Alt+P'),
         item('Cycle Auto Save Mode', 'cycle-auto-save'),
         { type: 'separator' },
         item('Close Tab', 'close-tab', 'CmdOrCtrl+W'),

@@ -457,6 +457,8 @@ class App {
       const idx = session.activeIndex >= 0 && session.activeIndex < this.docs.length ? session.activeIndex : 0
       await this.activate(this.docs[idx].id, 0)
     }
+    this.organizePinnedTabs()
+    this.renderTabs()
   }
 
   /** Subscribe to menu / accelerator events from the main process. */
@@ -603,6 +605,9 @@ class App {
         break
       case 'reopen-tab':
         void this.reopenClosed()
+        break
+      case 'toggle-pin-tab':
+        this.toggleActiveTabPin()
         break
       case 'next-tab':
         this.cycleTab(1)
@@ -2963,11 +2968,7 @@ class App {
   private closeActive(id = this.activeId): void {
     const doc = this.docs.find((candidate) => candidate.id === id)
     if (!doc) return
-    if (isDirty(doc)) {
-      const ok = confirm(`"${doc.name}" has unsaved changes. Close anyway?`)
-      if (!ok) return
-    }
-    this.closeDocFromGroup(doc.id, this.activeGroup, false)
+    this.closeDocFromGroup(doc.id, this.activeGroup)
   }
 
   private async saveAll(): Promise<void> {
@@ -3043,10 +3044,22 @@ class App {
     const activeId = group?.activeId
     if (!group || !activeId) return
     const activeIndex = group.docIds.indexOf(activeId)
-    const ids = group.docIds.filter((id, index) => mode === 'all' || (mode === 'others' ? id !== activeId : index > activeIndex))
+    const requestedIds = group.docIds.filter((id, index) => mode === 'all' || (mode === 'others' ? id !== activeId : index > activeIndex))
+    const ids = requestedIds.filter((id) => !this.docs.find((doc) => doc.id === id)?.pinned)
+    const skippedPinned = requestedIds.length - ids.length
+    if (ids.length === 0) {
+      if (skippedPinned > 0) this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+        ? '固定标签不会被批量关闭'
+        : 'Pinned tabs are not closed in bulk'
+      return
+    }
     const dirty = ids.map((id) => this.docs.find((doc) => doc.id === id)).filter((doc): doc is Doc => !!doc && isDirty(doc))
-    if (dirty.length > 0 && !window.confirm(`Close ${ids.length} tab${ids.length === 1 ? '' : 's'}? ${dirty.length} have unsaved changes.`)) return
+    const detail = dirty.length > 0 ? ` ${dirty.length} have unsaved changes.` : ''
+    if (!window.confirm(`Close ${ids.length} tab${ids.length === 1 ? '' : 's'}?${detail}`)) return
     for (const id of ids) this.closeDocFromGroup(id, group.id, false)
+    if (skippedPinned > 0) this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+      ? `已保留 ${skippedPinned} 个固定标签`
+      : `Kept ${skippedPinned} pinned tab${skippedPinned === 1 ? '' : 's'}`
   }
 
   private closeDocFromGroup(id: string, groupIndex: number, confirmClose = true): void {
@@ -3086,6 +3099,30 @@ class App {
     const before = this.docs.length
     await this.openPath(path)
     if (this.docs.length > before || this.docs.some((doc) => doc.path === path)) this.closedStack.pop()
+  }
+
+  /** Toggle pinning for the active tab; pinned documents lead every tab row. */
+  private toggleActiveTabPin(): void {
+    const doc = this.active
+    if (!doc) return
+    doc.pinned = !doc.pinned
+    this.organizePinnedTabs()
+    this.renderTabs()
+    this.scheduleSessionSave()
+    this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+      ? `${doc.pinned ? '已固定' : '已取消固定'}“${doc.name}”`
+      : `${doc.pinned ? 'Pinned' : 'Unpinned'} “${doc.name}”`
+  }
+
+  /** Preserve each group's local order while always showing pinned documents first. */
+  private organizePinnedTabs(): void {
+    for (const group of this.groups) {
+      group.docIds = group.docIds.slice().sort((left, right) => {
+        const leftPinned = this.docs.find((doc) => doc.id === left)?.pinned === true
+        const rightPinned = this.docs.find((doc) => doc.id === right)?.pinned === true
+        return Number(rightPinned) - Number(leftPinned)
+      })
+    }
   }
 
   /** Cycle within the active group's tab order. */
@@ -3976,6 +4013,7 @@ class App {
         return {
           path: d.path,
           name: d.name,
+          ...(d.pinned ? { pinned: true } : {}),
           language: d.language,
           languageLocked: d.languageLocked,
           encoding: d.encoding,
@@ -4013,13 +4051,14 @@ class App {
 
   /** Rebuild each editor group's tab bar from its independent tab order. */
   private renderTabs(): void {
+    this.organizePinnedTabs()
     for (const group of this.groups) {
       group.tabBar.replaceChildren()
       for (const id of group.docIds) {
         const doc = this.docs.find((candidate) => candidate.id === id)
         if (!doc) continue
         const tab = document.createElement('div')
-        tab.className = 'tab' + (doc.id === group.activeId ? ' active' : '') + (this.selectedTabIds.has(doc.id) ? ' selected' : '')
+        tab.className = 'tab' + (doc.pinned ? ' pinned' : '') + (doc.id === group.activeId ? ' active' : '') + (this.selectedTabIds.has(doc.id) ? ' selected' : '')
         tab.draggable = true
         tab.dataset.docId = doc.id
 
@@ -4032,15 +4071,33 @@ class App {
         label.className = 'tab-label'
         label.textContent = doc.name
 
-        const close = document.createElement('span')
+        const pin = document.createElement('button')
+        pin.type = 'button'
+        pin.className = `tab-pin${doc.pinned ? ' pinned' : ''}`
+        pin.textContent = '⌁'
+        pin.title = this.settings.locale === 'zh-CN'
+          ? (doc.pinned ? '取消固定标签' : '固定标签')
+          : (doc.pinned ? 'Unpin Tab' : 'Pin Tab')
+        pin.setAttribute('aria-label', pin.title)
+        pin.setAttribute('aria-pressed', String(doc.pinned))
+        pin.addEventListener('click', (e) => {
+          e.stopPropagation()
+          if (this.activeId !== doc.id || this.activeGroup !== group.id) void this.activate(doc.id, group.id).then(() => this.toggleActiveTabPin())
+          else this.toggleActiveTabPin()
+        })
+
+        const close = document.createElement('button')
+        close.type = 'button'
         close.className = 'tab-close'
         close.textContent = '×'
+        close.title = this.settings.locale === 'zh-CN' ? '关闭标签页' : 'Close Tab'
+        close.setAttribute('aria-label', close.title)
         close.addEventListener('click', (e) => {
           e.stopPropagation()
           this.closeDocFromGroup(doc.id, group.id)
         })
 
-        tab.append(dot, label, close)
+        tab.append(dot, label, pin, close)
         tab.addEventListener('click', (event) => {
           if (event.ctrlKey || event.metaKey) {
             if (this.selectedTabIds.has(doc.id)) this.selectedTabIds.delete(doc.id)
@@ -4054,6 +4111,10 @@ class App {
         tab.addEventListener('contextmenu', (event) => {
           event.preventDefault()
           this.openTabContextMenu(doc, group.id, event.clientX, event.clientY)
+        })
+        tab.addEventListener('dblclick', () => {
+          if (this.activeId !== doc.id || this.activeGroup !== group.id) void this.activate(doc.id, group.id).then(() => this.toggleActiveTabPin())
+          else this.toggleActiveTabPin()
         })
         tab.addEventListener('dragstart', (event) => {
           this.draggingTab = { groupId: group.id, docId: doc.id }
@@ -4105,6 +4166,7 @@ class App {
     if (index < 0) index = remaining.length
     if (targetId && !before) index += 1
     group.docIds = [...remaining.slice(0, index), ...moving, ...remaining.slice(index)]
+    this.organizePinnedTabs()
     this.selectedTabIds = new Set(moving)
     this.draggingTab = null
     this.renderTabs()
@@ -4127,6 +4189,10 @@ class App {
       add(this.settings.locale === 'zh-CN' ? '复制路径' : 'Copy Path', () => { void this.copyPath(doc.path!, false) })
       add(this.settings.locale === 'zh-CN' ? '复制相对路径' : 'Copy Relative Path', () => { void this.copyPath(doc.path!, true) })
     }
+    add(this.settings.locale === 'zh-CN' ? (doc.pinned ? '取消固定标签' : '固定标签') : (doc.pinned ? 'Unpin Tab' : 'Pin Tab'), () => {
+      if (this.activeId !== doc.id || this.activeGroup !== groupId) void this.activate(doc.id, groupId).then(() => this.toggleActiveTabPin())
+      else this.toggleActiveTabPin()
+    })
     add(this.settings.locale === 'zh-CN' ? '关闭标签页' : 'Close Tab', () => this.closeDocFromGroup(doc.id, groupId))
     document.body.appendChild(menu)
     const dismiss = (event: MouseEvent): void => {

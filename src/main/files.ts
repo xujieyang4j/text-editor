@@ -711,6 +711,7 @@ function sanitizeSession(value: unknown): Session {
           return {
             path: typeof file.path === 'string' && path.isAbsolute(file.path) ? file.path : null,
             name: typeof file.name === 'string' ? file.name.slice(0, 255) : 'Untitled',
+            ...(file.pinned === true ? { pinned: true } : {}),
             language: typeof file.language === 'string' ? file.language.slice(0, 100) : 'Plain Text',
             languageLocked: file.languageLocked === true,
             ...(typeof file.draft === 'string' && file.draft.length <= 20 * 1024 * 1024 ? { draft: file.draft } : {}),

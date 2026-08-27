@@ -474,6 +474,8 @@ export interface SessionFile {
   path: string | null
   /** Display name (meaningful for untitled buffers, e.g. "Untitled-2"). */
   name: string
+  /** Pinned buffers remain at the front of tab rows and are protected from bulk close. */
+  pinned?: boolean
   /** Language display name last shown for this buffer. */
   language: string
   /** True when the user manually locked the language (skip auto-detect). */
@@ -704,6 +706,7 @@ export type MenuEvent =
   | 'close-tabs-to-right'
   | 'close-all-tabs'
   | 'reopen-tab'
+  | 'toggle-pin-tab'
   | 'next-tab'
   | 'prev-tab'
   | 'find'

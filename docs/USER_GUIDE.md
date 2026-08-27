@@ -88,7 +88,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 ```
 
 - **Sidebar** — the workspace file tree. It starts collapsed; toggle with `Ctrl/Cmd+B`.
-- **Tab bar** — one tab per open document. A `●` marks unsaved changes; `×` closes the tab.
+- **Tab bar** — one tab per open document. A `●` marks unsaved changes; `×` closes the tab; pinned tabs receive an accent marker.
 - **Editor** — the CodeMirror text area, with an optional minimap on the right.
 - **Status bar** — cursor position, selection length, and a **clickable language** field
   (click it to change the syntax).
@@ -106,6 +106,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Remove a workspace root | *Project: Remove Folder from Project…* — keeps its open tabs but revokes the folder's workspace access |
 | Save | `Ctrl/Cmd+S` (untitled files prompt for a path) |
 | Save As | `Ctrl/Cmd+Shift+S` |
+| Pin / unpin tab | `Ctrl/Cmd+Alt+P`, double-click the tab, or use its context menu |
 | Close tab | `Ctrl/Cmd+W` (prompts if there are unsaved changes) |
 | Reopen closed tab | `Ctrl/Cmd+Shift+T` (LIFO stack of recently closed files) |
 | Switch to tab N | `Ctrl/Cmd+1` … `Ctrl/Cmd+9` |
@@ -115,7 +116,10 @@ In the file tree, click a folder to expand/collapse it (loaded on demand), and c
 open it. Opening a file that's already open just focuses its tab.
 
 Drag a tab within its editor group to reorder it. Ctrl/Cmd-selected tabs move together as one block,
-and the order is restored in the next session.
+and the order is restored in the next session. Pin a frequently used tab with `Ctrl/Cmd+Alt+P`,
+double-click, the pin button, or the tab context menu. Pinned tabs stay at the front of every
+editor group, survive restart, and are excluded from **Close Other Tabs**, **Close Tabs to the Right**,
+and **Close All Tabs**; closing an individual pinned tab still works normally.
 
 Right-click a file/tree entry or an open tab to copy its full path or project-relative path. The
 copy action writes only an already authorised path and does not grant clipboard-read access.
@@ -374,7 +378,7 @@ same folder stores your open tabs + folder and is managed automatically.
 Lumen remembers your workspace **and your unsaved work** across restarts — including after an
 unexpected quit or a machine crash (Sublime's "hot exit").
 
-- **Open tabs, active tab and workspace folder** are restored on the next launch.
+- **Open tabs, active tab, pinned state and workspace folder** are restored on the next launch.
 - **Unsaved edits are preserved.** Modified buffers are restored *dirty* (marked with `●`) with
   your exact unsaved text — nothing is silently written to disk.
 - **Untitled buffers with content are preserved too**, as untitled drafts.
@@ -531,7 +535,7 @@ npm run dist:linux   # Linux：AppImage + .deb
 ```
 
 - **侧边栏** —— 工作区文件树，默认收起，按 `Ctrl/Cmd+B` 显隐。
-- **标签栏** —— 每个打开的文档一个标签；`●` 表示未保存，`×` 关闭。
+- **标签栏** —— 每个打开的文档一个标签；`●` 表示未保存，`×` 关闭；固定标签带强调色。
 - **编辑区** —— CodeMirror 文本区，右侧可选 Minimap。
 - **状态栏** —— 光标位置、选中长度，以及**可点击的语言字段**（点它可改语法）。
 
@@ -546,12 +550,15 @@ npm run dist:linux   # Linux：AppImage + .deb
 | 打开文件夹（工作区） | `Ctrl/Cmd+Shift+O`，载入侧边栏 |
 | 保存 | `Ctrl/Cmd+S`（未命名文件会弹保存框） |
 | 另存为 | `Ctrl/Cmd+Shift+S` |
+| 固定 / 取消固定标签 | `Ctrl/Cmd+Alt+P`、双击标签或标签右键菜单 |
 | 关闭标签 | `Ctrl/Cmd+W`（有未保存改动会确认） |
 | 重开关闭的标签 | `Ctrl/Cmd+Shift+T`（后进先出栈） |
 | 切到第 N 个标签 | `Ctrl/Cmd+1` … `Ctrl/Cmd+9` |
 | 下一个 / 上一个标签 | `Ctrl/Cmd+Alt+→` / `Ctrl/Cmd+Alt+←` |
 
 文件树中点文件夹展开/折叠（按需加载），点文件打开。打开已开的文件只会聚焦它的标签。
+
+常用的入口文件、配置或文档可固定为标签：使用 `Ctrl/Cmd+Alt+P`、双击标签、点击标签上的固定按钮，或在标签右键菜单中选择固定。固定标签始终位于每个编辑组标签栏前侧，重启后仍会保留；“关闭其他标签”“关闭右侧标签”“关闭全部标签”会自动跳过固定标签。单独关闭固定标签仍按正常规则工作。
 
 <a id="zh-palette"></a>
 
@@ -757,7 +764,7 @@ npm run dist:linux   # Linux：AppImage + .deb
 Lumen 会跨重启记住你的工作区**以及未保存的编辑**——即使是意外退出或机器崩溃之后（对齐
 Sublime 的 “hot exit”）。
 
-- **打开的标签、活动标签、工作区文件夹**会在下次启动时恢复。
+- **打开的标签、活动标签、固定状态、工作区文件夹**会在下次启动时恢复。
 - **未保存的编辑会被保留。** 有改动的缓冲区恢复为**脏状态**（标签上带 `●`），内容是你当时未保存
   的原样文本——不会偷偷写回磁盘。
 - **有内容的未命名缓冲区同样保留**，恢复为未命名草稿。
