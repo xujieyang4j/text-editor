@@ -3,6 +3,7 @@ import { maxEditableBytes, isBinaryBuffer } from '../../out-test/shared/filePoli
 import { score, fuzzyFilter } from '../../out-test/renderer/src/fuzzy.js'
 import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
 import { incrementalChanges, revertIncrementalChange } from '../../out-test/renderer/src/incrementalDiff.js'
+import { NavigationHistory, NavigationIntentEpoch, resolveGotoLine } from '../../out-test/renderer/src/navigationHistory.js'
 import { createFromFile, createFromSession, createUntitled, isCurrentDocumentSaveConflict, isDirty, nextUntitledName } from '../../out-test/renderer/src/documents.js'
 import { JsonNumber, parseLosslessJson, stringifyLosslessJson } from '../../out-test/shared/losslessJson.js'
 import { parseGitRemoteLines, parseGitTracking, sanitizeGitRemoteUrl } from '../../out-test/shared/git.js'
@@ -38,6 +39,157 @@ const changes = incrementalChanges('one\ntwo\nfour', 'one\nthree\nfour\nfive')
 assert.deepEqual(changes.map((change) => [change.kind, change.line, change.lineCount]), [['modified', 2, 1], ['added', 4, 1]])
 assert.equal(revertIncrementalChange('one\nthree\nfour\nfive', changes[0]), 'one\ntwo\nfour\nfive')
 assert.deepEqual(incrementalChanges('one\ntwo', 'one').map((change) => [change.kind, change.line]), [['deleted', 2]])
+
+const navigationLocation = (docId, path, line = 1, column = 1, groupId = 0) => ({ docId, path, groupId, line, column })
+const navA = navigationLocation('doc-a', '/workspace/a.ts', 1, 1)
+const navB = navigationLocation('doc-b', '/workspace/b.ts', 2, 3)
+const navC = navigationLocation('doc-c', '/workspace/c.ts', 4, 5)
+const navD = navigationLocation('doc-d', '/workspace/d.ts', 6, 7)
+
+// A -> B -> C can be traversed all the way back and forward without losing
+// either destination while it is merely being prepared.
+const roundTripNavigation = new NavigationHistory()
+roundTripNavigation.recordSuccessfulJump(navA, navB)
+roundTripNavigation.recordSuccessfulJump(navB, navC)
+assert.deepEqual(roundTripNavigation.backEntries, [navA, navB])
+let navigationTraversal = roundTripNavigation.prepareTraversal('back')
+assert.deepEqual(navigationTraversal?.target, navB)
+assert.equal(roundTripNavigation.commitTraversal(navigationTraversal, navC), true)
+navigationTraversal = roundTripNavigation.prepareTraversal('back')
+assert.deepEqual(navigationTraversal?.target, navA)
+assert.equal(roundTripNavigation.commitTraversal(navigationTraversal, navB), true)
+assert.equal(roundTripNavigation.canGoBack, false)
+assert.deepEqual(roundTripNavigation.forwardEntries, [navC, navB])
+navigationTraversal = roundTripNavigation.prepareTraversal('forward')
+assert.deepEqual(navigationTraversal?.target, navB)
+assert.equal(roundTripNavigation.commitTraversal(navigationTraversal, navA), true)
+navigationTraversal = roundTripNavigation.prepareTraversal('forward')
+assert.deepEqual(navigationTraversal?.target, navC)
+assert.equal(roundTripNavigation.commitTraversal(navigationTraversal, navB), true)
+assert.deepEqual(roundTripNavigation.backEntries, [navA, navB])
+assert.equal(roundTripNavigation.canGoForward, false)
+
+// A new successful branch from B records B and clears the old forward C.
+const branchedNavigation = new NavigationHistory()
+branchedNavigation.recordSuccessfulJump(navA, navB)
+branchedNavigation.recordSuccessfulJump(navB, navC)
+navigationTraversal = branchedNavigation.prepareTraversal('back')
+assert.ok(navigationTraversal)
+assert.equal(branchedNavigation.commitTraversal(navigationTraversal, navC), true)
+assert.deepEqual(branchedNavigation.forwardEntries, [navC])
+branchedNavigation.recordSuccessfulJump(navB, navD)
+assert.deepEqual(branchedNavigation.backEntries, [navA, navB])
+assert.deepEqual(branchedNavigation.forwardEntries, [])
+
+// No-op destinations and duplicate consecutive sources do not add entries.
+const deduplicatedNavigation = new NavigationHistory()
+deduplicatedNavigation.recordSuccessfulJump(navA, navA)
+assert.deepEqual(deduplicatedNavigation.backEntries, [])
+deduplicatedNavigation.recordSuccessfulJump(navA, { ...navA, path: '/workspace/a-renamed.ts', groupId: 2 })
+assert.deepEqual(deduplicatedNavigation.backEntries, [])
+deduplicatedNavigation.recordSuccessfulJump(navA, navB)
+deduplicatedNavigation.recordSuccessfulJump(navA, navC)
+assert.deepEqual(deduplicatedNavigation.backEntries, [navA])
+
+// The default bound is exactly 100, retaining the most recent locations.
+const cappedNavigation = new NavigationHistory()
+for (let index = 0; index <= 100; index += 1) {
+  cappedNavigation.recordSuccessfulJump(
+    navigationLocation(`cap-${index}`, `/workspace/${index}.ts`),
+    navigationLocation(`cap-${index + 1}`, `/workspace/${index + 1}.ts`)
+  )
+}
+assert.equal(cappedNavigation.backEntries.length, 100)
+assert.equal(cappedNavigation.backEntries[0].docId, 'cap-1')
+assert.equal(cappedNavigation.backEntries[99].docId, 'cap-100')
+
+// A failed resolution/jump simply abandons the prepared transaction. Both
+// stacks remain byte-for-byte equivalent, and the target is available again.
+const failedNavigation = new NavigationHistory()
+failedNavigation.recordSuccessfulJump(navA, navB)
+failedNavigation.recordSuccessfulJump(navB, navC)
+navigationTraversal = failedNavigation.prepareTraversal('back')
+assert.ok(navigationTraversal)
+assert.equal(failedNavigation.commitTraversal(navigationTraversal, navC), true)
+const backBeforeFailure = failedNavigation.backEntries
+const forwardBeforeFailure = failedNavigation.forwardEntries
+const failedTraversal = failedNavigation.prepareTraversal('back')
+assert.deepEqual(failedTraversal?.target, navA)
+assert.deepEqual(failedNavigation.backEntries, backBeforeFailure)
+assert.deepEqual(failedNavigation.forwardEntries, forwardBeforeFailure)
+assert.deepEqual(failedNavigation.prepareTraversal('back')?.target, navA)
+const staleTraversal = failedNavigation.prepareTraversal('forward')
+assert.ok(staleTraversal)
+failedNavigation.recordSuccessfulJump(navB, navD)
+assert.equal(failedNavigation.commitTraversal(staleTraversal, navB), false)
+assert.equal(failedNavigation.commitTraversal({ direction: 'back', target: navA }, navB), false)
+// A second traversal prepared before the first commits becomes stale instead
+// of popping the same target twice or losing the reverse location. The App
+// additionally serialises user Back/Forward input so each request is replayed.
+const concurrentNavigation = new NavigationHistory()
+concurrentNavigation.recordSuccessfulJump(navA, navB)
+concurrentNavigation.recordSuccessfulJump(navB, navC)
+const firstConcurrentBack = concurrentNavigation.prepareTraversal('back')
+const secondConcurrentBack = concurrentNavigation.prepareTraversal('back')
+assert.ok(firstConcurrentBack && secondConcurrentBack)
+assert.equal(concurrentNavigation.commitTraversal(firstConcurrentBack, navC), true)
+assert.equal(concurrentNavigation.commitTraversal(secondConcurrentBack, navB), false)
+assert.deepEqual(concurrentNavigation.backEntries, [navA])
+assert.deepEqual(concurrentNavigation.forwardEntries, [navC])
+
+// Untitled buffers are navigable by stable document id without a disk path.
+const untitledA = navigationLocation('untitled-a', null, 3, 2)
+const untitledB = navigationLocation('untitled-b', null, 8, 4)
+const untitledNavigation = new NavigationHistory()
+untitledNavigation.recordSuccessfulJump(untitledA, untitledB)
+navigationTraversal = untitledNavigation.prepareTraversal('back')
+assert.deepEqual(navigationTraversal?.target, untitledA)
+assert.equal(untitledNavigation.commitTraversal(navigationTraversal, untitledB), true)
+assert.deepEqual(untitledNavigation.prepareTraversal('forward')?.target, untitledB)
+
+const lifecycleNavigation = new NavigationHistory()
+lifecycleNavigation.recordSuccessfulJump(
+  navigationLocation('renamed', '/workspace/src/old.ts'),
+  navigationLocation('untitled', null, 2, 1, 1)
+)
+lifecycleNavigation.recordSuccessfulJump(
+  navigationLocation('untitled', null, 2, 1, 1),
+  navigationLocation('saved-target', '/workspace/target.ts')
+)
+lifecycleNavigation.updateDocumentPath('untitled', '/workspace/saved.ts')
+lifecycleNavigation.rewritePathPrefix('/workspace/src', '/workspace/lib')
+assert.deepEqual(lifecycleNavigation.backEntries, [
+  navigationLocation('renamed', '/workspace/lib/old.ts'),
+  navigationLocation('untitled', '/workspace/saved.ts', 2, 1, 1)
+])
+assert.deepEqual(lifecycleNavigation.prepareTraversal('back')?.target.path, '/workspace/saved.ts')
+lifecycleNavigation.removePathPrefix('/workspace/lib')
+assert.deepEqual(lifecycleNavigation.backEntries, [navigationLocation('untitled', '/workspace/saved.ts', 2, 1, 1)])
+lifecycleNavigation.removeDocument('untitled')
+assert.equal(lifecycleNavigation.canGoBack, false)
+const boundaryNavigation = new NavigationHistory()
+boundaryNavigation.recordSuccessfulJump(
+  navigationLocation('boundary', '/workspace/src-copy/file.ts'),
+  navigationLocation('elsewhere', '/workspace/elsewhere.ts')
+)
+boundaryNavigation.rewritePathPrefix('/workspace/src', '/workspace/lib')
+assert.equal(boundaryNavigation.backEntries[0].path, '/workspace/src-copy/file.ts')
+
+assert.deepEqual(resolveGotoLine('42:8', 10, 100), { line: 42, column: 8 })
+assert.deepEqual(resolveGotoLine('+10', 20, 100), { line: 30, column: 1 })
+assert.deepEqual(resolveGotoLine('-50', 20, 100), { line: 1, column: 1 })
+assert.deepEqual(resolveGotoLine('50%', 20, 101), { line: 51, column: 1 })
+assert.deepEqual(resolveGotoLine('+10%', 20, 100), { line: 30, column: 1 })
+assert.deepEqual(resolveGotoLine('999', 20, 100), { line: 100, column: 1 })
+assert.equal(resolveGotoLine('12:0', 20, 100), null)
+assert.equal(resolveGotoLine('not-a-line', 20, 100), null)
+const navigationIntent = new NavigationIntentEpoch()
+const queuedHistoryBatch = navigationIntent.current
+assert.equal(navigationIntent.isCurrent(queuedHistoryBatch), true)
+assert.equal(navigationIntent.isCurrent(queuedHistoryBatch), true)
+navigationIntent.begin()
+assert.equal(navigationIntent.isCurrent(queuedHistoryBatch), false)
+
 const restoredFile = createFromFile('/tmp/example.ts', 'export {}', 'utf16be', 'CRLF')
 assert.equal(restoredFile.savedEncoding, 'utf16be')
 assert.equal(restoredFile.savedEol, 'CRLF')

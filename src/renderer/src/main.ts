@@ -19,6 +19,7 @@ import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS, localizedCommands } from './commands.js'
 import { extractSymbols } from './symbols.js'
 import { fuzzyFilter } from './fuzzy.js'
+import { NavigationHistory, NavigationIntentEpoch, resolveGotoLine, type NavigationDirection, type NavigationLocation } from './navigationHistory.js'
 import { makeTranslator, type TranslationKey } from '../../shared/i18n.js'
 import {
   createUntitled,
@@ -176,9 +177,15 @@ class App {
   private externalChangeRequests = new Map<string, number>()
   private conflictBar: HTMLDivElement | null = null
   private conflictDocId: string | null = null
-  private navigationBack: Array<{ path: string; line: number; column: number }> = []
-  private navigationForward: Array<{ path: string; line: number; column: number }> = []
-  private isNavigatingHistory = false
+  private navigationHistory = new NavigationHistory()
+  /** Serialises repeated Back/Forward input so each keypress sees the committed stack. */
+  private navigationTraversalTail: Promise<void> = Promise.resolve()
+  /** Cancels queued history input when a newer non-history interaction occurs. */
+  private navigationIntent = new NavigationIntentEpoch()
+  /** Invalidates older asynchronous navigation requests when a newer target wins. */
+  private navigationGeneration = 0
+  /** Programmatic restore/jump selections must not cancel their own request. */
+  private applyingNavigationSelection = false
   private projectSymbols: WorkspaceSymbol[] = []
   private projectSymbolIndexAt = 0
   private workspaceWords: string[] = []
@@ -275,7 +282,7 @@ class App {
       getSearchHistory: () => this.settings.searchHistory,
       getReplaceHistory: () => this.settings.replaceHistory,
       openMatch: (match) => {
-        void this.openPath(match.path).then(() => this.editor.gotoLineNumber(match.line))
+        void this.openWorkspaceMatch(match)
       },
       notify: (message, error) => this.showError(message, error),
       afterReplace: () => {
@@ -311,9 +318,11 @@ class App {
     this.gitPanelHost.appendChild(this.gitPanel.element)
     this.outlinePanel = new OutlinePanel({
       onSelect: (symbol) => {
-        this.recordNavigation()
-        this.editor.gotoPos(symbol.pos)
-        this.editor.focus()
+        this.navigateSynchronously(() => {
+          this.editor.gotoPos(symbol.pos)
+          this.editor.focus()
+          return true
+        })
       }
     })
     this.outlinePanelHost.appendChild(this.outlinePanel.element)
@@ -393,6 +402,7 @@ class App {
         onDocChange: () => this.handleDocChange(),
         onTextEdits: (edits) => this.recordTextEdits(edits),
         onCursorChange: (state) => {
+          if (!this.applyingNavigationSelection) this.beginNavigationIntent()
           this.updatePositionStatus(state)
           this.captureActiveViewState()
         },
@@ -928,11 +938,10 @@ class App {
         void this.managePlugins()
         break
       case 'go-to-line':
-        this.editor.goToLine()
+        this.openGotoLine()
         break
       case 'goto-matching-bracket':
-        this.recordNavigation()
-        if (!this.editor.gotoMatchingBracket()) {
+        if (!this.navigateSynchronously(() => this.editor.gotoMatchingBracket())) {
           this.statusSelection.textContent = this.settings.locale === 'zh-CN' ? '当前位置没有匹配括号' : 'No matching bracket at the cursor'
         }
         break
@@ -1297,6 +1306,7 @@ class App {
         onDocChange: () => this.handleDocChange(id),
         onTextEdits: (edits) => this.recordTextEdits(edits),
         onCursorChange: (state) => {
+          if (!this.applyingNavigationSelection) this.beginNavigationIntent()
           if (this.activeGroup === id) this.updatePositionStatus(state)
           this.captureViewState(id)
         },
@@ -1330,6 +1340,7 @@ class App {
     const group = this.groups[index]
     if (!group) return
     const changed = this.activeGroup !== index
+    if (changed) this.beginNavigationIntent()
     for (const candidate of this.groups) candidate.root.classList.toggle('active', candidate.id === index)
     if (group.activeId && (changed || group.renderedDocId !== group.activeId)) void this.activate(group.activeId, index)
   }
@@ -1727,6 +1738,7 @@ class App {
 
   /** Add a document to the active editor group, then focus it. */
   private addDoc(doc: Doc): void {
+    this.beginNavigationIntent()
     this.docs.push(doc)
     const group = this.groups[this.activeGroup]
     if (group && !group.docIds.includes(doc.id)) group.docIds.push(doc.id)
@@ -1753,7 +1765,9 @@ class App {
   }
 
   /** Switch a group to a document, preserving the previous group's editor state. */
-  private async activate(id: string, groupIndex = this.activeGroup): Promise<void> {
+  private async activate(id: string, groupIndex = this.activeGroup, navigationGeneration?: number): Promise<boolean> {
+    const expectedNavigationGeneration = navigationGeneration ?? this.beginNavigationIntent()
+    if (navigationGeneration !== undefined && expectedNavigationGeneration !== this.navigationGeneration) return false
     const sourceGroup = this.groups[this.activeGroup]
     const targetGroup = this.groups[groupIndex]
     // Changing focus between groups must not snapshot the source editor as the
@@ -1770,15 +1784,18 @@ class App {
 
     const group = targetGroup
     const doc = this.docs.find((candidate) => candidate.id === id)
-    if (!group || !doc) return
+    if (!group || !doc) return false
+    if (navigationGeneration !== undefined && expectedNavigationGeneration !== this.navigationGeneration) return false
     if (!group.docIds.includes(id)) group.docIds.push(id)
     this.activeGroup = groupIndex
     group.activeId = id
     group.renderedDocId = id
     this.hideFindResults()
     const activation = ++this.languageActivation
-    group.editor.setDocument(doc.content, doc.groupStates.get(groupIndex) ?? doc.editorState)
-    group.editor.restoreViewState(doc.viewStates.get(groupIndex))
+    this.withNavigationSelectionUpdate(() => {
+      group.editor.setDocument(doc.content, doc.groupStates.get(groupIndex) ?? doc.editorState)
+      group.editor.restoreViewState(doc.viewStates.get(groupIndex))
+    })
     const indentation = this.detectIndentation(doc.content)
     group.editor.setIndentation(indentation.tabSize, indentation.insertSpaces)
     this.refreshIncrementalDiff(doc, group.editor)
@@ -1790,31 +1807,42 @@ class App {
     this.syncEditorChrome()
     this.syncOutline(true)
 
+    this.renderTabs()
+    this.updateStatus()
+    group.editor.focus()
+    this.scheduleSessionSave()
+    this.scheduleAutoSave()
+    // Run again because a manually-selected HTML/Markdown language can reveal
+    // an action even when the filename has no recognised extension.
+    this.syncEditorChrome()
+    void this.finishLanguageActivation(doc, group, groupIndex, activation)
+    return true
+  }
+
+  /** Finish lazy syntax loading without delaying tab or navigation activation. */
+  private async finishLanguageActivation(
+    doc: Doc,
+    group: EditorGroup,
+    groupIndex: number,
+    activation: number
+  ): Promise<void> {
     try {
       const language = !doc.languageLocked
         ? await group.editor.setLanguageForFile(doc.name)
         : await group.editor.setLanguageByName(doc.language)
-      // A slow lazy language bundle can finish after the user moved to another
-      // tab. Do not let that request overwrite the active editor configuration.
-      if (activation !== this.languageActivation || this.activeGroup !== groupIndex || group.activeId !== id) return
+      if (activation !== this.languageActivation || this.activeGroup !== groupIndex || group.activeId !== doc.id) return
       doc.language = language
       group.editor.setSpellCheck(this.settings.spellCheck && (this.isMarkdownDoc(doc) || language === 'Plain Text'))
       doc.editorState = group.editor.getState()
       doc.groupStates.set(groupIndex, group.editor.getState())
       doc.viewStates.set(groupIndex, group.editor.getViewState(groupIndex))
+      this.renderTabs()
+      this.updateStatus()
+      this.syncEditorChrome()
+      this.scheduleLanguageServerSync(doc)
     } catch (error) {
       console.error(`Failed to load syntax support for ${doc.name}:`, error)
     }
-    if (activation !== this.languageActivation || this.activeGroup !== groupIndex || group.activeId !== id) return
-    this.renderTabs()
-    this.updateStatus()
-    group.editor.focus()
-    this.scheduleSessionSave()
-    this.scheduleLanguageServerSync(doc)
-    this.scheduleAutoSave()
-    // Run again because a manually-selected HTML/Markdown language can reveal
-    // an action even when the filename has no recognised extension.
-    this.syncEditorChrome()
   }
 
   /** Update the active doc's cached content and refresh the dirty indicator. */
@@ -1929,7 +1957,10 @@ class App {
       this.statusSelection.textContent = 'Save the file before navigating changes'
       return
     }
+    this.beginNavigationIntent()
+    const source = this.currentLocation()
     const change = this.editor.nextIncrementalChange(direction)
+    this.navigationHistory.recordSuccessfulJump(source, this.currentLocation())
     this.statusSelection.textContent = change
       ? `${change.kind} change at line ${change.line}`
       : 'No unsaved changes'
@@ -2238,26 +2269,31 @@ class App {
   private async openViaDialog(): Promise<void> {
     try {
       const file = await window.editor.openFile()
-      if (file) this.openLoadedFile(file)
+      if (file) await this.openLoadedFile(file)
     } catch (error) {
       this.showError('The selected file could not be opened.', error)
     }
   }
 
   /** Open a file by path (from the file tree or Goto Anything). */
-  private async openPath(path: string): Promise<void> {
+  private async openPath(path: string, generation = this.beginNavigationIntent()): Promise<Doc | null> {
+    if (generation !== this.navigationGeneration) return null
     const existing = this.docs.find((d) => d.path === path)
     if (existing) {
       const group = this.groups[this.activeGroup]
       if (group && !group.docIds.includes(existing.id)) group.docIds.push(existing.id)
-      void this.activate(existing.id, this.activeGroup)
-      return
+      if (this.activeId !== existing.id || group?.renderedDocId !== existing.id) {
+        await this.activate(existing.id, this.activeGroup, generation)
+      }
+      return this.activeId === existing.id ? existing : null
     }
     try {
       const file = await window.editor.openPath(path)
-      this.openLoadedFile(file)
+      if (generation !== this.navigationGeneration) return null
+      return await this.openLoadedFile(file, generation)
     } catch (error) {
       this.showError(`Could not open “${baseName(path)}”.`, error)
+      return null
     }
   }
 
@@ -2290,33 +2326,102 @@ class App {
     }
   }
 
-  private currentLocation(): { path: string; line: number; column: number } | null {
+  private currentLocation(): NavigationLocation | null {
     const doc = this.active
-    if (!doc?.path) return null
+    if (!doc) return null
     const selection = this.editor.view.state.selection.main
     const line = this.editor.view.state.doc.lineAt(selection.head)
-    return { path: doc.path, line: line.number, column: selection.head - line.from + 1 }
+    return {
+      docId: doc.id,
+      path: doc.path,
+      groupId: this.groups[this.activeGroup]?.id ?? this.activeGroup,
+      line: line.number,
+      column: selection.head - line.from + 1
+    }
   }
 
-  private recordNavigation(): void {
-    if (this.isNavigatingHistory) return
-    const current = this.currentLocation()
-    if (!current) return
-    const previous = this.navigationBack[this.navigationBack.length - 1]
-    if (!previous || previous.path !== current.path || previous.line !== current.line || previous.column !== current.column) {
-      this.navigationBack.push(current)
-      if (this.navigationBack.length > 100) this.navigationBack.shift()
+  private withNavigationSelectionUpdate<T>(update: () => T): T {
+    this.applyingNavigationSelection = true
+    try {
+      return update()
+    } finally {
+      this.applyingNavigationSelection = false
     }
-    this.navigationForward = []
+  }
+
+  private beginNavigationIntent(): number {
+    this.navigationIntent.begin()
+    this.navigationGeneration += 1
+    return this.navigationGeneration
+  }
+
+  /** Record a synchronous semantic jump only after it actually moves. */
+  private navigateSynchronously(jump: () => boolean): boolean {
+    this.beginNavigationIntent()
+    const source = this.currentLocation()
+    if (!this.withNavigationSelectionUpdate(jump)) return false
+    const target = this.currentLocation()
+    this.navigationHistory.recordSuccessfulJump(source, target)
+    return !!source && !!target && (source.docId !== target.docId || source.line !== target.line || source.column !== target.column)
+  }
+
+  /** Resolve a history location, reopening its file only when the document closed. */
+  private async revealNavigationLocation(target: NavigationLocation, generation: number): Promise<NavigationLocation | null> {
+    let doc = this.docs.find((candidate) => candidate.id === target.docId)
+    let groupIndex = this.groups.findIndex((group) => group.id === target.groupId)
+    if (groupIndex < 0) groupIndex = this.activeGroup
+    if (doc) {
+      const owningGroupIndex = this.groups.findIndex((group) => group.docIds.includes(doc!.id))
+      if (!this.groups[groupIndex]?.docIds.includes(doc.id) && owningGroupIndex >= 0) groupIndex = owningGroupIndex
+      if (this.activeId !== doc.id || this.activeGroup !== groupIndex || this.groups[groupIndex]?.renderedDocId !== doc.id) {
+        await this.activate(doc.id, groupIndex, generation)
+      }
+    } else if (target.path) {
+      groupIndex = this.activeGroup
+      doc = await this.openPath(target.path, generation) ?? undefined
+    } else {
+      return null
+    }
+    if (generation !== this.navigationGeneration || !doc || this.activeId !== doc.id || this.activeGroup !== groupIndex) return null
+    this.withNavigationSelectionUpdate(() => this.editor.gotoLineColumn(target.line, target.column))
+    const actual = this.currentLocation()
+    return actual?.docId === doc.id ? actual : null
+  }
+
+  /** Perform an ordinary semantic jump and commit it only after arrival. */
+  private async navigateToLocation(target: { docId?: string; path: string | null; groupId?: number; line?: number; column?: number }): Promise<boolean> {
+    const source = this.currentLocation()
+    const generation = this.beginNavigationIntent()
+    let doc = target.docId ? this.docs.find((candidate) => candidate.id === target.docId) : undefined
+    let groupIndex = target.groupId === undefined
+      ? this.activeGroup
+      : this.groups.findIndex((group) => group.id === target.groupId)
+    if (groupIndex < 0) groupIndex = this.activeGroup
+    if (doc) {
+      const owningGroupIndex = this.groups.findIndex((group) => group.docIds.includes(doc!.id))
+      if (!this.groups[groupIndex]?.docIds.includes(doc.id) && owningGroupIndex >= 0) groupIndex = owningGroupIndex
+      if (this.activeId !== doc.id || this.activeGroup !== groupIndex || this.groups[groupIndex]?.renderedDocId !== doc.id) {
+        await this.activate(doc.id, groupIndex, generation)
+      }
+    } else if (target.path) {
+      groupIndex = this.activeGroup
+      doc = await this.openPath(target.path, generation) ?? undefined
+    } else {
+      return false
+    }
+    if (generation !== this.navigationGeneration || !doc || this.activeId !== doc.id || this.activeGroup !== groupIndex) return false
+    if (target.line !== undefined) {
+      this.withNavigationSelectionUpdate(() => this.editor.gotoLineColumn(target.line!, target.column))
+    }
+    const actual = this.currentLocation()
+    if (!actual || actual.docId !== doc.id) return false
+    const reachableSource = source && this.docs.some((candidate) => candidate.id === source.docId) ? source : null
+    this.navigationHistory.recordSuccessfulJump(reachableSource, actual)
+    return true
   }
 
   private async openWorkspaceMatch(match: WorkspaceMatch): Promise<void> {
-    this.recordNavigation()
-    await this.openPath(match.path)
-    this.editor.gotoLineNumber(match.line)
-    const state = this.editor.view.state
-    const line = state.doc.line(Math.max(1, Math.min(state.doc.lines, match.line)))
-    this.editor.gotoPos(Math.min(line.to, line.from + match.column - 1))
+    await this.navigateToLocation({ path: match.path, groupId: this.activeGroup, line: match.line, column: match.column })
   }
 
   private async undoReplaceInFiles(): Promise<void> {
@@ -2391,51 +2496,70 @@ class App {
     })
   }
 
-  private async navigateHistory(direction: -1 | 1): Promise<void> {
-    const source = direction < 0 ? this.navigationBack : this.navigationForward
-    const target = source.pop()
-    if (!target) return
+  private navigateHistory(direction: -1 | 1): Promise<void> {
+    const intentGeneration = this.navigationIntent.current
+    const run = this.navigationTraversalTail
+      .catch(() => undefined)
+      .then(() => this.navigateHistoryNow(direction, intentGeneration))
+    this.navigationTraversalTail = run.catch((error: unknown) => {
+      this.showError(this.settings.locale === 'zh-CN' ? '无法恢复跳转位置。' : 'The navigation location could not be restored.', error)
+    })
+    return run
+  }
+
+  private async navigateHistoryNow(direction: -1 | 1, intentGeneration: number): Promise<void> {
+    if (!this.navigationIntent.isCurrent(intentGeneration)) return
+    const historyDirection: NavigationDirection = direction < 0 ? 'back' : 'forward'
+    const traversal = this.navigationHistory.prepareTraversal(historyDirection)
+    if (!traversal) {
+      this.notify(this.settings.locale === 'zh-CN'
+        ? `没有可${direction < 0 ? '后退' : '前进'}的跳转位置`
+        : `No ${historyDirection} navigation location`)
+      return
+    }
     const current = this.currentLocation()
-    if (current) (direction < 0 ? this.navigationForward : this.navigationBack).push(current)
-    this.isNavigatingHistory = true
-    try {
-      await this.openPath(target.path)
-      const state = this.editor.view.state
-      const line = state.doc.line(Math.max(1, Math.min(state.doc.lines, target.line)))
-      this.editor.gotoPos(Math.min(line.to, line.from + target.column - 1))
-    } finally {
-      this.isNavigatingHistory = false
+    const generation = ++this.navigationGeneration
+    const reached = await this.revealNavigationLocation(traversal.target, generation)
+    if (generation !== this.navigationGeneration) return
+    const returnLocation = current && this.docs.some((candidate) => candidate.id === current.docId) ? current : null
+    if (!reached || !this.navigationHistory.commitTraversal(traversal, returnLocation)) {
+      if (generation === this.navigationGeneration) {
+        this.notify(this.settings.locale === 'zh-CN' ? '无法恢复该跳转位置' : 'The navigation location is no longer available')
+      }
     }
   }
 
   /** Handle text/binary/large-file policy consistently for all open routes. */
-  private openLoadedFile(file: OpenedFile): void {
+  private async openLoadedFile(file: OpenedFile, generation = this.beginNavigationIntent()): Promise<Doc | null> {
+    if (generation !== this.navigationGeneration) return null
     if (file.isBinary) {
       this.showError(`“${baseName(file.path)}” looks like a binary file and was not opened.`)
-      return
+      return null
     }
     if (file.isTooLarge) {
       const mb = (file.byteLength / 1024 / 1024).toFixed(1)
       this.showError(`“${baseName(file.path)}” is ${mb} MB and exceeds the safe editor limit.`)
-      return
+      return null
     }
-    this.openLoaded(file.path, file.content, file.encoding, file.eol, file.revision)
+    return await this.openLoaded(file.path, file.content, file.encoding, file.eol, file.revision, generation)
   }
 
   /** Create (or focus) a tab for an already-loaded file. */
-  private openLoaded(
+  private async openLoaded(
     path: string,
     content: string,
     encoding: Doc['encoding'] = 'utf8',
     eol: Doc['eol'] = 'LF',
-    revision: string | null = null
-  ): void {
+    revision: string | null = null,
+    generation = this.beginNavigationIntent()
+  ): Promise<Doc | null> {
+    if (generation !== this.navigationGeneration) return null
     const existing = this.docs.find((d) => d.path === path)
     if (existing) {
       const group = this.groups[this.activeGroup]
       if (group && !group.docIds.includes(existing.id)) group.docIds.push(existing.id)
-      void this.activate(existing.id, this.activeGroup)
-      return
+      await this.activate(existing.id, this.activeGroup, generation)
+      return this.activeId === existing.id ? existing : null
     }
     // Replace a pristine placeholder only when it is local to the active
     // group; shared placeholders must remain valid in their other groups.
@@ -2453,8 +2577,12 @@ class App {
       ? currentDoc
       : null
     if (!placeholder) {
-      this.addDoc(createFromFile(path, content, encoding, eol, revision))
-      return
+      const opened = createFromFile(path, content, encoding, eol, revision)
+      this.docs.push(opened)
+      currentGroup.docIds.push(opened.id)
+      await this.activate(opened.id, this.activeGroup, generation)
+      this.scheduleSessionSave()
+      return this.activeId === opened.id ? opened : null
     }
     const opened = createFromFile(path, content, encoding, eol, revision)
     const group = currentGroup
@@ -2464,10 +2592,12 @@ class App {
     else group.docIds.push(opened.id)
     if (group.activeId === placeholder.id) group.activeId = null
     if (!this.groups.some((candidate) => candidate.docIds.includes(placeholder.id))) {
+      this.navigationHistory.removeDocument(placeholder.id)
       this.docs = this.docs.filter((doc) => doc.id !== placeholder.id)
     }
-    void this.activate(opened.id, this.activeGroup)
+    await this.activate(opened.id, this.activeGroup, generation)
     this.scheduleSessionSave()
+    return this.activeId === opened.id ? opened : null
   }
 
   /** Open a workspace folder via dialog and populate the file tree. */
@@ -2489,7 +2619,7 @@ class App {
         await this.replaceWorkspaceFolders(dropped.folders[0].root)
         for (const folder of dropped.folders.slice(1)) await this.addFolderPath(folder.root)
       }
-      for (const file of dropped.files) this.openLoadedFile(file)
+      for (const file of dropped.files) await this.openLoadedFile(file)
       const opened = dropped.files.length + dropped.folders.length
       if (opened > 0) {
         this.statusSelection.textContent = this.settings.locale === 'zh-CN'
@@ -3201,8 +3331,11 @@ class App {
       return
     }
     const target = `${source.slice(0, source.length - baseName(source).length)}${nextName}`
+    this.beginNavigationIntent()
     try {
       await window.editor.renamePath(source, target)
+      this.beginNavigationIntent()
+      this.navigationHistory.rewritePathPrefix(source, target)
       for (const doc of this.docs) {
         if (
           doc.path === source ||
@@ -3224,9 +3357,12 @@ class App {
 
   private async movePath(source: string): Promise<void> {
     if (!window.confirm(`Choose a destination folder for “${baseName(source)}”?`)) return
+    this.beginNavigationIntent()
     try {
       const target = await window.editor.movePath(source)
       if (!target || target === source) return
+      this.beginNavigationIntent()
+      this.navigationHistory.rewritePathPrefix(source, target)
       for (const doc of this.docs) {
         if (doc.path === source || (doc.path !== null && (doc.path.startsWith(`${source}/`) || doc.path.startsWith(`${source}\\`)))) {
           const previousPath = doc.path
@@ -3245,13 +3381,27 @@ class App {
   }
 
   private async deletePath(target: string): Promise<void> {
-    if (!window.confirm(`Move “${baseName(target)}” to the system trash?`)) return
+    const affectedBeforeDelete = this.docs.filter((doc) => doc.path !== null &&
+      (doc.path === target || doc.path.startsWith(`${target}/`) || doc.path.startsWith(`${target}${String.fromCharCode(92)}`)))
+    const dirtyCount = affectedBeforeDelete.filter((doc) => isDirty(doc)).length
+    const warning = dirtyCount > 0
+      ? ` ${dirtyCount} open file${dirtyCount === 1 ? ' has' : 's have'} unsaved changes and will also be closed.`
+      : ''
+    if (!window.confirm(`Move “${baseName(target)}” to the system trash?${warning}`)) return
+    this.beginNavigationIntent()
     try {
       await window.editor.deletePath(target)
-      const affected = this.docs.filter(
+      this.beginNavigationIntent()
+      this.navigationHistory.removePathPrefix(target)
+      const affectedAfterDelete = this.docs.filter(
         (doc) => doc.path === target || (doc.path !== null && (doc.path.startsWith(`${target}/`) || doc.path.startsWith(`${target}\\`)))
       )
-      for (const doc of affected) this.closeActive(doc.id)
+      for (const doc of affectedAfterDelete) {
+        const groupIndexes = this.groups
+          .map((group, index) => group.docIds.includes(doc.id) ? index : -1)
+          .filter((index) => index >= 0)
+        for (const groupIndex of groupIndexes) this.closeDocFromGroup(doc.id, groupIndex, false, false)
+      }
       await this.reloadWorkspaceTree()
     } catch (error) {
       this.showError('The item could not be moved to the trash.', error)
@@ -3267,6 +3417,7 @@ class App {
     const savedEncodingSnapshot = doc.encoding
     const savedEolSnapshot = doc.eol
     const promptedForDestination = forceDialog || originalPath === null
+    if (promptedForDestination) this.beginNavigationIntent()
     doc.content = savedSnapshot
 
     let result
@@ -3299,11 +3450,13 @@ class App {
       }
       return
     }
+    if (promptedForDestination) this.beginNavigationIntent()
     this.invalidateExternalChangeRead(originalPath)
     this.invalidateExternalChangeRead(result.path)
     if (forceDialog || doc.path === originalPath) {
       doc.path = result.path
       doc.name = baseName(result.path)
+      this.navigationHistory.updateDocumentPath(doc.id, result.path)
     }
     // Mark only the exact snapshot written to disk as saved. Edits made while
     // the async write was in flight remain dirty and cannot be silently lost.
@@ -3453,11 +3606,12 @@ class App {
       : `Kept ${skippedPinned} pinned tab${skippedPinned === 1 ? '' : 's'}`
   }
 
-  private closeDocFromGroup(id: string, groupIndex: number, confirmClose = true): void {
+  private closeDocFromGroup(id: string, groupIndex: number, confirmClose = true, rememberClosed = true): void {
     const doc = this.docs.find((candidate) => candidate.id === id)
     const group = this.groups[groupIndex]
     if (!doc || !group) return
     if (confirmClose && isDirty(doc) && !confirm(`"${doc.name}" has unsaved changes. Close anyway?`)) return
+    this.beginNavigationIntent()
     const wasActive = group.activeId === id
     const wasRendered = group.renderedDocId === id
     if (wasRendered) {
@@ -3468,7 +3622,7 @@ class App {
       doc.groupStates.set(group.id, group.editor.getState())
       doc.viewStates.set(group.id, group.editor.getViewState(group.id))
     }
-    if (doc.path && !this.closedStack.includes(doc.path)) this.closedStack.push(doc.path)
+    if (rememberClosed && doc.path && !this.closedStack.includes(doc.path)) this.closedStack.push(doc.path)
     this.selectedTabIds.delete(id)
 
     const index = group.docIds.indexOf(id)
@@ -3479,6 +3633,7 @@ class App {
 
     const stillVisible = this.groups.some((candidate) => candidate.docIds.includes(id))
     if (!stillVisible) {
+      if (doc.path === null) this.navigationHistory.removeDocument(doc.id)
       this.docs = this.docs.filter((candidate) => candidate.id !== id)
       this.selectedTabIds.delete(id)
     }
@@ -3590,7 +3745,10 @@ class App {
     const next = delta > 0
       ? doc.bookmarks.find((line) => line > current) ?? doc.bookmarks[0]
       : [...doc.bookmarks].reverse().find((line) => line < current) ?? doc.bookmarks[doc.bookmarks.length - 1]
-    this.editor.gotoLineNumber(next)
+    this.navigateSynchronously(() => {
+      this.editor.gotoLineNumber(next)
+      return true
+    })
   }
 
   private toggleMacroRecording(): void {
@@ -4312,6 +4470,29 @@ class App {
     })
   }
 
+  /** Open a history-aware Goto Line picker with absolute, relative and percent forms. */
+  private openGotoLine(): void {
+    const currentLine = this.editor.currentLine()
+    const totalLines = this.editor.view.state.doc.lines
+    this.palette.open({
+      placeholder: this.settings.locale === 'zh-CN'
+        ? '跳转到行（例如 42:8、+10、50%）'
+        : 'Goto Line (for example 42:8, +10, 50%)',
+      initialQuery: String(currentLine),
+      onQuery: (query) => {
+        const location = resolveGotoLine(query, currentLine, totalLines)
+        if (!location) return []
+        return [{
+          label: this.settings.locale === 'zh-CN'
+            ? `跳转到第 ${location.line} 行，第 ${location.column} 列`
+            : `Go to line ${location.line}, column ${location.column}`,
+          value: { kind: 'line', ...location }
+        }]
+      },
+      onAccept: (item) => this.acceptGoto(item)
+    })
+  }
+
   private async ensureProjectSymbols(): Promise<void> {
     if (this.folders.length === 0 || (this.projectSymbols.length > 0 && Date.now() - this.projectSymbolIndexAt <= 30_000)) return
     this.projectSymbols = (await Promise.all(this.folders.map((root) => window.editor.listWorkspaceSymbols(root))))
@@ -4355,7 +4536,7 @@ class App {
       return source.slice(0, 200).map(({ item }) => ({
         label: item.label,
         detail: `${item.path}:${item.line}`,
-        value: { kind: 'file-line', path: item.path, line: item.line }
+        value: { kind: 'file-line', path: item.path, line: item.line, column: item.column }
       }))
     }
     // "path/to/file:42" / "path/to/file:42:8" opens a fuzzy-matched file at the requested location.
@@ -4381,14 +4562,9 @@ class App {
     }))
   }
 
-  /** Parse positive 1-based line[:column] text shared by current-file Goto mode. */
-  private parseGotoLocation(input: string): { line: number; column?: number } | null {
-    const match = /^(\d+)(?::(\d+))?$/.exec(input.trim())
-    if (!match) return null
-    const line = Number(match[1])
-    const column = match[2] ? Number(match[2]) : undefined
-    if (!Number.isSafeInteger(line) || line < 1 || (column !== undefined && (!Number.isSafeInteger(column) || column < 1))) return null
-    return { line, column }
+  /** Parse absolute, relative or percentage line syntax for Goto Anything. */
+  private parseGotoLocation(input: string): { line: number; column: number } | null {
+    return resolveGotoLine(input, this.editor.currentLine(), this.editor.view.state.doc.lines)
   }
 
   /** Ctrl/Cmd+R — symbols in the current document. */
@@ -4421,13 +4597,21 @@ class App {
       | { kind: 'file-line'; path: string; line: number; column?: number }
       | { kind: 'pos'; pos: number }
     if (v.kind === 'file') {
-      void this.openPath(v.path)
+      void this.navigateToLocation({ path: v.path })
     } else if (v.kind === 'line') {
-      if (Number.isFinite(v.line) && v.line > 0) this.editor.gotoLineColumn(v.line, v.column)
+      if (Number.isFinite(v.line) && v.line > 0) {
+        this.navigateSynchronously(() => {
+          this.editor.gotoLineColumn(v.line, v.column)
+          return true
+        })
+      }
     } else if (v.kind === 'file-line') {
-      void this.openPath(v.path).then(() => this.editor.gotoLineColumn(v.line, v.column))
+      void this.navigateToLocation({ path: v.path, line: v.line, column: v.column })
     } else {
-      this.editor.gotoPos(v.pos)
+      this.navigateSynchronously(() => {
+        this.editor.gotoPos(v.pos)
+        return true
+      })
     }
   }
 

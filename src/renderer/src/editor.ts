@@ -63,7 +63,6 @@ import {
   searchKeymap,
   highlightSelectionMatches,
   openSearchPanel,
-  gotoLine,
   getSearchQuery,
   setSearchQuery,
   SearchQuery
@@ -218,7 +217,9 @@ function baseExtensions(
       { key: 'Mod-d', run: selectNextOccurrenceAsMain, preventDefault: true },
       { key: 'Mod-u', run: (view) => { undoSelectionOnly(view); return true }, preventDefault: true },
       { key: 'Alt-u', mac: 'Mod-Shift-u', run: (view) => { redoSelectionOnly(view); return true }, preventDefault: true },
-      ...searchKeymap,
+      // The native Ctrl/Cmd+G menu command owns Goto Line so it can record a
+      // successful semantic jump. Remove CodeMirror's separate Mod-Alt-g path.
+      ...searchKeymap.filter((binding) => binding.key !== 'Mod-Alt-g' && binding.key !== 'Mod-g'),
       ...historyKeymap,
       ...foldKeymap,
       ...completionKeymap,
@@ -762,10 +763,6 @@ export class Editor {
     })
     this.view.dom.querySelector<HTMLInputElement>('input[name=replace]')?.focus()
   }
-  goToLine(): void {
-    gotoLine(this.view)
-  }
-
   /** Move the cursor to a 1-based line number and reveal it. */
   gotoLineNumber(line: number): void {
     this.gotoLineColumn(line, 1)

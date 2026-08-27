@@ -120,7 +120,7 @@ export const COMMANDS: Command[] = [
   { id: 'font-zoom-in', title: 'View: Zoom In', hint: 'Ctrl/Cmd+=' },
   { id: 'font-zoom-out', title: 'View: Zoom Out', hint: 'Ctrl/Cmd+-' },
   { id: 'font-zoom-reset', title: 'View: Reset Zoom', hint: 'Ctrl/Cmd+0' },
-  { id: 'build', title: 'Tools: Build', hint: 'Ctrl/Cmd+B' },
+  { id: 'build', title: 'Tools: Build', hint: 'Ctrl/Cmd+Shift+B' },
   { id: 'toggle-terminal', title: 'Tools: Toggle Terminal', hint: 'Ctrl/Cmd+Alt+T' },
   { id: 'document-statistics', title: 'Tools: Document Statistics' },
   { id: 'import-sublime-build', title: 'Tools: Import Sublime Build System…' },

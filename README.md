@@ -15,9 +15,18 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   *View: Open in Browser*) to preview in your system browser; unsaved/untitled content opens
   from a temporary snapshot without prompting you to save
 - **Command Palette** (`Ctrl/Cmd+Shift+P`) — fuzzy-search every command, Sublime-style
-- **Goto Anything** (`Ctrl/Cmd+P`) — fuzzy file finder with `:line` and `@symbol` sub-modes
+- **Goto Anything** (`Ctrl/Cmd+P`) — fuzzy workspace file finder with `:line[:column]`,
+  `@current-symbol`, and `#project-symbol` modes
 - **Multi-group layouts & windows** — single, 2/3-column and 4-grid layouts with independent tab groups
-- **Find Results & project symbols** — persistent workspace results (`F4` navigation), project-wide symbols and back/forward history
+- **Find Results & project symbols** — persistent workspace results (`F4` / `Shift+F4` navigation)
+  and project-wide function, class, and heading lookup
+- **Unified navigation history** — `Alt+Left` / `Alt+Right` goes back/forward across successful
+  Goto Line and Goto Anything jumps (file, line, current/project symbol), outline selections,
+  workspace-search results, build problems, definitions/references, bookmarks, matching brackets,
+  and change navigation. A jump is recorded only after it succeeds and actually moves; canceled,
+  failed, and no-op attempts leave history unchanged. During the current app run, history supports
+  still-open untitled documents and their original split groups, and can reopen a closed file from
+  its path. Navigation history is not restored after restart.
 - **Goto Symbol** (`Ctrl/Cmd+R`) and **Goto Line** (`Ctrl/Cmd+G`)
 - **Multi-tab editing** with dirty (unsaved) indicators, pinned tabs, close buttons, and restored tab order
 - **Syntax highlighting** for 100+ languages, auto-detected by extension; manual override via
@@ -162,6 +171,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Goto Anything       | `Ctrl/Cmd+P`                |
 | Goto Symbol         | `Ctrl/Cmd+R`                |
 | Goto Line           | `Ctrl/Cmd+G`                |
+| Navigation back / forward | `Alt+Left` / `Alt+Right` |
 | New file            | `Ctrl/Cmd+N`                |
 | Open file           | `Ctrl/Cmd+O`                |
 | Open folder         | `Ctrl/Cmd+Shift+O`          |

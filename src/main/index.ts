@@ -617,6 +617,111 @@ function createWindow(sessionId = newSessionId()): void {
         if (textAfterSelectionUndo !== multiCursorText) {
           throw new Error(`Selection undo changed document text: ${JSON.stringify(textAfterSelectionUndo)}`)
         }
+        const navigationDocument = await win.webContents.executeJavaScript(`(() => {
+          const tab = document.querySelector('#tab-bar > .tab.active')
+          return {
+            docId: tab instanceof HTMLElement ? tab.dataset.docId ?? '' : '',
+            label: tab?.querySelector('.tab-label')?.textContent ?? ''
+          }
+        })()`, true)
+        if (!navigationDocument.docId || navigationDocument.label !== 'Untitled-1') {
+          throw new Error(`Could not identify the untitled navigation smoke document: ${JSON.stringify(navigationDocument)}`)
+        }
+        const waitForEditorPosition = async (line: number, column: number): Promise<void> => {
+          const result = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            let statusText = ''
+            let activeDocId = ''
+            while (Date.now() < deadline) {
+              statusText = document.querySelector('#status-position')?.textContent?.trim() ?? ''
+              activeDocId = document.querySelector('#tab-bar > .tab.active')?.getAttribute('data-doc-id') ?? ''
+              const numbers = statusText.match(/\\d+/g)?.map(Number) ?? []
+              const palette = document.querySelector('.palette-overlay')
+              const paletteClosed = !(palette instanceof HTMLElement) || palette.classList.contains('hidden')
+              if (numbers[0] === ${line} && numbers[1] === ${column}
+                && activeDocId === ${JSON.stringify(navigationDocument.docId)} && paletteClosed) {
+                return { ok: true, statusText, activeDocId }
+              }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, statusText, activeDocId }
+          })()`, true)
+          if (!result.ok) {
+            throw new Error(`Editor did not reach ${line}:${column} in the navigation smoke document: ${JSON.stringify(result)}`)
+          }
+        }
+        const gotoLineFromPalette = async (line: number, column: number): Promise<void> => {
+          const query = `${line}:${column}`
+          win.webContents.send(IPC.menuEvent, 'go-to-line' as MenuEvent)
+          const paletteResult = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            let inputValue = ''
+            let optionText = ''
+            let queryEntered = false
+            while (Date.now() < deadline) {
+              const input = document.querySelector('.palette-overlay:not(.hidden) .palette-input')
+              if (input instanceof HTMLInputElement && document.activeElement === input) {
+                if (!queryEntered) {
+                  input.value = ${JSON.stringify(query)}
+                  input.setSelectionRange(input.value.length, input.value.length)
+                  input.dispatchEvent(new Event('input', { bubbles: true }))
+                  queryEntered = true
+                }
+                inputValue = input.value
+                const list = input.getAttribute('aria-controls')
+                  ? document.getElementById(input.getAttribute('aria-controls'))
+                  : null
+                const option = list?.querySelector('.palette-item.active')
+                optionText = option?.textContent?.trim() ?? ''
+                const numbers = optionText.match(/\\d+/g)?.map(Number) ?? []
+                if (list?.getAttribute('aria-busy') !== 'true' && option instanceof HTMLElement
+                  && numbers[0] === ${line} && numbers[1] === ${column}) {
+                  return { ok: true, inputValue, optionText }
+                }
+              }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, inputValue, optionText, queryEntered }
+          })()`, true)
+          if (!paletteResult.ok) {
+            throw new Error(`Goto Line palette did not offer ${query}: ${JSON.stringify(paletteResult)}`)
+          }
+          await pressKey('Enter')
+          await waitForEditorPosition(line, column)
+        }
+        await gotoLineFromPalette(1, 1)
+        await gotoLineFromPalette(3, 2)
+        win.webContents.send(IPC.menuEvent, 'navigate-back' as MenuEvent)
+        await waitForEditorPosition(1, 1)
+        win.webContents.send(IPC.menuEvent, 'navigate-forward' as MenuEvent)
+        await waitForEditorPosition(3, 2)
+        win.webContents.send(IPC.menuEvent, 'navigate-back' as MenuEvent)
+        await waitForEditorPosition(1, 1)
+        win.webContents.send(IPC.menuEvent, 'goto-matching-bracket' as MenuEvent)
+        const failedBracketJump = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          let message = ''
+          while (Date.now() < deadline) {
+            message = document.querySelector('#status-selection')?.textContent?.trim() ?? ''
+            if (/No matching bracket|没有匹配括号/i.test(message)) return { ok: true, message }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, message }
+        })()`, true)
+        if (!failedBracketJump.ok) {
+          throw new Error(`Matching-bracket failure was not reported at 1:1: ${JSON.stringify(failedBracketJump)}`)
+        }
+        await waitForEditorPosition(1, 1)
+        win.webContents.send(IPC.menuEvent, 'navigate-forward' as MenuEvent)
+        await waitForEditorPosition(3, 2)
+        await gotoLineFromPalette(2, 1)
+        await gotoLineFromPalette(3, 3)
+        win.webContents.send(IPC.menuEvent, 'navigate-back' as MenuEvent)
+        win.webContents.send(IPC.menuEvent, 'navigate-back' as MenuEvent)
+        await waitForEditorPosition(3, 2)
+        win.webContents.send(IPC.menuEvent, 'navigate-forward' as MenuEvent)
+        win.webContents.send(IPC.menuEvent, 'navigate-forward' as MenuEvent)
+        await waitForEditorPosition(3, 3)
         // The default profile has outline hidden; this explicit event verifies
         // its menu path without altering normal user settings (smoke userData
         // is isolated above).

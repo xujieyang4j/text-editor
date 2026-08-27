@@ -145,14 +145,15 @@ copy action writes only an already authorised path and does not grant clipboard-
 **Command Palette — `Ctrl/Cmd+Shift+P`.** Fuzzy-search every command by name and run it.
 Matched characters are highlighted; `↑`/`↓` to move, `Enter` to run, `Esc` to dismiss.
 
-**Goto Anything — `Ctrl/Cmd+P`.** A fuzzy file finder over the open workspace folder, with two
-sub-modes triggered by a prefix in the same input:
+**Goto Anything — `Ctrl/Cmd+P`.** A fuzzy file finder over the open workspace folder, with
+prefix modes in the same input:
 
 | Type | Mode | Example |
 | --- | --- | --- |
 | *(text)* | Fuzzy file path | `maints` → `src/renderer/src/main.ts` |
 | `:` + `line[:column]` | Go to a location in the current file | `:120:8` |
 | `@` + name | Go to symbol in current file | `@openFolder` |
+| `#` + name | Go to a symbol in the workspace | `#parseConfig` |
 
 You can also type `file:line:column` (for example, `main.ts:120:8`) to open a matched workspace
 file at an exact location.
@@ -161,9 +162,23 @@ file at an exact location.
 fast per-line scan: JS/TS functions, classes, methods and arrow-consts; Python `def`/`class`;
 Go `func`; Rust `fn`; and Markdown headings.
 
+**Goto Line — `Ctrl/Cmd+G`.** Enter an absolute `line[:column]`, a relative line such as `+10`
+or `-5`, or a percentage such as `50%`. Goto Anything's `:` mode uses the same location syntax.
+**Goto Symbol in Project — `Ctrl/Cmd+Shift+R`** opens the workspace-symbol mode directly.
+
 **Goto Matching Bracket — `Ctrl/Cmd+Shift+\`.** With the cursor on, or directly beside, a
 matching `()`, `[]` or `{}` pair, jumps to the other end. When no pair is available, the cursor
 stays in place. The command is also available through *Goto: Goto Matching Bracket*.
+
+**Back / Forward — `Alt+Left` / `Alt+Right`.** One navigation history is shared by successful
+Goto Line and Goto Anything jumps (file, line, current-file symbol, and project symbol), outline
+selections, workspace-search results, build problems, definitions/references, bookmarks, matching
+brackets, and next/previous-change jumps. An entry is added only after the operation succeeds and
+actually moves to another location; cancellation, failure, or an already-current target does not
+change either history stack. A still-open untitled document remains addressable, an open target
+returns to the split group in which its location was captured, and a closed file can be reopened
+from its stored path when that path is still available. This history exists only for the current
+app run and is not restored after restart.
 
 > Goto Anything's file list requires an open folder (`Ctrl/Cmd+Shift+O`). With no workspace,
 > use `Ctrl/Cmd+P` for `:line[:column]`/`@symbol` in the current file, or the sidebar to open files.
@@ -432,6 +447,7 @@ unexpected quit or a machine crash (Sublime's "hot exit").
   unsaved edits, the draft is kept as an untitled buffer rather than lost.
 - Each editor group restores its active document's selections (including multi-cursor) and scroll
   position. Undo history and folded ranges remain session-local rather than being serialised.
+- Back/forward navigation history is also session-local and is not restored after restart.
 
 Use `Ctrl/Cmd+Shift+T` to reopen the most recently closed tab. Session data lives next to your
 settings as `session.json` for the legacy window or `session-<id>.json` per window (see
@@ -448,6 +464,7 @@ settings as `session.json` for the legacy window or `session-<id>.json` per wind
 | Goto Symbol | `Ctrl+R` | `Cmd+R` |
 | Goto Line | `Ctrl+G` | `Cmd+G` |
 | Goto Matching Bracket | `Ctrl+Shift+\` | `Cmd+Shift+\` |
+| Navigation back / forward | `Alt+←` / `Alt+→` | `Alt+←` / `Alt+→` |
 | New / Open file | `Ctrl+N` / `Ctrl+O` | `Cmd+N` / `Cmd+O` |
 | Open folder | `Ctrl+Shift+O` | `Cmd+Shift+O` |
 | Save / Save As / Save All | `Ctrl+S` / `Ctrl+Shift+S` / `Ctrl+Alt+S` | `Cmd+S` / `Cmd+Shift+S` / `Cmd+Alt+S` |
@@ -624,21 +641,32 @@ UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 
 **命令面板 —— `Ctrl/Cmd+Shift+P`。** 模糊搜索所有命令并执行。匹配字符高亮；`↑`/`↓` 移动、
 `Enter` 执行、`Esc` 关闭。
 
-**Goto Anything —— `Ctrl/Cmd+P`。** 对已打开工作区文件夹的模糊查找，输入框里用前缀切换两种子模式：
+**Goto Anything —— `Ctrl/Cmd+P`。** 对已打开工作区文件夹的模糊查找，输入框里用前缀切换模式：
 
 | 输入 | 模式 | 示例 |
 | --- | --- | --- |
 | *(文字)* | 模糊匹配文件路径 | `maints` → `src/renderer/src/main.ts` |
 | `:` + `行[:列]` | 跳到当前文件的位置 | `:120:8` |
 | `@` + 名称 | 跳到当前文件的符号 | `@openFolder` |
+| `#` + 名称 | 跳到工作区符号 | `#parseConfig` |
 
 也可输入 `文件名:行号:列号`（例如 `main.ts:120:8`），直接打开匹配的工作区文件并精确定位。
 
 **跳转到符号 —— `Ctrl/Cmd+R`。** 等同直接进入 `@` 模式。符号用快速逐行扫描抽取：JS/TS 的
 函数/类/方法/箭头常量、Python 的 `def`/`class`、Go 的 `func`、Rust 的 `fn`，以及 Markdown 标题。
 
+**跳转到行 —— `Ctrl/Cmd+G`。** 可输入绝对 `行[:列]`、`+10` / `-5` 等相对行，或 `50%` 等
+百分比位置；Goto Anything 的 `:` 模式使用相同格式。**跳转到项目符号 —— `Ctrl/Cmd+Shift+R`**
+可直接打开工作区符号模式。
+
 **转到匹配括号 —— `Ctrl/Cmd+Shift+\`。** 光标位于或紧邻 `()`、`[]`、`{}` 等成对括号时，会跳到
 另一端；没有可匹配括号时光标保持不动。命令面板中也可执行 *Goto: Goto Matching Bracket*。
+
+**后退 / 前进 —— `Alt+←` / `Alt+→`。** 跳转到行、Goto Anything（文件、行、当前文件符号、
+项目符号）、大纲、工作区搜索结果、构建问题、定义/引用、书签、匹配括号和改动跳转共用一份导航历史。
+只有操作成功且确实移动到另一位置后才会入栈；取消、失败或目标就是当前位置时，两侧历史都不会改变。
+仍打开的未命名文档可按文档身份返回，已打开的目标会回到记录位置时所在的分屏组；关闭的文件在路径仍
+可用时可按该路径重开。导航历史只存在于本次应用运行中，重启后不会恢复。
 
 > Goto Anything 的文件列表需要先打开文件夹（`Ctrl/Cmd+Shift+O`）。没有工作区时，`Ctrl/Cmd+P`
 > 仍可用 `:行号[:列号]`/`@符号` 在当前文件内跳转，或用侧边栏打开文件。
@@ -849,6 +877,7 @@ Sublime 的 “hot exit”）。
 - 会话文件使用临时文件加原子替换，未完成的写入不会覆盖上一份完整恢复快照。
 - 恢复时，未改动的文件会重新从磁盘读取（因此外部改动会体现出来），有改动的则把你的草稿叠加在
   磁盘内容之上；若文件被删除/移动但你有未保存编辑，草稿会作为未命名缓冲区保留，而非丢弃。
+- 后退/前进导航历史也仅在本次运行中有效，不会随会话在重启后恢复。
 
 `Ctrl/Cmd+Shift+T` 可重开最近关闭的标签。旧窗口会话使用 `session.json`，多窗口分别使用
 `session-<id>.json`，都存于设置同目录（见[设置项参考](#zh-settings)）。
@@ -864,6 +893,7 @@ Sublime 的 “hot exit”）。
 | 跳转到符号 | `Ctrl+R` | `Cmd+R` |
 | 跳转到行 | `Ctrl+G` | `Cmd+G` |
 | 跳转到匹配括号 | `Ctrl+Shift+\` | `Cmd+Shift+\` |
+| 跳转历史后退 / 前进 | `Alt+←` / `Alt+→` | `Alt+←` / `Alt+→` |
 | 新建 / 打开文件 | `Ctrl+N` / `Ctrl+O` | `Cmd+N` / `Cmd+O` |
 | 打开文件夹 | `Ctrl+Shift+O` | `Cmd+Shift+O` |
 | 保存 / 另存为 / 全部保存 | `Ctrl+S` / `Ctrl+Shift+S` / `Ctrl+Alt+S` | `Cmd+S` / `Cmd+Shift+S` / `Cmd+Alt+S` |
