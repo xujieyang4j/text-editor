@@ -64,7 +64,7 @@ const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
   'toggle-minimap': '切换缩略图', 'toggle-outline': '切换大纲', 'fold-current': '折叠当前代码块', 'unfold-current': '展开当前代码块', 'fold-all': '折叠全部代码块', 'unfold-all': '展开全部代码块', 'toggle-distraction-free': '切换专注模式', 'toggle-spell-check': '切换拼写检查', 'toggle-word-wrap': '切换自动换行', 'toggle-theme': '切换明暗主题', 'select-color-scheme': '选择配色方案…', 'font-zoom-in': '放大字体', 'font-zoom-out': '缩小字体', 'font-zoom-reset': '重置字体大小',
   'toggle-preview': '切换 Markdown 预览', 'open-in-browser': '在浏览器中打开', 'select-language': '设置语法…', 'command-palette': '命令面板…',
   build: '构建', 'toggle-terminal': '切换终端', 'document-statistics': '文档统计', 'select-build-system': '选择构建系统…', 'import-sublime-build': '导入 Sublime 构建系统…', 'format-document': '格式化文档', 'toggle-problems': '切换构建输出', 'language-tools': '配置语言工具…',
-  'lsp-hover': '显示悬停信息', 'lsp-definition': '转到定义', 'lsp-references': '查找引用', 'lsp-rename': '重命名符号',
+  'lsp-hover': '显示悬停信息', 'lsp-definition': '转到定义', 'lsp-references': '查找引用', 'lsp-rename': '重命名符号', 'toggle-language-servers': '显示语言服务器',
   'toggle-git': '切换 Git 更改', 'refresh-git': '刷新 Git 更改', 'open-git-conflicts': '打开合并冲突', 'check-for-updates': '检查更新…',
   'open-marketplace': '浏览插件市场…', 'install-plugin': '安装本地插件…', 'manage-plugins': '管理插件…', 'insert-snippet': '插入片段…', 'import-sublime-snippet': '导入 Sublime 片段…',
   'record-macro': '开始/停止录制宏', 'run-macro': '运行上次宏', 'save-macro': '保存上次宏…', 'run-saved-macro': '运行已保存宏…',

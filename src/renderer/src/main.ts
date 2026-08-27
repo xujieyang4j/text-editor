@@ -13,6 +13,7 @@ import { parseLosslessJson, stringifyLosslessJson } from '../../shared/losslessJ
 import { textStatistics, type TextStatistics } from '../../shared/text.js'
 import { BuildPanel } from './buildPanel.js'
 import { TerminalPanel } from './terminalPanel.js'
+import { LanguageServerPanel } from './languageServerPanel.js'
 import { SettingsPanel } from './settingsPanel.js'
 import { MarkdownPreview, isMarkdown, isHtml } from './preview.js'
 import { COMMANDS, localizedCommands } from './commands.js'
@@ -45,6 +46,8 @@ import {
   type LayoutKind,
   type SessionLayout,
   type LanguageServerDiagnosticEvent,
+  type LanguageServerStatusEvent,
+  type LanguageServerLogEvent,
   type BuildSystem,
   type BuildProblem,
   type BuildOutput
@@ -82,6 +85,16 @@ interface EditorGroup {
   renderedDocId: string | null
 }
 
+/** Keep every palette mode mutually exclusive with the language-server panel. */
+class AppPalette extends Palette {
+  beforeOpen?: () => void
+
+  override open(options: Parameters<Palette['open']>[0]): void {
+    this.beforeOpen?.()
+    super.open(options)
+  }
+}
+
 /**
  * The renderer application shell. Owns the list of open documents, the single
  * CodeMirror editor instance, the tab bar, file tree, status bar, palette and
@@ -91,12 +104,13 @@ interface EditorGroup {
 class App {
   private primaryEditor!: Editor
   private tree: FileTree
-  private palette = new Palette()
+  private palette = new AppPalette()
   private searchPanel: WorkspaceSearchPanel
   private findResults: FindResultsView
   private gitPanel: GitPanel
   private buildPanel!: BuildPanel
   private terminalPanel!: TerminalPanel
+  private languageServerPanel: LanguageServerPanel
   private settingsPanel!: SettingsPanel
   private preview!: MarkdownPreview
   private jsonView!: JsonView
@@ -274,6 +288,11 @@ class App {
       }
     })
     this.outlinePanelHost.appendChild(this.outlinePanel.element)
+    this.languageServerPanel = new LanguageServerPanel({
+      onRestart: (key) => window.editor.restartLanguageServer(key)
+    })
+    document.body.appendChild(this.languageServerPanel.element)
+    this.palette.beforeOpen = () => this.languageServerPanel.toggle(false)
     this.createConflictBar()
     // The status-bar language field opens the syntax picker (like Sublime).
     this.statusLanguage.addEventListener('click', () => this.pickLanguage())
@@ -306,6 +325,8 @@ class App {
     window.editor.onBuildOutput((output) => this.handleBuildOutput(output))
     window.editor.onTerminalOutput((output) => this.handleTerminalOutput(output))
     window.editor.onLanguageServerDiagnostics((event) => this.applyLanguageServerDiagnostics(event))
+    window.editor.onLanguageServerStatus((event: LanguageServerStatusEvent) => this.languageServerPanel.updateStatus(event))
+    window.editor.onLanguageServerLog((event: LanguageServerLogEvent) => this.languageServerPanel.appendLog(event))
     void this.boot()
   }
 
@@ -565,6 +586,7 @@ class App {
         this.setLocale('en-US')
         break
       case 'open-settings':
+        this.closeOverlaysForLanguageServerPeer()
         this.settingsPanel.toggle(true)
         break
       case 'lsp-hover':
@@ -788,10 +810,14 @@ class App {
         }
         break
       case 'toggle-problems':
+        this.languageServerPanel.toggle(false)
         this.buildPanel.toggle()
         break
       case 'toggle-terminal':
         this.toggleTerminal()
+        break
+      case 'toggle-language-servers':
+        this.toggleLanguageServerPanel()
         break
       case 'document-statistics':
         this.showDocumentStatistics()
@@ -2314,6 +2340,9 @@ class App {
   }
 
   private async replaceWorkspaceFolders(root: string): Promise<void> {
+    for (const previousRoot of this.folders) {
+      if (previousRoot !== root) await this.releaseWorkspaceResources(previousRoot)
+    }
     this.folder = root
     this.folders = [root]
     await this.loadProject(root)
@@ -2328,6 +2357,25 @@ class App {
       ? `已打开文件夹：${root}`
       : `Opened folder: ${root}`
     this.scheduleSessionSave()
+  }
+
+  /** Release an old root before replacing the active workspace. */
+  private async releaseWorkspaceResources(root: string): Promise<void> {
+    if (this.lspSyncTimer !== null) {
+      window.clearTimeout(this.lspSyncTimer)
+      this.lspSyncTimer = null
+    }
+    if (root === this.folder) await this.stopTerminal()
+    for (const config of Object.values(this.project.languageServers)) {
+      await window.editor.stopLanguageServer(root, config).catch(() => undefined)
+    }
+    const retainedFiles = this.docs
+      .map((doc) => doc.path)
+      .filter((filePath): filePath is string => !!filePath && (
+        filePath === root || filePath.startsWith(root + '/') || filePath.startsWith(root + '\\')
+      ))
+    await window.editor.releaseWorkspace(root, retainedFiles)
+    this.languageServerPanel.clearRoot(root)
   }
 
   /** Add a folder to the active project without discarding its existing roots. */
@@ -2404,6 +2452,7 @@ class App {
         await window.editor.stopLanguageServer(root, config).catch(() => undefined)
       }
       await window.editor.releaseWorkspace(root, retainedFiles)
+      this.languageServerPanel.clearRoot(root)
       this.folders = this.folders.filter((candidate) => candidate !== root)
       this.projectSymbols = []
       this.workspaceWords = []
@@ -2448,6 +2497,7 @@ class App {
       const names = imported.roots.map((root) => baseName(root)).join(', ')
       if (!window.confirm(`Import Sublime project roots: ${names}?\n\nThis converts folders, exclude patterns, and Build Systems only. It will not execute Sublime Python plugins.`)) return
       const folders = await window.editor.acceptSublimeProjectImport(imported.token)
+      for (const previousRoot of [...this.folders]) await this.releaseWorkspaceResources(previousRoot)
       this.folder = null
       this.folders = []
       this.project = imported.project
@@ -2580,17 +2630,7 @@ class App {
   private async openRecentProjectPath(root: string): Promise<void> {
     try {
       const folder = await window.editor.openRecentProject(root)
-      this.folder = folder.root
-      this.folders = [folder.root]
-      await this.loadProject(folder.root)
-      this.workspaceName.textContent = baseName(folder.root).toUpperCase()
-      await this.renderProjectRoots()
-      if (!this.settings.distractionFree) this.setSidebarVisible(true)
-      void window.editor.watchWorkspace(folder.root)
-      void window.editor.addRecentProject(folder.root)
-      this.projectSymbols = []
-      this.workspaceWords = []
-      this.scheduleSessionSave()
+      await this.replaceWorkspaceFolders(folder.root)
     } catch (error) {
       this.showError('The recent project could not be opened.', error)
     }
@@ -3457,6 +3497,7 @@ class App {
       return
     }
     if (!command) {
+      this.languageServerPanel.toggle(false)
       this.buildPanel.toggle(true)
       this.showError('Enter a build command, such as “npm test”.')
       return
@@ -3469,6 +3510,7 @@ class App {
     this.buildPanel.setCommand(command)
     this.buildPanel.clear()
     this.buildOutputText = ''
+    this.languageServerPanel.toggle(false)
     this.buildPanel.toggle(true)
     try {
       await window.editor.runBuild({ root: this.folder, command, shell: true })
@@ -3545,6 +3587,7 @@ class App {
     this.buildPanel.setCommand(system.command)
     this.buildPanel.clear()
     this.buildOutputText = ''
+    this.languageServerPanel.toggle(false)
     this.buildPanel.toggle(true)
     try {
       const active = this.active
@@ -3600,6 +3643,7 @@ class App {
       return
     }
     const wasVisible = this.terminalPanel.isVisible
+    if (!wasVisible) this.languageServerPanel.toggle(false)
     this.terminalPanel.toggle(!wasVisible)
     if (!wasVisible && !this.terminalSessionId && !this.terminalStartingSessionId) void this.startTerminal()
   }
@@ -3616,6 +3660,7 @@ class App {
       return
     }
     if (this.terminalSessionId || this.terminalStartingSessionId) {
+      this.languageServerPanel.toggle(false)
       this.terminalPanel.toggle(true)
       return
     }
@@ -3631,6 +3676,7 @@ class App {
     // response, and must not be discarded as belonging to no active session.
     this.terminalSessionId = sessionId
     this.terminalPanel.clear()
+    this.languageServerPanel.toggle(false)
     this.terminalPanel.toggle(true)
     this.terminalPanel.setStarting(true)
     try {
@@ -3848,8 +3894,25 @@ class App {
 
   // ---- Command palette & Goto modes ----
 
+  private closeOverlaysForLanguageServerPeer(): void {
+    this.languageServerPanel.toggle(false)
+    this.palette.close(false)
+  }
+
+  private toggleLanguageServerPanel(): void {
+    const show = !this.languageServerPanel.isVisible
+    if (show) {
+      this.palette.close(false)
+      this.settingsPanel.toggle(false)
+      this.buildPanel.toggle(false)
+      this.terminalPanel.toggle(false)
+    }
+    this.languageServerPanel.toggle(show)
+  }
+
   /** Ctrl/Cmd+Shift+P — fuzzy list of all commands. */
   private openCommandPalette(): void {
+    this.languageServerPanel.toggle(false)
     const items: PaletteItem[] = localizedCommands(this.settings.locale).map((c) => ({
       label: c.title,
       hint: c.hint,
@@ -3905,6 +3968,7 @@ class App {
     if (this.jsonView) this.jsonView.setLocale(locale)
     if (this.outlinePanel) this.outlinePanel.setLocale(locale)
     if (this.terminalPanel) this.terminalPanel.setLocale(locale)
+    if (this.languageServerPanel) this.languageServerPanel.setLocale(locale)
     if (this.settingsPanel) this.settingsPanel.setLocale(locale)
     this.jsonFormatBtn.textContent = locale === 'zh-CN' ? '格式化' : 'Format'
     this.jsonCompactBtn.textContent = locale === 'zh-CN' ? '压缩' : 'Compact'

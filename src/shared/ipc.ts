@@ -69,6 +69,9 @@ export const IPC = {
   languageServerRun: 'language-server:run',
   languageServerSync: 'language-server:sync',
   languageServerStop: 'language-server:stop',
+  languageServerStatus: 'language-server:status',
+  languageServerLog: 'language-server:log',
+  languageServerRestart: 'language-server:restart',
   languageServerDiagnostics: 'language-server:diagnostics',
   languageServerRequest: 'language-server:request',
   marketplaceList: 'marketplace:list',
@@ -642,6 +645,28 @@ export interface LanguageServerDiagnosticEvent {
   diagnostics: LanguageToolResult['diagnostics']
 }
 
+/** Lifecycle state published by a persistent language-server process. */
+export interface LanguageServerStatusEvent {
+  key: string
+  root: string
+  command: string
+  state: 'starting' | 'running' | 'stopping' | 'stopped' | 'error'
+  pid?: number
+  message?: string
+  capabilities?: unknown
+}
+
+/** A bounded log entry published by a persistent language-server process. */
+export interface LanguageServerLogEvent {
+  key: string
+  root: string
+  command: string
+  stream: 'stderr' | 'server'
+  level: 'info' | 'warning' | 'error'
+  text: string
+  timestamp: number | string
+}
+
 export interface LanguageServerResult {
   edits: Array<{
     startLine: number
@@ -828,6 +853,7 @@ export type MenuEvent =
   | 'lsp-definition'
   | 'lsp-references'
   | 'lsp-rename'
+  | 'toggle-language-servers'
   | 'select-color-scheme'
   | 'open-marketplace'
   | 'toggle-git'

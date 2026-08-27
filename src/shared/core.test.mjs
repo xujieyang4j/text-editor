@@ -6,6 +6,13 @@ import { incrementalChanges, revertIncrementalChange } from '../../out-test/rend
 import { createFromFile, createUntitled, nextUntitledName } from '../../out-test/renderer/src/documents.js'
 import { JsonNumber, parseLosslessJson, stringifyLosslessJson } from '../../out-test/shared/losslessJson.js'
 import { parseGitRemoteLines, parseGitTracking, sanitizeGitRemoteUrl } from '../../out-test/shared/git.js'
+import {
+  LspProtocolError,
+  MAX_LSP_HEADER_BYTES,
+  MAX_LSP_PAYLOAD_BYTES,
+  createLspMessageReader,
+  encodeLspMessage
+} from '../../out-test/shared/lspProtocol.js'
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { history } from '@codemirror/commands'
 import {
@@ -61,6 +68,164 @@ assert.deepEqual(parseGitTracking('origin/main\n', '3\t2\n', 'origin', 'refs/hea
   upstream: 'origin/main', remote: 'origin', remoteBranch: 'main', ahead: 3, behind: 2
 })
 assert.deepEqual(parseGitTracking('', 'bad values'), {})
+
+const lspFrame = (payload) => Buffer.concat([
+  Buffer.from(`Content-Length: ${payload.length}\r\n\r\n`, 'ascii'),
+  payload
+])
+const lspHarness = () => {
+  const messages = []
+  const errors = []
+  return {
+    messages,
+    errors,
+    read: createLspMessageReader(
+      (message) => messages.push(message),
+      (error) => errors.push(error)
+    )
+  }
+}
+const assertProtocolError = (error, fatal, pattern) => {
+  assert.ok(error instanceof LspProtocolError)
+  assert.equal(error.fatal, fatal)
+  assert.match(error.message, pattern)
+}
+
+const chunkedLsp = lspHarness()
+const unicodeFrame = encodeLspMessage({ jsonrpc: '2.0', id: 1, result: '你好🙂' })
+for (let index = 0; index < unicodeFrame.length; index += 1) {
+  chunkedLsp.read(unicodeFrame.subarray(index, index + 1))
+}
+assert.deepEqual(chunkedLsp.messages, [{ jsonrpc: '2.0', id: 1, result: '你好🙂' }])
+assert.equal(chunkedLsp.errors.length, 0)
+
+const lowerCasePayload = Buffer.from('{"jsonrpc":"2.0","method":"ready"}')
+const lowerCaseFrame = Buffer.concat([
+  Buffer.from(`content-length: ${lowerCasePayload.length}\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n`),
+  lowerCasePayload
+])
+const consecutiveLsp = lspHarness()
+consecutiveLsp.read(Buffer.concat([
+  lowerCaseFrame,
+  encodeLspMessage({ jsonrpc: '2.0', id: 2, result: null })
+]))
+assert.deepEqual(consecutiveLsp.messages, [
+  { jsonrpc: '2.0', method: 'ready' },
+  { jsonrpc: '2.0', id: 2, result: null }
+])
+assert.equal(consecutiveLsp.errors.length, 0)
+
+// Once framing is untrustworthy, no bytes (including an embedded fake frame)
+// are scanned for a new Content-Length marker and the reader stays stopped.
+const ignoredMessage = encodeLspMessage({ jsonrpc: '2.0', id: 'ignored' })
+const fatalFrames = [
+  { bytes: Buffer.from('Content-Length: nope\r\n\r\n'), pattern: /Content-Length/ },
+  { bytes: Buffer.from('Content-Length: +2\r\n\r\n'), pattern: /Content-Length/ },
+  { bytes: Buffer.from('Content-Length: 2.0\r\n\r\n'), pattern: /Content-Length/ },
+  { bytes: Buffer.from('Content-Length: 9007199254740992\r\n\r\n'), pattern: /Content-Length/ },
+  { bytes: Buffer.from('Content-Type: application/json\r\n\r\n'), pattern: /Missing.*Content-Length/ },
+  { bytes: Buffer.from('Content-Length: 2\r\ncontent-length: 2\r\n\r\n'), pattern: /Duplicate/ },
+  { bytes: Buffer.from('Not-A-Header\r\n\r\n'), pattern: /Malformed/ },
+  {
+    bytes: Buffer.from(`Content-Length: ${MAX_LSP_PAYLOAD_BYTES + 1}\r\n\r\n`),
+    pattern: /payload exceeds/
+  },
+  { bytes: Buffer.alloc(MAX_LSP_HEADER_BYTES + 1, 120), pattern: /header exceeds/ },
+  {
+    bytes: Buffer.concat([
+      Buffer.from('Content-Length: 2\r\nX-Non-Ascii: ', 'ascii'),
+      Buffer.from([0xff]),
+      Buffer.from('\r\n\r\n', 'ascii')
+    ]),
+    pattern: /ASCII/
+  }
+]
+for (const { bytes, pattern } of fatalFrames) {
+  const fatalLsp = lspHarness()
+  fatalLsp.read(Buffer.concat([bytes, ignoredMessage]))
+  fatalLsp.read(ignoredMessage)
+  assert.deepEqual(fatalLsp.messages, [])
+  assert.equal(fatalLsp.errors.length, 1)
+  assertProtocolError(fatalLsp.errors[0], true, pattern)
+}
+
+// Exactly MAX_LSP_HEADER_BYTES before the delimiter is valid.
+const objectPayload = Buffer.from('{}', 'utf8')
+const exactHeaderPrefix = Buffer.from(
+  `Content-Length: ${objectPayload.length}\r\nX-Padding: `,
+  'ascii'
+)
+const exactHeader = Buffer.concat([
+  exactHeaderPrefix,
+  Buffer.alloc(MAX_LSP_HEADER_BYTES - exactHeaderPrefix.length, 120)
+])
+assert.equal(exactHeader.length, MAX_LSP_HEADER_BYTES)
+const headerBoundaryLsp = lspHarness()
+headerBoundaryLsp.read(Buffer.concat([
+  exactHeader,
+  Buffer.from('\r\n\r\n', 'ascii'),
+  objectPayload
+]))
+assert.deepEqual(headerBoundaryLsp.messages, [{}])
+assert.deepEqual(headerBoundaryLsp.errors, [])
+
+// Invalid payload content has a known boundary, so it is nonfatal and the next
+// complete frame is still parsed. This includes strict UTF-8 decoding.
+const payloadRecoveryLsp = lspHarness()
+payloadRecoveryLsp.read(Buffer.concat([
+  lspFrame(Buffer.from([0xc3, 0x28])),
+  lspFrame(Buffer.from('{"incomplete":', 'utf8')),
+  lspFrame(Buffer.from('null', 'utf8')),
+  lspFrame(Buffer.from('[1,2,3]', 'utf8')),
+  lspFrame(Buffer.from('"string"', 'utf8')),
+  lspFrame(Buffer.alloc(0)),
+  encodeLspMessage({ jsonrpc: '2.0', id: 3, result: 'recovered' })
+]))
+assert.deepEqual(payloadRecoveryLsp.messages, [
+  { jsonrpc: '2.0', id: 3, result: 'recovered' }
+])
+assert.equal(payloadRecoveryLsp.errors.length, 6)
+assertProtocolError(payloadRecoveryLsp.errors[0], false, /UTF-8/)
+assertProtocolError(payloadRecoveryLsp.errors[1], false, /Invalid JSON/)
+for (const error of payloadRecoveryLsp.errors.slice(2, 5)) {
+  assertProtocolError(error, false, /JSON object/)
+}
+assertProtocolError(payloadRecoveryLsp.errors[5], false, /Invalid JSON/)
+
+// Exercise large, irregularly chunked input and both inclusive payload limits.
+const emptyDataBytes = Buffer.byteLength(JSON.stringify({ data: '' }), 'utf8')
+const maximumMessage = { data: 'x'.repeat(MAX_LSP_PAYLOAD_BYTES - emptyDataBytes) }
+const maximumFrame = encodeLspMessage(maximumMessage)
+const maximumPayloadStart = maximumFrame.indexOf('\r\n\r\n') + 4
+assert.equal(maximumFrame.length - maximumPayloadStart, MAX_LSP_PAYLOAD_BYTES)
+const maximumLsp = lspHarness()
+for (let offset = 0; offset < maximumFrame.length; offset += 65_537) {
+  maximumLsp.read(maximumFrame.subarray(offset, offset + 65_537))
+}
+assert.equal(maximumLsp.messages.length, 1)
+assert.equal(maximumLsp.messages[0].data.length, maximumMessage.data.length)
+assert.equal(maximumLsp.errors.length, 0)
+assert.throws(
+  () => encodeLspMessage({ data: `${maximumMessage.data}x` }),
+  /payload exceeds/
+)
+
+for (const value of [undefined, null, true, 1, 'message', []]) {
+  assert.throws(() => encodeLspMessage(value), /non-null JSON object/)
+}
+const circularMessage = {}
+circularMessage.self = circularMessage
+for (const value of [
+  circularMessage,
+  { value: 1n },
+  { toJSON: () => undefined },
+  { toJSON: () => [] }
+]) {
+  assert.throws(() => encodeLspMessage(value), {
+    name: 'TypeError',
+    message: 'LSP message is not JSON serializable.'
+  })
+}
 
 const runStateCommand = (box, command) => command({
   state: box.state,

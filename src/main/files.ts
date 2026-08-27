@@ -2,6 +2,7 @@ import { dialog, ipcMain, BrowserWindow, app, shell, clipboard, type IpcMainInvo
 import { promises as fs, watch, type FSWatcher } from 'fs'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process'
 import { promisify } from 'util'
+import { StringDecoder } from 'string_decoder'
 import { createHash } from 'crypto'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -9,6 +10,7 @@ import { detectLineEnding, encodeText as encodePreservedText } from '../shared/t
 import { isBinaryBuffer, maxEditableBytes } from '../shared/filePolicy.js'
 import { extractWorkspaceSymbols } from '../shared/symbolIndex.js'
 import { parseGitRemoteLines, parseGitTracking } from '../shared/git.js'
+import { createLspMessageReader, encodeLspMessage, LspProtocolError } from '../shared/lspProtocol.js'
 import {
   IPC,
   DEFAULT_SETTINGS,
@@ -43,6 +45,8 @@ import {
   type LanguageServerDiagnosticEvent,
   type LanguageServerInteractiveRequest,
   type LanguageServerInteractiveResult,
+  type LanguageServerStatusEvent,
+  type LanguageServerLogEvent,
   type LanguageLocation,
   type LanguageRenameEdit,
   type LanguageCompletionItem,
@@ -100,17 +104,99 @@ const terminalCleanupBound = new Set<number>()
 const MAX_TERMINAL_OUTPUT_CHUNK_BYTES = 256 * 1024
 interface PersistentLanguageServer {
   child: ChildProcessWithoutNullStreams
+  processId: number | undefined
+  processGroupId: number | undefined
   root: string
+  config: LanguageServerSyncRequest['config']
   configKey: string
   initialized: boolean
+  capabilities?: string[]
   nextId: number
-  documents: Map<string, number>
+  documents: Map<string, LanguageServerDocumentSnapshot>
   pending: Map<number, (message: Record<string, unknown>) => void>
   sender: Electron.WebContents
   ready: Promise<void>
   resolveReady: () => void
+  initializeTimer: ReturnType<typeof setTimeout> | null
+  processClosed: Promise<void>
+  resolveProcessClosed: () => void
+  flushStderr: () => void
+  writeQueue: Buffer[]
+  queuedWriteBytes: number
+  writeInProgress: boolean
+  writeDrainListener?: () => void
+  logBuckets: Map<string, LanguageServerLogBucket>
+  logBufferedBytes: number
+  logDroppedMessages: number
+  logFlushTimer: ReturnType<typeof setTimeout> | null
+  logRateStartedAt: number
+  logRateBytes: number
+  diagnosticRateStartedAt: number
+  diagnosticRateBytes: number
+  diagnosticRateEvents: number
+  diagnosticDroppedEvents: number
+  processCloseObserved: boolean
+  cleaned: boolean
+  stopping: boolean
+  restartable: boolean
+  stopPromise?: Promise<void>
+  terminationPromise?: Promise<void>
+}
+interface LanguageServerLogBucket {
+  stream: LanguageServerLogEvent['stream']
+  level: LanguageServerLogEvent['level']
+  chunks: string[]
+}
+interface LanguageServerDocumentSnapshot {
+  content: string
+  languageId: string
+  version: number
+}
+interface LanguageServerRestartDescriptor {
+  sender: Electron.WebContents
+  root: string
+  config: LanguageServerSyncRequest['config']
+  documents: Map<string, LanguageServerDocumentSnapshot>
+}
+interface LanguageServerRestartOperation {
+  descriptor: LanguageServerRestartDescriptor
+  source?: PersistentLanguageServer
+  replacement?: PersistentLanguageServer
+  cancelled: boolean
+  promise: Promise<void>
+}
+interface LanguageServerExplicitStop {
+  sender: Electron.WebContents
+  root: string
+  promise: Promise<void>
 }
 const languageServers = new Map<string, PersistentLanguageServer>()
+const languageServerRestarts = new Map<string, LanguageServerRestartOperation>()
+const languageServerTombstones = new Map<string, LanguageServerRestartDescriptor>()
+const languageServerExplicitStops = new Map<string, LanguageServerExplicitStop>()
+const languageServerTerminations = new Map<PersistentLanguageServer, Promise<void>>()
+const languageServerRootReleases = new WeakMap<Electron.WebContents, Set<string>>()
+const languageServerSenderCleanupBound = new WeakSet<Electron.WebContents>()
+const MAX_LANGUAGE_SERVER_TOMBSTONES_PER_SENDER = 32
+const MAX_LANGUAGE_SERVER_TOMBSTONE_DOCUMENTS = 32
+const MAX_LANGUAGE_SERVER_TOMBSTONE_CHARS = 1024 * 1024
+const MAX_LANGUAGE_SERVER_LOG_CHARS = 64 * 1024
+const MAX_LANGUAGE_SERVER_STDIN_QUEUE_BYTES = 16 * 1024 * 1024
+const LANGUAGE_SERVER_LOG_FLUSH_MS = 100
+const MAX_LANGUAGE_SERVER_LOG_BATCH_BYTES = 64 * 1024
+const MAX_LANGUAGE_SERVER_LOG_BYTES_PER_SECOND = 256 * 1024
+const MAX_LANGUAGE_SERVER_LOG_CHUNKS_PER_BUCKET = 256
+const LANGUAGE_SERVER_LOG_SENTINEL_RESERVE_BYTES = 256
+const MAX_LANGUAGE_SERVER_DIAGNOSTICS = 1_000
+const MAX_LANGUAGE_SERVER_DIAGNOSTIC_MESSAGE_BYTES = 256 * 1024
+const MAX_LANGUAGE_SERVER_DIAGNOSTIC_PATH_CHARS = 32 * 1024
+const MAX_LANGUAGE_SERVER_DIAGNOSTIC_EVENTS_PER_SECOND = 20
+const MAX_LANGUAGE_SERVER_DIAGNOSTIC_IPC_BYTES_PER_SECOND = 1024 * 1024
+const MAX_LANGUAGE_SERVER_CAPABILITY_NAMES = 128
+const MAX_LANGUAGE_SERVER_CAPABILITY_CHARS = 32 * 1024
+const LANGUAGE_SERVER_INITIALIZE_TIMEOUT_MS = 15_000
+const LANGUAGE_SERVER_GRACEFUL_TIMEOUT_MS = 500
+const LANGUAGE_SERVER_CLOSE_TIMEOUT_MS = 500
 const execFileAsync = promisify(execFile)
 const windowSessionIds = new Map<number, string>()
 const replaceUndoTransactions = new Map<string, { expiresAt: number; files: Map<string, Buffer> }>()
@@ -177,6 +263,40 @@ function assertGrantedRoot(event: IpcMainInvokeEvent, root: string): void {
   }
 }
 
+function isLanguageServerRootReleasing(sender: Electron.WebContents, root: string): boolean {
+  return languageServerRootReleases.get(sender)?.has(path.resolve(root)) === true
+}
+
+function assertLanguageServerRootNotReleasing(sender: Electron.WebContents, root: string): void {
+  if (isLanguageServerRootReleasing(sender, root)) {
+    throw new Error('This workspace is currently being released.')
+  }
+}
+
+/** Recheck both parts of LSP authorisation immediately before process use/start. */
+function assertLanguageServerRootAvailable(sender: Electron.WebContents, root: string): void {
+  const resolvedRoot = path.resolve(root)
+  if (!grantedRoots.get(sender.id)?.has(resolvedRoot)) {
+    throw new Error('This workspace has not been authorised for the current editor window.')
+  }
+  assertLanguageServerRootNotReleasing(sender, resolvedRoot)
+}
+
+function beginLanguageServerRootRelease(sender: Electron.WebContents, root: string): void {
+  const resolvedRoot = path.resolve(root)
+  const roots = languageServerRootReleases.get(sender) ?? new Set<string>()
+  if (roots.has(resolvedRoot)) throw new Error('This workspace is already being released.')
+  roots.add(resolvedRoot)
+  languageServerRootReleases.set(sender, roots)
+}
+
+function finishLanguageServerRootRelease(sender: Electron.WebContents, root: string): void {
+  const roots = languageServerRootReleases.get(sender)
+  if (!roots) return
+  roots.delete(path.resolve(root))
+  if (roots.size === 0) languageServerRootReleases.delete(sender)
+}
+
 function cleanupGrants(senderId: number): void {
   grantedFiles.delete(senderId)
   grantedRoots.delete(senderId)
@@ -197,29 +317,39 @@ function closeWorkspaceWatcher(senderId: number, root: string): void {
 }
 
 /** Drop a recursive workspace grant but preserve direct grants for open tabs. */
-function releaseWorkspaceRoot(event: IpcMainInvokeEvent, root: string, retainFiles: unknown): void {
+async function releaseWorkspaceRoot(event: IpcMainInvokeEvent, root: string, retainFiles: unknown): Promise<void> {
   const resolvedRoot = path.resolve(root)
   const senderId = event.sender.id
   const roots = grantedRoots.get(senderId)
   if (!roots?.has(resolvedRoot)) throw new Error('This workspace has not been authorised for the current editor window.')
   if (!Array.isArray(retainFiles) || retainFiles.length > 100) throw new Error('Invalid retained workspace files.')
-  // A workspace grant may previously have made files in this root accessible
-  // through a direct OS dialog or a restored session. Once the root is removed,
-  // retain *only* the tabs explicitly named by the renderer.
-  const directFiles = grantedFiles.get(senderId)
-  if (directFiles) {
-    for (const file of directFiles) if (isInside(resolvedRoot, file)) directFiles.delete(file)
-    if (directFiles.size === 0) grantedFiles.delete(senderId)
-  }
   for (const file of retainFiles) {
     if (typeof file !== 'string' || !path.isAbsolute(file) || !isInside(resolvedRoot, path.resolve(file))) {
       throw new Error('A retained file is outside the workspace being removed.')
     }
-    grantFile(senderId, file)
   }
-  closeWorkspaceWatcher(senderId, resolvedRoot)
-  roots.delete(resolvedRoot)
-  if (roots.size === 0) grantedRoots.delete(senderId)
+  beginLanguageServerRootRelease(event.sender, resolvedRoot)
+  try {
+    // A server is authorised by the workspace grant, not by the renderer's
+    // current configuration. Stop every generation before revoking that grant.
+    await stopAllLanguageServersForRoot(event.sender, resolvedRoot)
+    // A workspace grant may previously have made files in this root accessible
+    // through a direct OS dialog or a restored session. Once the root is removed,
+    // retain *only* the tabs explicitly named by the renderer.
+    const directFiles = grantedFiles.get(senderId)
+    if (directFiles) {
+      for (const file of directFiles) if (isInside(resolvedRoot, file)) directFiles.delete(file)
+      if (directFiles.size === 0) grantedFiles.delete(senderId)
+    }
+    for (const file of retainFiles) {
+      grantFile(senderId, file)
+    }
+    closeWorkspaceWatcher(senderId, resolvedRoot)
+    roots.delete(resolvedRoot)
+    if (roots.size === 0) grantedRoots.delete(senderId)
+  } finally {
+    finishLanguageServerRootRelease(event.sender, resolvedRoot)
+  }
 }
 
 /**
@@ -1526,61 +1656,532 @@ async function runLanguageTool(request: LanguageToolRequest): Promise<LanguageTo
   })
 }
 
-/** Read LSP Content-Length framed JSON-RPC messages from a child process. */
-function createLspReader(onMessage: (message: Record<string, unknown>) => void): (chunk: Buffer) => void {
-  let buffer = Buffer.alloc(0)
-  return (chunk: Buffer): void => {
-    buffer = Buffer.concat([buffer, chunk])
-    while (true) {
-      const headerEnd = buffer.indexOf('\r\n\r\n')
-      if (headerEnd < 0) return
-      const header = buffer.subarray(0, headerEnd).toString('ascii')
-      const length = Number(/^Content-Length:\s*(\d+)/im.exec(header)?.[1])
-      if (!Number.isFinite(length) || length < 0) { buffer = Buffer.alloc(0); return }
-      const messageStart = headerEnd + 4
-      if (buffer.length < messageStart + length) return
-      const payload = buffer.subarray(messageStart, messageStart + length).toString('utf8')
-      buffer = buffer.subarray(messageStart + length)
-      try {
-        const parsed = JSON.parse(payload) as unknown
-        if (parsed && typeof parsed === 'object') onMessage(parsed as Record<string, unknown>)
-      } catch {
-        // Ignore malformed server packets and keep processing the stream.
-      }
+function languageServerKey(senderId: number, root: string, config: { command: string; args: string[] }): string {
+  const identity = JSON.stringify([senderId, path.resolve(root), config.command, config.args])
+  return `lsp-${createHash('sha256').update(identity).digest('hex')}`
+}
+
+function boundedLanguageServerText(text: string, limit = MAX_LANGUAGE_SERVER_LOG_CHARS): string {
+  if (text.length <= limit) return text
+  const suffix = '\n[Language server log truncated]'
+  return `${text.slice(0, Math.max(0, limit - suffix.length))}${suffix}`
+}
+
+/** Bound UTF-8 text without first allocating a Buffer for the entire input. */
+function boundedLanguageServerUtf8Text(text: string, limit: number): string {
+  if (limit <= 0) return ''
+  if (Buffer.byteLength(text, 'utf8') <= limit) return text
+  let low = 0
+  let high = Math.min(text.length, limit)
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if (Buffer.byteLength(text.slice(0, middle), 'utf8') <= limit) low = middle
+    else high = middle - 1
+  }
+  // Do not split a valid surrogate pair at the truncation boundary.
+  if (low > 0 && low < text.length &&
+      text.charCodeAt(low - 1) >= 0xd800 && text.charCodeAt(low - 1) <= 0xdbff &&
+      text.charCodeAt(low) >= 0xdc00 && text.charCodeAt(low) <= 0xdfff) low -= 1
+  // Materialise the bounded slice so a short queued log cannot retain an
+  // otherwise huge LSP payload string until the next flush.
+  return Buffer.from(text.slice(0, low), 'utf8').toString('utf8')
+}
+
+function languageServerErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error && error.message ? error.message : fallback
+  return boundedLanguageServerText(message, 2_000)
+}
+
+function isLanguageServerObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function summarizeLanguageServerCapabilities(capabilities: Record<string, unknown>): string[] {
+  const names = Object.keys(capabilities)
+    .filter((name) => Boolean(capabilities[name]))
+    .sort()
+  const summary: string[] = []
+  let totalChars = 0
+  for (const name of names) {
+    if (summary.length >= MAX_LANGUAGE_SERVER_CAPABILITY_NAMES) break
+    const addedChars = name.length + (summary.length === 0 ? 0 : 2)
+    if (addedChars > MAX_LANGUAGE_SERVER_CAPABILITY_CHARS - totalChars) continue
+    summary.push(name)
+    totalChars += addedChars
+  }
+  return summary
+}
+
+function cloneLanguageServerDocuments(
+  documents: Map<string, LanguageServerDocumentSnapshot>
+): Map<string, LanguageServerDocumentSnapshot> {
+  return new Map(
+    [...documents].map(([uri, document]) => [uri, { ...document }] as const)
+  )
+}
+
+function rememberLanguageServerTombstone(
+  key: string,
+  descriptor: LanguageServerRestartDescriptor
+): void {
+  if (descriptor.sender.isDestroyed()) return
+  const previous = languageServerTombstones.get(key)
+  const candidates = previous?.sender === descriptor.sender
+    ? [...previous.documents, ...descriptor.documents]
+    : [...descriptor.documents]
+  const documents = new Map<string, LanguageServerDocumentSnapshot>()
+  let documentChars = 0
+  for (const [uri, document] of candidates.reverse()) {
+    if (documents.has(uri)) continue
+    const chars = uri.length + document.content.length + document.languageId.length
+    if (documents.size >= MAX_LANGUAGE_SERVER_TOMBSTONE_DOCUMENTS ||
+        chars > MAX_LANGUAGE_SERVER_TOMBSTONE_CHARS - documentChars) continue
+    documents.set(uri, { ...document })
+    documentChars += chars
+  }
+  languageServerTombstones.delete(key)
+  languageServerTombstones.set(key, {
+    sender: descriptor.sender,
+    root: descriptor.root,
+    config: { command: descriptor.config.command, args: [...descriptor.config.args] },
+    documents
+  })
+
+  const ownedKeys = [...languageServerTombstones]
+    .filter(([, candidate]) => candidate.sender === descriptor.sender)
+    .map(([candidateKey]) => candidateKey)
+  for (const staleKey of ownedKeys.slice(0, -MAX_LANGUAGE_SERVER_TOMBSTONES_PER_SENDER)) {
+    languageServerTombstones.delete(staleKey)
+  }
+}
+
+function languageServerDescriptor(server: PersistentLanguageServer): LanguageServerRestartDescriptor {
+  return {
+    sender: server.sender,
+    root: server.root,
+    config: { command: server.config.command, args: [...server.config.args] },
+    documents: cloneLanguageServerDocuments(server.documents)
+  }
+}
+
+function sendLanguageServerStatusEvent(
+  sender: Electron.WebContents,
+  event: LanguageServerStatusEvent
+): void {
+  if (sender.isDestroyed()) return
+  try { sender.send(IPC.languageServerStatus, event) } catch {
+    // The renderer may be between its destruction signal and final teardown.
+  }
+}
+
+function sendLanguageServerStatus(
+  server: PersistentLanguageServer,
+  state: LanguageServerStatusEvent['state'],
+  message?: string
+): void {
+  const event: LanguageServerStatusEvent = {
+    key: server.configKey,
+    root: server.root,
+    command: server.config.command,
+    state,
+    ...(server.child.pid === undefined ? {} : { pid: server.child.pid }),
+    ...(message ? { message: boundedLanguageServerText(message, 2_000) } : {}),
+    ...(state === 'running' && server.capabilities !== undefined
+      ? { capabilities: server.capabilities }
+      : {})
+  }
+  sendLanguageServerStatusEvent(server.sender, event)
+}
+
+function sendLanguageServerLogEvent(
+  sender: Electron.WebContents,
+  event: LanguageServerLogEvent
+): void {
+  if (sender.isDestroyed()) return
+  try { sender.send(IPC.languageServerLog, event) } catch {
+    // Avoid noisy send-after-destroy warnings during renderer teardown.
+  }
+}
+
+function resetLanguageServerLogRateWindow(server: PersistentLanguageServer, now: number): void {
+  if (now < server.logRateStartedAt || now - server.logRateStartedAt >= 1_000) {
+    server.logRateStartedAt = now
+    server.logRateBytes = 0
+  }
+}
+
+function flushLanguageServerLogs(server: PersistentLanguageServer): void {
+  if (server.logFlushTimer !== null) {
+    clearTimeout(server.logFlushTimer)
+    server.logFlushTimer = null
+  }
+  const buckets = [...server.logBuckets.values()]
+  const bufferedBytes = server.logBufferedBytes
+  const droppedMessages = server.logDroppedMessages
+  server.logBuckets.clear()
+  server.logBufferedBytes = 0
+  server.logDroppedMessages = 0
+
+  for (const bucket of buckets) {
+    const text = bucket.chunks.join('')
+    if (!text) continue
+    sendLanguageServerLogEvent(server.sender, {
+      key: server.configKey,
+      root: server.root,
+      command: server.config.command,
+      stream: bucket.stream,
+      level: bucket.level,
+      text,
+      timestamp: Date.now()
+    })
+  }
+
+  if (droppedMessages > 0) {
+    const now = Date.now()
+    resetLanguageServerLogRateWindow(server, now)
+    const available = Math.min(
+      LANGUAGE_SERVER_LOG_SENTINEL_RESERVE_BYTES,
+      MAX_LANGUAGE_SERVER_LOG_BATCH_BYTES - bufferedBytes,
+      MAX_LANGUAGE_SERVER_LOG_BYTES_PER_SECOND - server.logRateBytes
+    )
+    const sentinel = boundedLanguageServerUtf8Text(
+      `\n[${droppedMessages} language-server log message${droppedMessages === 1 ? '' : 's'} truncated or dropped]\n`,
+      available
+    )
+    if (sentinel) {
+      server.logRateBytes += Buffer.byteLength(sentinel, 'utf8')
+      sendLanguageServerLogEvent(server.sender, {
+        key: server.configKey,
+        root: server.root,
+        command: server.config.command,
+        stream: 'server',
+        level: 'warning',
+        text: sentinel,
+        timestamp: now
+      })
     }
   }
 }
 
-function lspMessage(child: ChildProcessWithoutNullStreams, payload: Record<string, unknown>): void {
-  const content = JSON.stringify(payload)
-  child.stdin.write(`Content-Length: ${Buffer.byteLength(content)}\r\n\r\n${content}`)
+function sendLanguageServerLog(
+  server: PersistentLanguageServer,
+  stream: LanguageServerLogEvent['stream'],
+  level: LanguageServerLogEvent['level'],
+  text: string
+): void {
+  if (!text || server.cleaned) return
+  const now = Date.now()
+  resetLanguageServerLogRateWindow(server, now)
+  const available = Math.max(0, Math.min(
+    MAX_LANGUAGE_SERVER_LOG_BATCH_BYTES - LANGUAGE_SERVER_LOG_SENTINEL_RESERVE_BYTES - server.logBufferedBytes,
+    MAX_LANGUAGE_SERVER_LOG_BYTES_PER_SECOND - LANGUAGE_SERVER_LOG_SENTINEL_RESERVE_BYTES - server.logRateBytes
+  ))
+  const bounded = boundedLanguageServerUtf8Text(text, available)
+  const acceptedBytes = Buffer.byteLength(bounded, 'utf8')
+  const key = `${stream}:${level}`
+  const bucket = server.logBuckets.get(key)
+  if (bounded && (!bucket || bucket.chunks.length < MAX_LANGUAGE_SERVER_LOG_CHUNKS_PER_BUCKET)) {
+    const target = bucket ?? { stream, level, chunks: [] }
+    target.chunks.push(bounded)
+    server.logBuckets.set(key, target)
+    server.logBufferedBytes += acceptedBytes
+    server.logRateBytes += acceptedBytes
+  } else if (bounded) {
+    server.logDroppedMessages = Math.min(Number.MAX_SAFE_INTEGER, server.logDroppedMessages + 1)
+  }
+  if (acceptedBytes < Buffer.byteLength(text, 'utf8')) {
+    server.logDroppedMessages = Math.min(Number.MAX_SAFE_INTEGER, server.logDroppedMessages + 1)
+  }
+  if (server.logFlushTimer === null) {
+    server.logFlushTimer = setTimeout(() => flushLanguageServerLogs(server), LANGUAGE_SERVER_LOG_FLUSH_MS)
+    server.logFlushTimer.unref?.()
+  }
 }
 
-function languageServerKey(senderId: number, root: string, config: { command: string; args: string[] }): string {
-  return `${senderId}\u0000${path.resolve(root)}\u0000${config.command}\u0000${config.args.join('\u0000')}`
+function logLanguageServerWindowMessage(
+  server: PersistentLanguageServer,
+  message: Record<string, unknown>
+): void {
+  if (message.method !== 'window/logMessage' && message.method !== 'window/showMessage') return
+  const params = message.params as { type?: unknown; message?: unknown } | undefined
+  if (typeof params?.message !== 'string') return
+  const level: LanguageServerLogEvent['level'] = params.type === 1
+    ? 'error'
+    : params.type === 2
+      ? 'warning'
+      : 'info'
+  sendLanguageServerLog(server, 'server', level, params.message)
 }
 
-function lspDiagnostics(message: Record<string, unknown>): LanguageServerDiagnosticEvent | null {
+function terminateLanguageServerProcess(server: PersistentLanguageServer, force = false): void {
+  const signal = force ? 'SIGKILL' : 'SIGTERM'
+  if (process.platform !== 'win32' && server.processGroupId !== undefined) {
+    try {
+      process.kill(-server.processGroupId, signal)
+      return
+    } catch (error) {
+      // ESRCH means the complete process group is already gone. Other errors
+      // retain a safe direct-child fallback below.
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
+    }
+  }
+  // A child close only proves that the group leader exited; it is deliberately
+  // checked after the POSIX group signal above.
+  if (server.processCloseObserved || server.processId === undefined) return
+  if (process.platform === 'win32') {
+    execFile(
+      'taskkill',
+      ['/PID', String(server.processId), '/T', '/F'],
+      { windowsHide: true, timeout: LANGUAGE_SERVER_CLOSE_TIMEOUT_MS, maxBuffer: 64 * 1024 },
+      (error) => {
+        if (!error || server.processCloseObserved) return
+        try { server.child.kill() } catch {
+          // The direct child may already have exited.
+        }
+      }
+    )
+    return
+  }
+  try { server.child.kill(signal) } catch {
+    // The process may already have exited between the state check and kill.
+  }
+}
+
+function cleanupLanguageServer(
+  server: PersistentLanguageServer,
+  state: 'stopped' | 'error',
+  message?: string
+): void {
+  if (server.cleaned) return
+  server.flushStderr()
+  flushLanguageServerLogs(server)
+  server.cleaned = true
+  if (server.initializeTimer !== null) {
+    clearTimeout(server.initializeTimer)
+    server.initializeTimer = null
+  }
+  if (server.logFlushTimer !== null) {
+    clearTimeout(server.logFlushTimer)
+    server.logFlushTimer = null
+  }
+  if (server.writeDrainListener) {
+    server.child.stdin.off('drain', server.writeDrainListener)
+    server.writeDrainListener = undefined
+  }
+  server.writeQueue.length = 0
+  server.queuedWriteBytes = 0
+  if (languageServers.get(server.configKey) === server) languageServers.delete(server.configKey)
+  if (server.restartable) {
+    rememberLanguageServerTombstone(server.configKey, languageServerDescriptor(server))
+  }
+  server.resolveReady()
+  sendLanguageServerStatus(server, state, message)
+
+  const stoppedMessage = { error: { message: message ?? 'Language server stopped.' } }
+  const pending = [...server.pending.values()]
+  server.pending.clear()
+  for (const settle of pending) {
+    try { settle(stoppedMessage) } catch {
+      // One consumer must not prevent the remaining pending requests settling.
+    }
+  }
+}
+
+function failLanguageServer(
+  server: PersistentLanguageServer,
+  message: string,
+  log = true
+): void {
+  if (server.cleaned) return
+  if (log) sendLanguageServerLog(server, 'server', 'error', message)
+  if (server.stopping) cleanupLanguageServer(server, 'stopped')
+  else cleanupLanguageServer(server, 'error', message)
+  void trackLanguageServerTermination(server).catch(() => undefined)
+}
+
+function pumpLanguageServerWriteQueue(server: PersistentLanguageServer): void {
+  if (server.cleaned || server.writeInProgress) return
+  const frame = server.writeQueue.shift()
+  if (!frame) return
+  server.writeInProgress = true
+  let callbackFinished = false
+  let drainFinished = true
+  let settled = false
+  const settle = (error?: Error | null): void => {
+    if (settled || !callbackFinished || !drainFinished) return
+    settled = true
+    if (server.writeDrainListener) {
+      server.child.stdin.off('drain', server.writeDrainListener)
+      server.writeDrainListener = undefined
+    }
+    server.queuedWriteBytes = Math.max(0, server.queuedWriteBytes - frame.byteLength)
+    server.writeInProgress = false
+    if (error) {
+      failLanguageServer(server, languageServerErrorMessage(error, 'Could not write to the language server.'))
+      return
+    }
+    pumpLanguageServerWriteQueue(server)
+  }
+  try {
+    const accepted = server.child.stdin.write(frame, (error?: Error | null) => {
+      callbackFinished = true
+      if (error) drainFinished = true
+      settle(error)
+    })
+    if (!accepted) {
+      drainFinished = false
+      const onDrain = (): void => {
+        drainFinished = true
+        settle()
+      }
+      server.writeDrainListener = onDrain
+      server.child.stdin.once('drain', onDrain)
+    }
+  } catch (error) {
+    callbackFinished = true
+    drainFinished = true
+    settle(error instanceof Error ? error : new Error('Could not write to the language server.'))
+  }
+}
+
+/** Encode and enqueue one ordered message, terminating on failure or overflow. */
+function writeLanguageServerMessage(
+  server: PersistentLanguageServer,
+  payload: Record<string, unknown>
+): boolean {
+  if (server.cleaned || !server.child.stdin.writable || server.child.stdin.destroyed) {
+    failLanguageServer(server, 'Language server input is no longer writable.')
+    return false
+  }
+  let frame: Buffer
+  try {
+    frame = encodeLspMessage(payload)
+  } catch (error) {
+    failLanguageServer(server, languageServerErrorMessage(error, 'Could not encode an LSP message.'))
+    return false
+  }
+  if (frame.byteLength > MAX_LANGUAGE_SERVER_STDIN_QUEUE_BYTES - server.queuedWriteBytes) {
+    failLanguageServer(server, `Language server input exceeded the ${MAX_LANGUAGE_SERVER_STDIN_QUEUE_BYTES}-byte queue limit.`)
+    return false
+  }
+  try {
+    server.writeQueue.push(frame)
+    server.queuedWriteBytes += frame.byteLength
+    pumpLanguageServerWriteQueue(server)
+    return true
+  } catch (error) {
+    failLanguageServer(server, languageServerErrorMessage(error, 'Could not write to the language server.'))
+    return false
+  }
+}
+
+function bindLanguageServerSenderCleanup(sender: Electron.WebContents): void {
+  if (languageServerSenderCleanupBound.has(sender)) return
+  languageServerSenderCleanupBound.add(sender)
+  sender.once('destroyed', () => {
+    for (const [key, restart] of languageServerRestarts) {
+      if (restart.descriptor.sender !== sender) continue
+      restart.cancelled = true
+      languageServerTombstones.delete(key)
+    }
+    for (const [key, descriptor] of languageServerTombstones) {
+      if (descriptor.sender === sender) languageServerTombstones.delete(key)
+    }
+    for (const server of languageServers.values()) {
+      if (server.sender !== sender) continue
+      server.restartable = false
+      server.stopping = true
+      cleanupLanguageServer(server, 'stopped')
+      void trackLanguageServerTermination(server).catch(() => undefined)
+    }
+  })
+}
+
+function languageServerPosition(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.min(Number.MAX_SAFE_INTEGER - 1, Math.floor(value))
+    : 0
+}
+
+function lspDiagnostics(
+  server: PersistentLanguageServer,
+  message: Record<string, unknown>
+): { event: LanguageServerDiagnosticEvent; estimatedBytes: number; truncated: boolean } | null {
   if (message.method !== 'textDocument/publishDiagnostics') return null
   const params = message.params as { uri?: unknown; diagnostics?: unknown } | undefined
-  if (typeof params?.uri !== 'string' || !params.uri.startsWith('file:') || !Array.isArray(params.diagnostics)) return null
+  if (typeof params?.uri !== 'string' || params.uri.length > MAX_LANGUAGE_SERVER_DIAGNOSTIC_PATH_CHARS ||
+      !params.uri.startsWith('file:') || !Array.isArray(params.diagnostics)) return null
   let filePath: string
   try { filePath = fileURLToPath(params.uri) } catch { return null }
+  filePath = path.resolve(filePath)
+  if (!isInside(server.root, filePath)) return null
+
+  const diagnostics: LanguageServerDiagnosticEvent['diagnostics'] = []
+  let messageBytes = 0
+  let truncated = params.diagnostics.length > MAX_LANGUAGE_SERVER_DIAGNOSTICS
+  const inspected = Math.min(params.diagnostics.length, MAX_LANGUAGE_SERVER_DIAGNOSTICS)
+  for (let index = 0; index < inspected; index += 1) {
+    const item = params.diagnostics[index] as { range?: unknown; severity?: unknown; message?: unknown } | null
+    if (!item || typeof item !== 'object') continue
+    const remainingBytes = MAX_LANGUAGE_SERVER_DIAGNOSTIC_MESSAGE_BYTES - messageBytes
+    if (remainingBytes <= 0) {
+      truncated = true
+      break
+    }
+    const rawMessage = typeof item.message === 'string' ? item.message.slice(0, 2_000) : 'Language server diagnostic'
+    const diagnosticMessage = boundedLanguageServerUtf8Text(rawMessage, remainingBytes)
+    const bytes = Buffer.byteLength(diagnosticMessage, 'utf8')
+    if (!diagnosticMessage) {
+      truncated = true
+      break
+    }
+    if (bytes < Buffer.byteLength(rawMessage, 'utf8')) truncated = true
+    messageBytes += bytes
+    const range = item.range as { start?: { line?: unknown; character?: unknown }; end?: { line?: unknown; character?: unknown } } | undefined
+    const startLine = languageServerPosition(range?.start?.line)
+    const startCharacter = languageServerPosition(range?.start?.character)
+    diagnostics.push({
+      line: startLine + 1,
+      column: startCharacter + 1,
+      endLine: languageServerPosition(range?.end?.line ?? startLine) + 1,
+      endColumn: languageServerPosition(range?.end?.character ?? startCharacter) + 1,
+      severity: item.severity === 2 ? 'warning' : item.severity === 3 || item.severity === 4 ? 'info' : 'error',
+      message: diagnosticMessage
+    })
+  }
   return {
-    filePath,
-    diagnostics: params.diagnostics
-      .filter((item): item is { range?: unknown; severity?: unknown; message?: unknown } => !!item && typeof item === 'object')
-      .map((item) => {
-        const range = item.range as { start?: { line?: number; character?: number }; end?: { line?: number; character?: number } } | undefined
-        return {
-          line: (range?.start?.line ?? 0) + 1,
-          column: (range?.start?.character ?? 0) + 1,
-          endLine: (range?.end?.line ?? range?.start?.line ?? 0) + 1,
-          endColumn: (range?.end?.character ?? range?.start?.character ?? 0) + 1,
-          severity: item.severity === 2 ? 'warning' : item.severity === 3 || item.severity === 4 ? 'info' : 'error' as const,
-          message: typeof item.message === 'string' ? item.message.slice(0, 2_000) : 'Language server diagnostic'
-        }
-      })
+    event: { filePath, diagnostics },
+    estimatedBytes: Buffer.byteLength(filePath, 'utf8') + messageBytes + diagnostics.length * 96,
+    truncated
+  }
+}
+
+function sendLanguageServerDiagnostics(server: PersistentLanguageServer, message: Record<string, unknown>): void {
+  const diagnostic = lspDiagnostics(server, message)
+  if (!diagnostic || server.sender.isDestroyed()) return
+  const now = Date.now()
+  if (now < server.diagnosticRateStartedAt || now - server.diagnosticRateStartedAt >= 1_000) {
+    if (server.diagnosticDroppedEvents > 0) {
+      sendLanguageServerLog(server, 'server', 'warning',
+        `[${server.diagnosticDroppedEvents} language-server diagnostic event${server.diagnosticDroppedEvents === 1 ? '' : 's'} dropped by the IPC rate limit]\n`)
+    }
+    server.diagnosticRateStartedAt = now
+    server.diagnosticRateBytes = 0
+    server.diagnosticRateEvents = 0
+    server.diagnosticDroppedEvents = 0
+  }
+  if (server.diagnosticRateEvents >= MAX_LANGUAGE_SERVER_DIAGNOSTIC_EVENTS_PER_SECOND ||
+      diagnostic.estimatedBytes > MAX_LANGUAGE_SERVER_DIAGNOSTIC_IPC_BYTES_PER_SECOND - server.diagnosticRateBytes) {
+    server.diagnosticDroppedEvents = Math.min(Number.MAX_SAFE_INTEGER, server.diagnosticDroppedEvents + 1)
+    return
+  }
+  server.diagnosticRateEvents += 1
+  server.diagnosticRateBytes += diagnostic.estimatedBytes
+  if (diagnostic.truncated) {
+    sendLanguageServerLog(server, 'server', 'warning', '[Language-server diagnostics truncated to the IPC safety limit]\n')
+  }
+  try { server.sender.send(IPC.languageServerDiagnostics, diagnostic.event) } catch {
+    // The renderer may have begun tearing down after the destroyed check.
   }
 }
 
@@ -1589,15 +2190,54 @@ function startPersistentLanguageServer(
   root: string,
   config: LanguageServerSyncRequest['config']
 ): PersistentLanguageServer {
-  const key = languageServerKey(sender.id, root, config)
+  if (sender.isDestroyed()) throw new Error('The language-server owner is no longer available.')
+  const resolvedRoot = path.resolve(root)
+  assertLanguageServerRootAvailable(sender, resolvedRoot)
+  const savedConfig = { command: config.command, args: [...config.args] }
+  const key = languageServerKey(sender.id, resolvedRoot, savedConfig)
+  if ([...languageServerTerminations].some(([candidate]) =>
+    candidate.sender === sender && candidate.configKey === key)) {
+    throw new Error('The previous language-server process is still terminating.')
+  }
   const existing = languageServers.get(key)
   if (existing) return existing
-  const child = spawn(config.command, config.args, { cwd: root, env: process.env })
+
+  let child: ChildProcessWithoutNullStreams
+  try {
+    child = spawn(savedConfig.command, savedConfig.args, {
+      cwd: resolvedRoot,
+      env: process.env,
+      detached: process.platform !== 'win32',
+      windowsHide: true
+    })
+  } catch (error) {
+    const message = languageServerErrorMessage(error, 'Could not start the language server.')
+    const common = { key, root: resolvedRoot, command: savedConfig.command }
+    sendLanguageServerStatusEvent(sender, { ...common, state: 'starting' })
+    sendLanguageServerLogEvent(sender, {
+      ...common, stream: 'server', level: 'error', text: message, timestamp: Date.now()
+    })
+    sendLanguageServerStatusEvent(sender, { ...common, state: 'error', message })
+    throw error
+  }
+  const spawnedPid = child.pid
+  const processId = Number.isSafeInteger(spawnedPid) && (spawnedPid as number) > 1 && spawnedPid !== process.pid
+    ? spawnedPid as number
+    : undefined
+  // detached=true makes the POSIX child the leader of a new process group.
+  const processGroupId = process.platform === 'win32' ? undefined : processId
   let resolveReady = (): void => undefined
   const ready = new Promise<void>((resolve) => { resolveReady = resolve })
+  let resolveProcessClosed = (): void => undefined
+  const processClosed = new Promise<void>((resolve) => { resolveProcessClosed = resolve })
+  const stderrDecoder = new StringDecoder('utf8')
+  let stderrEnded = false
   const server: PersistentLanguageServer = {
     child,
-    root,
+    processId,
+    processGroupId,
+    root: resolvedRoot,
+    config: savedConfig,
     configKey: key,
     initialized: false,
     nextId: 1,
@@ -1605,47 +2245,141 @@ function startPersistentLanguageServer(
     pending: new Map(),
     sender,
     ready,
-    resolveReady
+    resolveReady,
+    initializeTimer: null,
+    processClosed,
+    resolveProcessClosed,
+    flushStderr: () => {
+      if (stderrEnded) return
+      stderrEnded = true
+      const finalText = stderrDecoder.end()
+      if (finalText) sendLanguageServerLog(server, 'stderr', 'error', finalText)
+    },
+    writeQueue: [],
+    queuedWriteBytes: 0,
+    writeInProgress: false,
+    logBuckets: new Map(),
+    logBufferedBytes: 0,
+    logDroppedMessages: 0,
+    logFlushTimer: null,
+    logRateStartedAt: Date.now(),
+    logRateBytes: 0,
+    diagnosticRateStartedAt: Date.now(),
+    diagnosticRateBytes: 0,
+    diagnosticRateEvents: 0,
+    diagnosticDroppedEvents: 0,
+    processCloseObserved: false,
+    cleaned: false,
+    stopping: false,
+    restartable: true
   }
   languageServers.set(key, server)
-  child.stdout.on('data', createLspReader((message) => {
-    const diagnostic = lspDiagnostics(message)
-    if (diagnostic && !sender.isDestroyed()) sender.send(IPC.languageServerDiagnostics, diagnostic)
-    if (typeof message.id === 'number') {
+  bindLanguageServerSenderCleanup(sender)
+  sendLanguageServerStatus(server, 'starting')
+
+  const readMessage = createLspMessageReader((message) => {
+    if (server.cleaned) return
+    if (typeof message.id === 'number' && message.method === undefined) {
       const pending = server.pending.get(message.id)
       if (pending) {
         server.pending.delete(message.id)
         pending(message)
       }
+      return
     }
-  }))
-  const cleanup = (): void => {
-    languageServers.delete(key)
-    server.resolveReady()
-    for (const resolve of server.pending.values()) resolve({ error: { message: 'Language server stopped.' } })
-    server.pending.clear()
-  }
-  child.on('error', cleanup)
-  child.on('close', cleanup)
-  sender.once('destroyed', () => {
-    child.kill()
-    cleanup()
+    if (server.stopping) return
+    sendLanguageServerDiagnostics(server, message)
+    logLanguageServerWindowMessage(server, message)
+  }, (error) => {
+    const message = `LSP protocol error: ${error.message}`
+    sendLanguageServerLog(server, 'server', 'error', message)
+    if (error instanceof LspProtocolError && error.fatal) failLanguageServer(server, message, false)
   })
+  child.stdout.on('data', (chunk: Buffer) => readMessage(chunk))
+  child.stdout.on('error', (error) => {
+    failLanguageServer(server, languageServerErrorMessage(error, 'Could not read from the language server.'))
+  })
+  child.stderr.on('data', (chunk: Buffer) => {
+    const text = stderrDecoder.write(chunk)
+    if (text) sendLanguageServerLog(server, 'stderr', 'error', text)
+  })
+  child.stderr.on('end', server.flushStderr)
+  child.stderr.on('error', (error) => {
+    sendLanguageServerLog(server, 'stderr', 'error', languageServerErrorMessage(error, 'Could not read language server stderr.'))
+  })
+  child.stdin.on('error', (error) => {
+    failLanguageServer(server, languageServerErrorMessage(error, 'Could not write to the language server.'))
+  })
+  child.stdin.on('close', () => {
+    if (!server.cleaned && !server.stopping &&
+        server.child.exitCode === null && server.child.signalCode === null) {
+      failLanguageServer(server, 'Language server input closed unexpectedly.')
+    }
+  })
+  child.on('error', (error) => {
+    failLanguageServer(server, languageServerErrorMessage(error, 'Could not start the language server.'))
+  })
+  child.on('close', (code, signal) => {
+    server.flushStderr()
+    server.processCloseObserved = true
+    server.resolveProcessClosed()
+    if (server.cleaned) return
+    if (server.stopping) {
+      cleanupLanguageServer(server, 'stopped')
+      // A detached group leader can close while descendants remain alive.
+      void trackLanguageServerTermination(server).catch(() => undefined)
+      return
+    }
+    const message = signal
+      ? `Language server exited unexpectedly with signal ${signal}.`
+      : code === null
+        ? 'Language server exited unexpectedly.'
+        : `Language server exited unexpectedly with code ${code}.`
+    sendLanguageServerLog(server, 'server', 'error', message)
+    cleanupLanguageServer(server, 'error', message)
+    // A detached process-group leader may exit while descendants remain.
+    void trackLanguageServerTermination(server).catch(() => undefined)
+  })
+
   const initializeId = server.nextId++
-  const initializeTimer = setTimeout(() => {
-    if (!server.initialized) child.kill()
-  }, 15_000)
-  server.pending.set(initializeId, () => {
+  server.pending.set(initializeId, (message) => {
+    if (server.initializeTimer !== null) {
+      clearTimeout(server.initializeTimer)
+      server.initializeTimer = null
+    }
+    if (server.cleaned || server.stopping) return
+    if (Object.hasOwn(message, 'error')) {
+      if (message.jsonrpc !== '2.0' || Object.hasOwn(message, 'result') ||
+          !isLanguageServerObject(message.error) || !Number.isInteger(message.error.code) ||
+          typeof message.error.message !== 'string') {
+        failLanguageServer(server, 'Language server returned an invalid initialize error response.')
+        return
+      }
+      failLanguageServer(server, boundedLanguageServerText(message.error.message, 2_000))
+      return
+    }
+    if (message.jsonrpc !== '2.0' || !Object.hasOwn(message, 'result') ||
+        !isLanguageServerObject(message.result) ||
+        !isLanguageServerObject(message.result.capabilities)) {
+      failLanguageServer(server, 'Language server returned an invalid initialize response.')
+      return
+    }
+    server.capabilities = summarizeLanguageServerCapabilities(message.result.capabilities)
     server.initialized = true
-    clearTimeout(initializeTimer)
     server.resolveReady()
-    lspMessage(child, { jsonrpc: '2.0', method: 'initialized', params: {} })
+    if (!writeLanguageServerMessage(server, { jsonrpc: '2.0', method: 'initialized', params: {} })) return
+    sendLanguageServerStatus(server, 'running')
   })
-  lspMessage(child, {
+  server.initializeTimer = setTimeout(() => {
+    server.initializeTimer = null
+    failLanguageServer(server, 'Language server initialization timed out.')
+  }, LANGUAGE_SERVER_INITIALIZE_TIMEOUT_MS)
+  server.initializeTimer.unref?.()
+  writeLanguageServerMessage(server, {
     jsonrpc: '2.0',
     id: initializeId,
     method: 'initialize',
-    params: { processId: process.pid, rootUri: pathToFileURL(root).href, capabilities: {} }
+    params: { processId: process.pid, rootUri: pathToFileURL(resolvedRoot).href, capabilities: {} }
   })
   return server
 }
@@ -1653,37 +2387,67 @@ function startPersistentLanguageServer(
 async function syncPersistentLanguageServer(
   sender: Electron.WebContents,
   request: LanguageServerSyncRequest
-): Promise<void> {
-  const server = startPersistentLanguageServer(sender, request.root, request.config)
+): Promise<PersistentLanguageServer> {
+  const resolvedRoot = path.resolve(request.root)
+  assertLanguageServerRootAvailable(sender, resolvedRoot)
+  const key = languageServerKey(sender.id, resolvedRoot, request.config)
+  const explicitStop = languageServerExplicitStops.get(key)
+  if (explicitStop?.sender === sender) {
+    await explicitStop.promise
+    throw new Error('Language server was explicitly stopped.')
+  }
+  const restart = languageServerRestarts.get(key)
+  if (restart?.descriptor.sender === sender) await restart.promise
+  if (restart?.cancelled || languageServerExplicitStops.get(key)?.sender === sender) {
+    throw new Error('Language server was explicitly stopped.')
+  }
+  // An explicit stop/restart await above yields to workspace release. Recheck
+  // the barrier and grant immediately before the synchronous spawn path.
+  assertLanguageServerRootAvailable(sender, resolvedRoot)
+  const server = startPersistentLanguageServer(sender, resolvedRoot, request.config)
   const uri = pathToFileURL(request.filePath).href
-  const previousVersion = server.documents.get(uri)
-  const sendDocument = (): void => {
-    if (previousVersion === undefined) {
-      lspMessage(server.child, {
+  await server.ready
+  if (!server.initialized || server.cleaned || server.stopping) throw new Error('Language server failed to initialize.')
+  const previous = server.documents.get(uri)
+  const sent = writeLanguageServerMessage(server, previous === undefined
+    ? {
         jsonrpc: '2.0',
         method: 'textDocument/didOpen',
         params: { textDocument: { uri, languageId: request.languageId, version: request.version, text: request.content } }
-      })
-    } else {
-      lspMessage(server.child, {
+      }
+    : {
         jsonrpc: '2.0',
         method: 'textDocument/didChange',
         params: { textDocument: { uri, version: request.version }, contentChanges: [{ text: request.content }] }
       })
-    }
-    server.documents.set(uri, request.version)
-  }
-  await server.ready
-  if (!server.initialized || server.child.killed) throw new Error('Language server failed to initialize.')
-  sendDocument()
+  if (!sent || server.cleaned) throw new Error('Language server stopped before the document could be synchronized.')
+  server.documents.set(uri, {
+    content: request.content,
+    languageId: request.languageId,
+    version: request.version
+  })
+  return server
+}
+
+function nextLanguageServerDocumentVersion(
+  sender: Electron.WebContents,
+  request: LanguageServerRequest
+): number {
+  const key = languageServerKey(sender.id, request.root, request.config)
+  const documents = languageServers.get(key)?.documents ??
+    languageServerRestarts.get(key)?.descriptor.documents ??
+    languageServerTombstones.get(key)?.documents
+  return (documents?.get(pathToFileURL(request.filePath).href)?.version ?? 0) + 1
 }
 
 async function formatWithPersistentLanguageServer(
   sender: Electron.WebContents,
   request: LanguageServerRequest
 ): Promise<LanguageServerResult> {
-  const server = startPersistentLanguageServer(sender, request.root, request.config)
-  await syncPersistentLanguageServer(sender, { ...request, version: (server.documents.get(pathToFileURL(request.filePath).href) ?? 0) + 1 })
+  const server = await syncPersistentLanguageServer(sender, {
+    ...request,
+    version: nextLanguageServerDocumentVersion(sender, request)
+  })
   return new Promise<LanguageServerResult>((resolve, reject) => {
     const id = server.nextId++
     const timer = setTimeout(() => {
@@ -1706,10 +2470,14 @@ async function formatWithPersistentLanguageServer(
         : []
       resolve({ edits, diagnostics: [] })
     })
-    lspMessage(server.child, {
+    if (!writeLanguageServerMessage(server, {
       jsonrpc: '2.0', id, method: 'textDocument/formatting',
       params: { textDocument: { uri: pathToFileURL(request.filePath).href }, options: { tabSize: 4, insertSpaces: true } }
-    })
+    })) {
+      clearTimeout(timer)
+      server.pending.delete(id)
+      reject(new Error('Language server stopped before the formatting request could be sent.'))
+    }
   })
 }
 
@@ -1719,10 +2487,9 @@ async function lspRequest(
   method: string,
   params: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
-  const server = startPersistentLanguageServer(sender, request.root, request.config)
-  await syncPersistentLanguageServer(sender, {
+  const server = await syncPersistentLanguageServer(sender, {
     ...request,
-    version: (server.documents.get(pathToFileURL(request.filePath).href) ?? 0) + 1
+    version: nextLanguageServerDocumentVersion(sender, request)
   })
   return new Promise<Record<string, unknown>>((resolve, reject) => {
     const id = server.nextId++
@@ -1736,8 +2503,308 @@ async function lspRequest(
         reject(new Error(String((message.error as { message?: unknown }).message ?? `Language server ${method} error.`)))
       } else resolve(message)
     })
-    lspMessage(server.child, { jsonrpc: '2.0', id, method, params })
+    if (!writeLanguageServerMessage(server, { jsonrpc: '2.0', id, method, params })) {
+      clearTimeout(timer)
+      server.pending.delete(id)
+      reject(new Error(`Language server stopped before the ${method} request could be sent.`))
+    }
   })
+}
+
+function waitForLanguageServerClose(
+  server: PersistentLanguageServer,
+  timeoutMs: number
+): Promise<boolean> {
+  if (server.processCloseObserved) return Promise.resolve(true)
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    const finish = (closed: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(closed)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    timer.unref?.()
+    void server.processClosed.then(() => finish(true))
+  })
+}
+
+function waitForLanguageServerTerminationGrace(timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs)
+    timer.unref?.()
+  })
+}
+
+function isLanguageServerProcessGroupAlive(server: PersistentLanguageServer): boolean {
+  if (process.platform === 'win32' || server.processGroupId === undefined) {
+    return !server.processCloseObserved
+  }
+  try {
+    process.kill(-server.processGroupId, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
+/** Send SIGTERM and escalate to SIGKILL after a bounded wait. */
+function terminateLanguageServerBounded(server: PersistentLanguageServer): Promise<void> {
+  if (server.terminationPromise) return server.terminationPromise
+  server.terminationPromise = (async () => {
+    if (process.platform !== 'win32' && server.processGroupId !== undefined) {
+      if (!isLanguageServerProcessGroupAlive(server)) return
+      terminateLanguageServerProcess(server)
+      // Direct-child close does not imply that its detached descendants exited.
+      // Give the whole group a grace period, then always try the group KILL.
+      await waitForLanguageServerTerminationGrace(LANGUAGE_SERVER_CLOSE_TIMEOUT_MS)
+      if (!isLanguageServerProcessGroupAlive(server)) return
+      terminateLanguageServerProcess(server, true)
+      await waitForLanguageServerTerminationGrace(LANGUAGE_SERVER_CLOSE_TIMEOUT_MS)
+      if (isLanguageServerProcessGroupAlive(server)) {
+        throw new Error('Language server process group did not terminate after SIGKILL.')
+      }
+      return
+    }
+    terminateLanguageServerProcess(server)
+    if (!(await waitForLanguageServerClose(server, LANGUAGE_SERVER_CLOSE_TIMEOUT_MS))) {
+      terminateLanguageServerProcess(server, true)
+      if (!(await waitForLanguageServerClose(server, LANGUAGE_SERVER_CLOSE_TIMEOUT_MS))) {
+        throw new Error('Language server process tree did not terminate after a forced stop.')
+      }
+    }
+  })()
+  return server.terminationPromise
+}
+
+function trackLanguageServerTermination(server: PersistentLanguageServer): Promise<void> {
+  const existing = languageServerTerminations.get(server)
+  if (existing) return existing
+  const termination = terminateLanguageServerBounded(server)
+  languageServerTerminations.set(server, termination)
+  // Successful termination no longer needs tracking. A rejected termination
+  // deliberately remains registered so restart/root release cannot silently
+  // proceed while an unowned process tree may still be alive.
+  void termination.then(() => {
+    if (languageServerTerminations.get(server) === termination) {
+      languageServerTerminations.delete(server)
+    }
+  }, () => undefined)
+  return termination
+}
+
+/** Stop one server without allowing an unresponsive peer to hold an IPC call open. */
+function stopPersistentLanguageServer(server: PersistentLanguageServer): Promise<void> {
+  if (server.stopPromise) return server.stopPromise
+  if (server.cleaned) return Promise.resolve()
+  server.stopping = true
+  sendLanguageServerStatus(server, 'stopping')
+  server.stopPromise = (async () => {
+    if (server.initialized && !server.cleaned) {
+      const shutdownId = server.nextId++
+      await new Promise<void>((resolve) => {
+        let settled = false
+        const finish = (): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          server.pending.delete(shutdownId)
+          resolve()
+        }
+        const timer = setTimeout(finish, LANGUAGE_SERVER_GRACEFUL_TIMEOUT_MS)
+        timer.unref?.()
+        server.pending.set(shutdownId, finish)
+        if (!writeLanguageServerMessage(server, {
+          jsonrpc: '2.0', id: shutdownId, method: 'shutdown', params: null
+        })) finish()
+      })
+      if (!server.cleaned) {
+        writeLanguageServerMessage(server, { jsonrpc: '2.0', method: 'exit', params: null })
+      }
+      if (await waitForLanguageServerClose(server, LANGUAGE_SERVER_CLOSE_TIMEOUT_MS) &&
+          (process.platform === 'win32' || server.processGroupId === undefined)) {
+        cleanupLanguageServer(server, 'stopped')
+        return
+      }
+    }
+
+    await trackLanguageServerTermination(server)
+    cleanupLanguageServer(server, 'stopped')
+  })()
+  return server.stopPromise
+}
+
+async function replayLanguageServerDocuments(
+  server: PersistentLanguageServer,
+  documents: Map<string, LanguageServerDocumentSnapshot>
+): Promise<void> {
+  await server.ready
+  if (!server.initialized || server.cleaned || server.stopping) {
+    throw new Error('Language server failed to initialize after restart.')
+  }
+  for (const [uri, document] of documents) {
+    if (!writeLanguageServerMessage(server, {
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          languageId: document.languageId,
+          version: document.version,
+          text: document.content
+        }
+      }
+    })) {
+      throw new Error('Language server stopped while documents were being restored.')
+    }
+    server.documents.set(uri, { ...document })
+  }
+}
+
+async function restartPersistentLanguageServer(
+  sender: Electron.WebContents,
+  key: string
+): Promise<void> {
+  const explicitStop = languageServerExplicitStops.get(key)
+  if (explicitStop) {
+    if (explicitStop.sender !== sender) throw new Error('Language server not found.')
+    await explicitStop.promise
+    throw new Error('Language server was explicitly stopped.')
+  }
+  const inProgress = languageServerRestarts.get(key)
+  if (inProgress) {
+    if (inProgress.descriptor.sender !== sender) throw new Error('Language server not found.')
+    await inProgress.promise
+    return
+  }
+  const oldServer = languageServers.get(key)
+  const savedDescriptor = languageServerTombstones.get(key)
+  const descriptor = oldServer
+    ? languageServerDescriptor(oldServer)
+    : savedDescriptor && {
+        ...savedDescriptor,
+        config: { command: savedDescriptor.config.command, args: [...savedDescriptor.config.args] },
+        documents: cloneLanguageServerDocuments(savedDescriptor.documents)
+      }
+  if (!descriptor || descriptor.sender !== sender) throw new Error('Language server not found.')
+  const operation: LanguageServerRestartOperation = {
+    descriptor,
+    source: oldServer,
+    cancelled: false,
+    promise: Promise.resolve()
+  }
+  languageServerRestarts.set(key, operation)
+  operation.promise = (async () => {
+    if (oldServer) await stopPersistentLanguageServer(oldServer)
+    if (operation.cancelled || sender.isDestroyed()) return
+    const replacement = startPersistentLanguageServer(sender, descriptor.root, descriptor.config)
+    operation.replacement = replacement
+    if (operation.cancelled) {
+      replacement.restartable = false
+      await stopPersistentLanguageServer(replacement)
+      return
+    }
+    await replayLanguageServerDocuments(replacement, descriptor.documents)
+    if (operation.cancelled) {
+      replacement.restartable = false
+      await stopPersistentLanguageServer(replacement)
+      return
+    }
+    languageServerTombstones.delete(key)
+  })()
+  try {
+    await operation.promise
+  } finally {
+    if (languageServerRestarts.get(key) === operation) languageServerRestarts.delete(key)
+  }
+}
+
+async function explicitlyStopPersistentLanguageServer(
+  sender: Electron.WebContents,
+  key: string
+): Promise<void> {
+  const existing = languageServerExplicitStops.get(key)
+  if (existing) {
+    if (existing.sender === sender) await existing.promise
+    return
+  }
+  const active = languageServers.get(key)
+  const restart = languageServerRestarts.get(key)
+  const tombstone = languageServerTombstones.get(key)
+  const owner = active?.sender ?? restart?.descriptor.sender ?? tombstone?.sender
+  if (owner !== sender) return
+
+  const operation: LanguageServerExplicitStop = {
+    sender,
+    root: path.resolve(active?.root ?? restart?.descriptor.root ?? tombstone?.root ?? ''),
+    promise: Promise.resolve()
+  }
+  languageServerExplicitStops.set(key, operation)
+  operation.promise = (async () => {
+    if (restart) restart.cancelled = true
+    languageServerTombstones.delete(key)
+    const candidates = new Set<PersistentLanguageServer>()
+    if (active) candidates.add(active)
+    if (restart?.source) candidates.add(restart.source)
+    if (restart?.replacement) candidates.add(restart.replacement)
+    for (const server of candidates) server.restartable = false
+    await Promise.all([...candidates].map(stopPersistentLanguageServer))
+    await Promise.all(
+      [...languageServerTerminations]
+        .filter(([server]) => server.sender === sender && server.configKey === key)
+        .map(([, termination]) => termination)
+    )
+    if (restart) {
+      try { await restart.promise } catch {
+        // Explicit stop supersedes a failed or cancelled restart.
+      }
+      if (restart.replacement && !restart.replacement.cleaned) {
+        restart.replacement.restartable = false
+        await stopPersistentLanguageServer(restart.replacement)
+      }
+    }
+    languageServerTombstones.delete(key)
+  })()
+  try {
+    await operation.promise
+  } finally {
+    if (languageServerExplicitStops.get(key) === operation) languageServerExplicitStops.delete(key)
+  }
+}
+
+/** Stop all configurations and restart generations authorised by one root. */
+async function stopAllLanguageServersForRoot(
+  sender: Electron.WebContents,
+  root: string
+): Promise<void> {
+  const resolvedRoot = path.resolve(root)
+  const matches = (owner: Electron.WebContents, candidateRoot: string): boolean =>
+    owner === sender && path.resolve(candidateRoot) === resolvedRoot
+
+  while (true) {
+    const keys = new Set<string>()
+    for (const [key, server] of languageServers) {
+      if (matches(server.sender, server.root)) keys.add(key)
+    }
+    for (const [key, restart] of languageServerRestarts) {
+      if (matches(restart.descriptor.sender, restart.descriptor.root)) keys.add(key)
+    }
+    for (const [key, tombstone] of languageServerTombstones) {
+      if (matches(tombstone.sender, tombstone.root)) keys.add(key)
+    }
+    const operations = [...languageServerExplicitStops.values()]
+      .filter((operation) => matches(operation.sender, operation.root))
+    const terminations = [...languageServerTerminations]
+      .filter(([server]) => matches(server.sender, server.root))
+      .map(([, termination]) => termination)
+    if (keys.size === 0 && operations.length === 0 && terminations.length === 0) return
+    await Promise.all([
+      ...[...keys].map((key) => explicitlyStopPersistentLanguageServer(sender, key)),
+      ...operations.map((operation) => operation.promise),
+      ...terminations
+    ])
+  }
 }
 
 function lspLocations(value: unknown): LanguageLocation[] {
@@ -1913,7 +2980,7 @@ export function registerFileHandlers(): void {
   ipcMain.handle(IPC.workspaceRelease, async (event, root: unknown, retainFiles: unknown): Promise<void> => {
     assertTrustedSender(event)
     assertAbsolutePath(root, 'workspace root')
-    releaseWorkspaceRoot(event, root, retainFiles)
+    await releaseWorkspaceRoot(event, root, retainFiles)
   })
 
   ipcMain.handle(IPC.clipboardWritePath, async (event, target: unknown, relativeRoot?: unknown): Promise<void> => {
@@ -2567,9 +3634,15 @@ export function registerFileHandlers(): void {
       command: source.command,
       args: Array.isArray(source.args) ? source.args.filter((arg): arg is string => typeof arg === 'string') : []
     })
-    const server = languageServers.get(key)
-    server?.child.kill()
-    languageServers.delete(key)
+    await explicitlyStopPersistentLanguageServer(event.sender, key)
+  })
+
+  ipcMain.handle(IPC.languageServerRestart, async (event, key: unknown): Promise<void> => {
+    assertTrustedSender(event)
+    if (typeof key !== 'string' || !/^lsp-[a-f0-9]{64}$/.test(key)) {
+      throw new Error('Invalid language server key.')
+    }
+    await restartPersistentLanguageServer(event.sender, key)
   })
 
   ipcMain.handle(IPC.languageServerRequest, async (event, request: LanguageServerInteractiveRequest): Promise<LanguageServerInteractiveResult> => {

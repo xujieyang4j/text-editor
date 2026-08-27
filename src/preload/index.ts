@@ -33,6 +33,8 @@ import {
   type LanguageServerResult,
   type LanguageServerSyncRequest,
   type LanguageServerDiagnosticEvent,
+  type LanguageServerStatusEvent,
+  type LanguageServerLogEvent,
   type LanguageServerInteractiveRequest,
   type LanguageServerInteractiveResult,
   type PluginInstallRequest
@@ -270,6 +272,21 @@ const api = {
 
   stopLanguageServer: (root: string, config: LanguageServerSyncRequest['config']): Promise<void> =>
     ipcRenderer.invoke(IPC.languageServerStop, root, config),
+
+  restartLanguageServer: (key: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.languageServerRestart, key),
+
+  onLanguageServerStatus: (handler: (event: LanguageServerStatusEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: LanguageServerStatusEvent): void => handler(status)
+    ipcRenderer.on(IPC.languageServerStatus, listener)
+    return () => ipcRenderer.removeListener(IPC.languageServerStatus, listener)
+  },
+
+  onLanguageServerLog: (handler: (event: LanguageServerLogEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, log: LanguageServerLogEvent): void => handler(log)
+    ipcRenderer.on(IPC.languageServerLog, listener)
+    return () => ipcRenderer.removeListener(IPC.languageServerLog, listener)
+  },
 
   onLanguageServerDiagnostics: (handler: (event: LanguageServerDiagnosticEvent) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, diagnostic: LanguageServerDiagnosticEvent): void => handler(diagnostic)

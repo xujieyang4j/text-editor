@@ -12,6 +12,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // test cannot change their restored tabs, locale or other preferences.
 if (process.env['LUMEN_SMOKE'] === '1') {
   app.setPath('userData', path.join(app.getPath('temp'), `lumen-editor-smoke-${process.pid}-${Date.now().toString(36)}`))
+  // Software rendering is more reliable under Xvfb and avoids GPU-process
+  // teardown stalls after the smoke assertions have completed.
+  app.disableHardwareAcceleration()
 }
 
 /** Graceful closes wait for the renderer to persist hot-exit state. */
@@ -145,13 +148,16 @@ function createWindow(sessionId = newSessionId()): void {
             await new Promise((resolve) => window.setTimeout(resolve, 25))
             editor = document.querySelector('.cm-content')
           }
-          if (!(editor instanceof HTMLElement)) return { editorMounted: false, terminalPanelMounted: false, terminalStartDisabledInitially: false, outlinePanelMounted: false }
+          if (!(editor instanceof HTMLElement)) return { editorMounted: false, terminalPanelMounted: false, terminalStartDisabledInitially: false, outlinePanelMounted: false, languageServerPanelMounted: false }
           editor.focus()
           const terminalCommand = [...document.querySelectorAll('button')].find((button) =>
             /^(启动|Start)$/.test(button.textContent?.trim() ?? '')
           )
           const terminalPanel = document.querySelector('.terminal-panel')
           const outlinePanel = document.querySelector('.outline-panel')
+          const languageServerPanel = document.querySelector('.language-server-panel')
+          const languageServerTitleId = languageServerPanel?.getAttribute('aria-labelledby')
+          const languageServerTitle = languageServerTitleId ? document.getElementById(languageServerTitleId) : null
           const languageButton = document.querySelector('#status-language')
           const a11yStatus = document.querySelector('#a11y-status')
           const a11yAlert = document.querySelector('#a11y-alert')
@@ -160,6 +166,12 @@ function createWindow(sessionId = newSessionId()): void {
             terminalPanelMounted: terminalPanel instanceof HTMLElement && terminalPanel.classList.contains('hidden'),
             terminalStartAvailableInitially: terminalCommand instanceof HTMLButtonElement && !terminalCommand.disabled,
             outlinePanelMounted: outlinePanel instanceof HTMLElement && outlinePanel.classList.contains('hidden'),
+            languageServerPanelMounted: languageServerPanel instanceof HTMLElement
+              && languageServerPanel.classList.contains('hidden')
+              && languageServerPanel.getAttribute('role') === 'region'
+              && languageServerPanel.getAttribute('aria-hidden') === 'true'
+              && languageServerTitle instanceof HTMLHeadingElement
+              && !!languageServerTitle.textContent?.trim(),
             accessibilityMounted: languageButton instanceof HTMLButtonElement
               && a11yStatus?.getAttribute('role') === 'status'
               && a11yAlert?.getAttribute('role') === 'alert'
@@ -168,6 +180,9 @@ function createWindow(sessionId = newSessionId()): void {
         if (!initialUi.editorMounted) throw new Error('CodeMirror did not mount')
         if (!initialUi.terminalPanelMounted || !initialUi.terminalStartAvailableInitially || !initialUi.outlinePanelMounted) {
           throw new Error(`Terminal or outline panel did not mount with its expected initial state: ${JSON.stringify(initialUi)}`)
+        }
+        if (!initialUi.languageServerPanelMounted) {
+          throw new Error(`Language server panel did not mount with its expected initial accessibility state: ${JSON.stringify(initialUi)}`)
         }
         if (!initialUi.accessibilityMounted) throw new Error('Accessibility status regions or language button did not mount')
         const accessibilityPrepared = await win.webContents.executeJavaScript(`(() => {
@@ -178,21 +193,62 @@ function createWindow(sessionId = newSessionId()): void {
         })()`, true)
         if (!accessibilityPrepared) throw new Error('Could not prepare command palette accessibility test')
         win.webContents.send(IPC.menuEvent, 'command-palette' as MenuEvent)
-        await new Promise<void>((resolve) => setTimeout(resolve, 50))
-        const accessibilityResult = await win.webContents.executeJavaScript(`(() => {
-          const languageButton = document.querySelector('#status-language')
-          const dialog = document.querySelector('.palette-overlay')
-          const combo = dialog?.querySelector('[role="combobox"]')
-          const activeId = combo?.getAttribute('aria-activedescendant')
-          const active = activeId ? document.getElementById(activeId) : null
-          if (!(dialog instanceof HTMLElement) || dialog.getAttribute('aria-modal') !== 'true' ||
-            !(combo instanceof HTMLInputElement) || !active || active.getAttribute('aria-selected') !== 'true') return false
-          combo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-          return languageButton instanceof HTMLButtonElement
-            && dialog.classList.contains('hidden')
-            && document.activeElement === languageButton
+        const accessibilityResult = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const languageButton = document.querySelector('#status-language')
+            const dialog = document.querySelector('.palette-overlay')
+            const combo = dialog?.querySelector('[role="combobox"]')
+            const activeId = combo?.getAttribute('aria-activedescendant')
+            const active = activeId ? document.getElementById(activeId) : null
+            if (dialog instanceof HTMLElement && dialog.getAttribute('aria-modal') === 'true' &&
+              combo instanceof HTMLInputElement && active?.getAttribute('aria-selected') === 'true') {
+              combo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+              return languageButton instanceof HTMLButtonElement
+                && dialog.classList.contains('hidden')
+                && document.activeElement === languageButton
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 25))
+          }
+          return false
         })()`, true)
         if (!accessibilityResult) throw new Error('Command palette accessibility lifecycle failed')
+        const languageServerPrepared = await win.webContents.executeJavaScript(`(() => {
+          const languageButton = document.querySelector('#status-language')
+          if (!(languageButton instanceof HTMLButtonElement)) return false
+          languageButton.focus()
+          return document.activeElement === languageButton
+        })()`, true)
+        if (!languageServerPrepared) throw new Error('Could not prepare language server panel focus test')
+        win.webContents.send(IPC.menuEvent, 'toggle-language-servers' as MenuEvent)
+        const languageServerOpenResult = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const panel = document.querySelector('.language-server-panel')
+            const restart = panel?.querySelector('.language-server-restart')
+            if (panel instanceof HTMLElement
+              && !panel.classList.contains('hidden')
+              && panel.getAttribute('aria-hidden') === 'false'
+              && panel.contains(document.activeElement)
+              && restart instanceof HTMLButtonElement
+              && restart.disabled) return true
+            await new Promise((resolve) => window.setTimeout(resolve, 25))
+          }
+          return false
+        })()`, true)
+        if (!languageServerOpenResult) throw new Error('Language server panel did not open with its expected initial state')
+        const languageServerCloseResult = await win.webContents.executeJavaScript(`(() => {
+          const panel = document.querySelector('.language-server-panel')
+          const languageButton = document.querySelector('#status-language')
+          const active = document.activeElement
+          if (!(panel instanceof HTMLElement) || !(languageButton instanceof HTMLButtonElement) ||
+            !(active instanceof HTMLElement) || !panel.contains(active)) return false
+          active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+          return panel.classList.contains('hidden')
+            && panel.getAttribute('aria-hidden') === 'true'
+            && document.activeElement === languageButton
+        })()`, true)
+        if (!languageServerCloseResult) throw new Error('Language server panel accessibility lifecycle failed')
         await win.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true)
         await win.webContents.insertText('smoke')
         const editorAcceptedInput = await win.webContents.executeJavaScript(`document.querySelector('.cm-content')?.textContent?.includes('smoke') === true`, true)
@@ -362,7 +418,16 @@ function createWindow(sessionId = newSessionId()): void {
         if (!terminalResult) throw new Error('Terminal did not echo its smoke marker')
         await win.webContents.executeJavaScript(`window.editor.releaseWorkspace(${JSON.stringify(smokeRoot)}, [])`, true)
         console.log('[smoke] renderer, editor, and controlled terminal passed')
-        setTimeout(() => app.quit(), 250)
+        // The smoke profile is disposable and every tested resource is already
+        // stopped above, so exit directly instead of entering the interactive
+        // renderer session-flush handshake used by a real user-initiated quit.
+        setTimeout(() => {
+          if (!win.isDestroyed()) win.destroy()
+          // Electron can stall in Chromium shutdown under Xvfb even after all
+          // windows are gone. The smoke process owns only disposable state.
+          ;(process as NodeJS.Process & { reallyExit?: (code?: number) => never }).reallyExit?.(0)
+          process.exit(0)
+        }, 250)
       } catch (error) {
         console.error('[smoke] GUI interaction failed:', error)
         process.exit(1)

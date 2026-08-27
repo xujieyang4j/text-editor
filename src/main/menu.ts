@@ -223,6 +223,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Format Document', 'format-document'),
         item('Show Hover', 'lsp-hover', 'CmdOrCtrl+Shift+Space'),
         item('Rename Symbol', 'lsp-rename', 'F2'),
+        item('Show Language Servers', 'toggle-language-servers'),
         item('Select Build System…', 'select-build-system'),
         item('Import Sublime Build System…', 'import-sublime-build'),
         item('Toggle Build Output', 'toggle-problems'),

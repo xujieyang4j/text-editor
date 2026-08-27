@@ -174,6 +174,7 @@ export const COMMANDS: Command[] = [
   , { id: 'lsp-definition', title: 'LSP: Go to Definition', hint: 'F12' }
   , { id: 'lsp-references', title: 'LSP: Find References', hint: 'Shift+F12' }
   , { id: 'lsp-rename', title: 'LSP: Rename Symbol', hint: 'F2' }
+  , { id: 'toggle-language-servers', title: 'LSP: Show Language Servers' }
 ]
 
 export function localizedCommands(locale: UiLocale): Command[] {

@@ -289,6 +289,15 @@ tool reads only the in-memory buffer: it does not require a saved file or a work
 modifies text. Counts use Unicode graphemes and word segments, so CJK runs, combining characters,
 and emoji are handled without relying on an ASCII whitespace split.
 
+**Language servers and logs.** When a project configures an LSP server, choose *Tools → Show
+Language Servers* or run *LSP: Show Language Servers* from the Command Palette. The panel shows
+each server's workspace and PID, Starting, Running, Stopping, Stopped, or Error state, advertised
+capabilities, and a restart action. It keeps bounded in-memory logs of stderr and server
+notifications, not raw protocol messages. Malformed or oversized LSP framing terminates the faulty
+server. Opening the panel does not run a command; language servers and formatters remain external
+processes and require first-run approval in each app session. Approve only commands from projects
+you trust.
+
 <a id="en-search"></a>
 
 ## 6. Search & Replace
@@ -714,6 +723,12 @@ npm run dist:linux   # Linux：AppImage + .deb
 用户可见字符数、非空白字符数与词/标记数；主选区非空时，也会显示选区的同类统计。该工具只读取
 内存缓冲区，不需要保存文件或打开工作区，也不会修改文本。统计采用 Unicode 字素和词段，可正确处理
 中文连续文本、组合字符和 emoji，而不是依赖 ASCII 空白分词。
+
+**语言服务器与日志。** 项目配置 LSP 后，可选择“工具 → 显示语言服务器”，或在命令面板执行
+*LSP: Show Language Servers*。面板会显示各服务器的工作区与 PID、正在启动、运行中、正在停止、已停止
+或错误状态、声明的能力及重启操作。它只在内存中保留有界的标准错误和服务器通知日志，不显示原始协议
+消息；畸形或超限的 LSP 协议帧会终止异常服务器。打开面板本身不会运行命令；语言服务器和格式化器仍是
+外部进程，每个应用会话首次运行相应命令前均须确认，且只应批准可信项目中的命令。
 
 <a id="zh-search"></a>
 
