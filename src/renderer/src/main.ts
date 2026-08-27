@@ -722,6 +722,12 @@ class App {
       case 'replace':
         this.editor.openReplace()
         break
+      case 'find-next':
+        this.editor.findNextMatch()
+        break
+      case 'find-previous':
+        this.editor.findPreviousMatch()
+        break
       case 'find-in-files':
         this.searchPanel.show(false)
         break
@@ -1121,6 +1127,15 @@ class App {
         break
       case 'sort-lines':
         this.editor.sortLines()
+        break
+      case 'sort-lines-descending':
+        this.editor.sortLinesDescending()
+        break
+      case 'reverse-lines':
+        this.editor.reverseLines()
+        break
+      case 'unique-lines':
+        this.editor.uniqueLines()
         break
       case 'font-zoom-in':
         this.settings.fontSize = Math.min(40, this.settings.fontSize + 1)

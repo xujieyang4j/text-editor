@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict'
+import { EditorSelection, EditorState } from '@codemirror/state'
 import { maxEditableBytes, isBinaryBuffer } from '../../out-test/shared/filePolicy.js'
 import { score, fuzzyFilter } from '../../out-test/renderer/src/fuzzy.js'
 import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
 import { incrementalChanges, revertIncrementalChange } from '../../out-test/renderer/src/incrementalDiff.js'
+import {
+  reverseLines,
+  lineTransformEdits,
+  planLineTransform,
+  sortLinesAscending,
+  sortLinesDescending,
+  transformLines,
+  uniqueLines,
+  wouldTransformLines
+} from '../../out-test/renderer/src/lineTransforms.js'
 import { NavigationHistory, NavigationIntentEpoch, resolveGotoLine } from '../../out-test/renderer/src/navigationHistory.js'
 import { createFromFile, createFromSession, createUntitled, isCurrentDocumentSaveConflict, isDirty, nextUntitledName } from '../../out-test/renderer/src/documents.js'
 import { JsonNumber, parseLosslessJson, stringifyLosslessJson } from '../../out-test/shared/losslessJson.js'
@@ -14,7 +25,6 @@ import {
   createLspMessageReader,
   encodeLspMessage
 } from '../../out-test/shared/lspProtocol.js'
-import { EditorSelection, EditorState } from '@codemirror/state'
 import { history } from '@codemirror/commands'
 import {
   redoSelectionOnly,
@@ -39,6 +49,189 @@ const changes = incrementalChanges('one\ntwo\nfour', 'one\nthree\nfour\nfive')
 assert.deepEqual(changes.map((change) => [change.kind, change.line, change.lineCount]), [['modified', 2, 1], ['added', 4, 1]])
 assert.equal(revertIncrementalChange('one\nthree\nfour\nfive', changes[0]), 'one\ntwo\nfour\nfive')
 assert.deepEqual(incrementalChanges('one\ntwo', 'one').map((change) => [change.kind, change.line]), [['deleted', 2]])
+
+assert.equal(sortLinesAscending('delta\nalpha\ncharlie\nbravo'), 'alpha\nbravo\ncharlie\ndelta')
+assert.equal(sortLinesDescending('alpha\ndelta\nbravo\ncharlie'), 'delta\ncharlie\nbravo\nalpha')
+assert.equal(transformLines('beta\nalpha', 'sort-ascending'), 'alpha\nbeta')
+assert.equal(transformLines('alpha\nbeta', 'sort-descending'), 'beta\nalpha')
+
+// Ordering and de-duplication use exact string values: composed and decomposed
+// Unicode remain distinct, and ordering does not depend on the host locale.
+const unicodeLines = `é\né\n中\n🙂\né`
+assert.equal(sortLinesAscending(unicodeLines), `é\né\né\n中\n🙂`)
+assert.equal(sortLinesDescending(unicodeLines), `🙂\n中\né\né\né`)
+assert.equal(uniqueLines(`é\né\né\nÉ`), `é\né\nÉ`)
+
+assert.equal(uniqueLines('red\n\nblue\nred\n\nblue\n'), 'red\n\nblue\n')
+assert.equal(uniqueLines('\n\n'), '\n')
+assert.equal(reverseLines('first\n\nlast\n'), 'last\n\nfirst\n')
+assert.equal(transformLines('one\ntwo\nthree', 'reverse'), 'three\ntwo\none')
+assert.equal(transformLines('x\ny\nx', 'unique'), 'x\ny')
+
+// A final LF is document structure, not an extra sortable/deduplicated line.
+assert.equal(sortLinesAscending('beta\nalpha\n'), 'alpha\nbeta\n')
+assert.equal(sortLinesAscending('beta\nalpha'), 'alpha\nbeta')
+assert.equal(sortLinesDescending('alpha\nbeta\n'), 'beta\nalpha\n')
+assert.equal(sortLinesDescending('alpha\nbeta'), 'beta\nalpha')
+
+for (const mode of ['sort-ascending', 'sort-descending', 'reverse', 'unique']) {
+  assert.equal(transformLines('', mode), '')
+  assert.equal(wouldTransformLines('', mode), false)
+  assert.equal(transformLines('only line', mode), 'only line')
+  assert.equal(wouldTransformLines('only line', mode), false)
+}
+assert.equal(wouldTransformLines('alpha\nbeta', 'sort-ascending'), false)
+assert.equal(wouldTransformLines('beta\nalpha', 'sort-ascending'), true)
+assert.equal(wouldTransformLines('alpha\nbeta', 'unique'), false)
+assert.deepEqual(lineTransformEdits('b\na\nkeep\nd\nc\n', [
+  { anchor: 0, head: 4 },
+  { anchor: 13, head: 9 }
+], 'sort-ascending'), [
+  { from: 0, to: 4, insert: 'a\nb\n' },
+  { from: 9, to: 13, insert: 'c\nd\n' }
+])
+assert.deepEqual(lineTransformEdits('b\na\nkeep\n', [{ anchor: 0, head: 4 }], 'sort-descending'), [])
+assert.deepEqual(lineTransformEdits('b\na\nkeep\n', [{ anchor: 0, head: 3 }], 'sort-ascending'), [
+  { from: 0, to: 4, insert: 'a\nb\n' }
+])
+assert.deepEqual(lineTransformEdits('\nb\na\n', [{ anchor: 0, head: 3 }], 'reverse'), [
+  { from: 0, to: 3, insert: 'b\n\n' }
+])
+assert.deepEqual(lineTransformEdits('b\na', [{ anchor: 0, head: 0 }], 'sort-ascending'), [
+  { from: 0, to: 3, insert: 'a\nb' }
+])
+
+// CodeMirror maps all selections through the independent edits while keeping
+// their direction and main-selection identity. An untouched cursor between
+// the two selected blocks must survive as well.
+const lineTransformState = EditorState.create({
+  doc: 'b\na\nkeep\nd\nc\n',
+  selection: EditorSelection.create([
+    EditorSelection.range(4, 0),
+    EditorSelection.cursor(7),
+    EditorSelection.range(13, 9)
+  ], 2),
+  extensions: [EditorState.allowMultipleSelections.of(true)]
+})
+const mappedLineTransformPlan = planLineTransform(
+  lineTransformState.doc.toString(),
+  lineTransformState.selection.ranges,
+  'sort-ascending'
+)
+const mappedLineTransformState = lineTransformState.update({
+  changes: mappedLineTransformPlan.changes,
+  selection: EditorSelection.create(
+    mappedLineTransformPlan.ranges.map(({ anchor, head }) => EditorSelection.range(anchor, head)),
+    lineTransformState.selection.mainIndex
+  )
+}).state
+assert.equal(mappedLineTransformState.doc.toString(), 'a\nb\nkeep\nc\nd\n')
+assert.equal(mappedLineTransformState.selection.mainIndex, 2)
+assert.deepEqual(
+  mappedLineTransformState.selection.ranges.map(({ anchor, head }) => ({ anchor, head })),
+  [
+    { anchor: 4, head: 0 },
+    { anchor: 7, head: 7 },
+    { anchor: 13, head: 9 }
+  ]
+)
+
+const interiorSelectionPlan = planLineTransform('bax\nabc\n', [
+  { anchor: 1, head: 6 }
+], 'sort-ascending')
+assert.deepEqual(interiorSelectionPlan.changes, [
+  { from: 0, to: 8, insert: 'abc\nbax\n' }
+])
+assert.deepEqual(interiorSelectionPlan.ranges, [
+  { anchor: 0, head: 8 }
+])
+assert.deepEqual(planLineTransform('bax\nabc\n', [
+  { anchor: 6, head: 1 }
+], 'sort-ascending').ranges, [
+  { anchor: 8, head: 0 }
+])
+
+const cursorOnlyPlan = planLineTransform('b\na', [
+  { anchor: 1, head: 1 },
+  { anchor: 2, head: 2 }
+], 'sort-ascending')
+assert.deepEqual(cursorOnlyPlan.ranges, [
+  { anchor: 3, head: 3 },
+  { anchor: 0, head: 0 }
+])
+const cursorOnlySelection = EditorSelection.create(
+  cursorOnlyPlan.ranges.map(({ anchor, head }) => EditorSelection.range(anchor, head)),
+  1
+)
+assert.equal(cursorOnlySelection.ranges.length, 2)
+assert.equal(cursorOnlySelection.mainIndex, 0)
+assert.equal(cursorOnlySelection.main.head, 0)
+
+const mixedSelectionPlan = planLineTransform('bax\nabc\n', [
+  { anchor: 0, head: 0 },
+  { anchor: 1, head: 5 }
+], 'sort-ascending')
+assert.deepEqual(mixedSelectionPlan.ranges, [
+  { anchor: 4, head: 4 },
+  { anchor: 0, head: 8 }
+])
+
+const uniqueSelectionPlan = planLineTransform('keep\ndup\ndup\ntail\n', [
+  { anchor: 6, head: 6 },
+  { anchor: 10, head: 10 },
+  { anchor: 14, head: 14 },
+  { anchor: 18, head: 18 }
+], 'unique')
+assert.equal(uniqueSelectionPlan.changes[0].insert, 'keep\ndup\ntail\n')
+assert.deepEqual(uniqueSelectionPlan.ranges, [
+  { anchor: 6, head: 6 },
+  { anchor: 6, head: 6 },
+  { anchor: 10, head: 10 },
+  { anchor: 14, head: 14 }
+])
+const normalizedUniqueSelection = EditorSelection.create(
+  uniqueSelectionPlan.ranges.map(({ head }) => EditorSelection.cursor(head)),
+  1
+)
+assert.deepEqual(normalizedUniqueSelection.ranges.map(({ head }) => head), [6, 10, 14])
+assert.equal(normalizedUniqueSelection.main.head, 6)
+assert.deepEqual(planLineTransform('b\na', [{ anchor: 3, head: 3 }], 'sort-ascending').ranges, [
+  { anchor: 1, head: 1 }
+])
+assert.deepEqual(planLineTransform('b\na\n', [{ anchor: 4, head: 4 }], 'sort-ascending').ranges, [
+  { anchor: 4, head: 4 }
+])
+
+const disjointUniquePlan = planLineTransform('b\nb\nkeep\nd\nd\n', [
+  { anchor: 1, head: 4 },
+  { anchor: 7, head: 7 },
+  { anchor: 12, head: 9 }
+], 'unique')
+assert.deepEqual(disjointUniquePlan.changes, [
+  { from: 0, to: 4, insert: 'b\n' },
+  { from: 9, to: 13, insert: 'd\n' }
+])
+assert.deepEqual(disjointUniquePlan.ranges, [
+  { anchor: 0, head: 2 },
+  { anchor: 5, head: 5 },
+  { anchor: 9, head: 7 }
+])
+
+const noOpLineTransformPlan = planLineTransform('a\nb\n', [{ anchor: 1, head: 3 }], 'sort-ascending')
+assert.deepEqual(noOpLineTransformPlan.changes, [])
+assert.deepEqual(noOpLineTransformPlan.ranges, [{ anchor: 1, head: 3 }])
+
+const mixedNoOpAndChangedPlan = planLineTransform('a\nb\nkeep\nd\nc\n', [
+  { anchor: 1, head: 3 },
+  { anchor: 12, head: 10 }
+], 'sort-ascending')
+assert.deepEqual(mixedNoOpAndChangedPlan.changes, [
+  { from: 9, to: 13, insert: 'c\nd\n' }
+])
+assert.deepEqual(mixedNoOpAndChangedPlan.ranges, [
+  { anchor: 0, head: 4 },
+  { anchor: 13, head: 9 }
+])
 
 const navigationLocation = (docId, path, line = 1, column = 1, groupId = 0) => ({ docId, path, groupId, line, column })
 const navA = navigationLocation('doc-a', '/workspace/a.ts', 1, 1)

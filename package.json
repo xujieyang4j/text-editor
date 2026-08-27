@@ -15,7 +15,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test:shared": "tsc --outDir out-test --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop --skipLibCheck --types node src/shared/ipc.ts src/shared/text.ts src/shared/filePolicy.ts src/shared/losslessJson.ts src/shared/git.ts src/shared/lspProtocol.ts src/renderer/src/documents.ts src/renderer/src/fuzzy.ts src/renderer/src/symbols.ts src/renderer/src/incrementalDiff.ts src/renderer/src/navigationHistory.ts src/renderer/src/selectionCommands.ts && node src/shared/text.test.mjs && node src/shared/core.test.mjs",
+    "test:shared": "tsc --outDir out-test --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop --skipLibCheck --types node src/shared/ipc.ts src/shared/text.ts src/shared/filePolicy.ts src/shared/losslessJson.ts src/shared/git.ts src/shared/lspProtocol.ts src/renderer/src/documents.ts src/renderer/src/fuzzy.ts src/renderer/src/symbols.ts src/renderer/src/incrementalDiff.ts src/renderer/src/lineTransforms.ts src/renderer/src/navigationHistory.ts src/renderer/src/selectionCommands.ts && node src/shared/text.test.mjs && node src/shared/core.test.mjs",
     "test": "npm run test:shared && npm run typecheck && npm run build",
     "smoke": "LUMEN_SMOKE=1 electron-vite preview",
     "smoke:headless": "xvfb-run -a npm run smoke",

@@ -18,6 +18,9 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **Goto Anything** (`Ctrl/Cmd+P`) — fuzzy workspace file finder with `:line[:column]`,
   `@current-symbol`, and `#project-symbol` modes
 - **Multi-group layouts & windows** — single, 2/3-column and 4-grid layouts with independent tab groups
+- **Current-file find navigation** — run *Find Next* (`F3`) or *Find Previous* (`Shift+F3`)
+  from the Edit menu or Command Palette; these are separate from workspace-result navigation
+  with `F4` / `Shift+F4`
 - **Find Results & project symbols** — persistent workspace results (`F4` / `Shift+F4` navigation)
   and project-wide function, class, and heading lookup
 - **Unified navigation history** — `Alt+Left` / `Alt+Right` goes back/forward across successful
@@ -32,7 +35,11 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **Syntax highlighting** for 100+ languages, auto-detected by extension; manual override via
   the status-bar language button or **Set Syntax…**
 - **Minimap** and **indentation guides**, **vertical rulers**, trailing-whitespace highlight
-- **Line operations**: move/copy/delete line, duplicate, toggle comment (`Ctrl/Cmd+/`), sort lines
+- **Line operations**: move/copy/delete line, duplicate, toggle comment (`Ctrl/Cmd+/`), plus
+  *Sort Lines Ascending*, *Sort Lines Descending*, *Reverse Lines*, and *Unique Lines*. Every non-empty
+  selection expands to complete lines and disjoint blocks are processed independently; with no selection
+  they process the whole file, preserving its final-newline state. *Unique Lines* matches complete lines
+  exactly and stably keeps the first occurrence
 - **File tree sidebar** — starts collapsed (`Ctrl/Cmd+B` to show), opens a folder as a
   workspace, and lazily expands directories
 - **Find & replace**, **text undo/redo**, **multi-cursor**, rectangular selection, bracket matching
@@ -184,6 +191,8 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Next / prev tab     | `Ctrl/Cmd+Alt+Right/Left`   |
 | Find                | `Ctrl/Cmd+F`                |
 | Replace             | `Ctrl/Cmd+H`                |
+| Find next / previous in current file | `F3` / `Shift+F3` |
+| Next / previous workspace result | `F4` / `Shift+F4` |
 | Toggle Markdown preview | `Ctrl/Cmd+Shift+V`      |
 | Toggle comment      | `Ctrl/Cmd+/`                |
 | Move line up/down   | `Alt+Up/Down`               |

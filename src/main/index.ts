@@ -617,6 +617,134 @@ function createWindow(sessionId = newSessionId()): void {
         if (textAfterSelectionUndo !== multiCursorText) {
           throw new Error(`Selection undo changed document text: ${JSON.stringify(textAfterSelectionUndo)}`)
         }
+        const replaceEditorText = async (text: string): Promise<void> => {
+          const result = await win.webContents.executeJavaScript(`(async () => {
+            const content = document.querySelector('.cm-content')
+            if (!(content instanceof HTMLElement)) return { ok: false, text: '' }
+            content.focus()
+            document.execCommand('selectAll')
+            document.execCommand('insertText', false, ${JSON.stringify(text)})
+            await new Promise((resolve) => window.setTimeout(resolve, 30))
+            return {
+              ok: true,
+              text: [...content.querySelectorAll('.cm-line')].map((line) => line.textContent ?? '').join(${JSON.stringify('\n')})
+            }
+          })()`, true)
+          if (!result.ok || result.text !== text) {
+            throw new Error(`Could not set smoke editor text: ${JSON.stringify({ expected: text, result })}`)
+          }
+        }
+        const waitForEditorText = async (expected: string, command: MenuEvent): Promise<void> => {
+          const result = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            let text = ''
+            while (Date.now() < deadline) {
+              text = [...document.querySelectorAll('.cm-content .cm-line')]
+                .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')})
+              if (text === ${JSON.stringify(expected)}) return { ok: true, text }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, text }
+          })()`, true)
+          if (!result.ok) {
+            throw new Error(`${command} did not produce the expected editor text: ${JSON.stringify({ expected, result })}`)
+          }
+        }
+
+        // Exercise the CodeMirror search panel through the same menu-event
+        // path used by Electron's native menu, including both wrap directions.
+        await replaceEditorText('beta\nalpha\nbeta\ngamma\n')
+        win.webContents.send(IPC.menuEvent, 'find' as MenuEvent)
+        const findPrepared = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const input = document.querySelector('.cm-panel.cm-search input[name="search"]')
+            if (input instanceof HTMLInputElement && document.activeElement === input) {
+              input.value = 'beta'
+              input.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true }))
+              await new Promise((resolve) => window.setTimeout(resolve, 30))
+              return {
+                ok: true,
+                value: input.value,
+                matches: document.querySelectorAll('.cm-content .cm-searchMatch').length
+              }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, value: '', matches: 0 }
+        })()`, true)
+        if (!findPrepared.ok || findPrepared.value !== 'beta' || findPrepared.matches !== 2) {
+          throw new Error(`CodeMirror find panel was not prepared: ${JSON.stringify(findPrepared)}`)
+        }
+        const sendFindAndWaitForLine = async (command: 'find-next' | 'find-previous', expectedLine: number): Promise<void> => {
+          win.webContents.send(IPC.menuEvent, command as MenuEvent)
+          const result = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            let observed = { line: 0, text: '', inContent: false }
+            while (Date.now() < deadline) {
+              const content = document.querySelector('.cm-content')
+              const match = content?.querySelector('.cm-searchMatch-selected')
+              const line = match?.closest('.cm-line')
+              const lines = content ? [...content.querySelectorAll('.cm-line')] : []
+              observed = {
+                line: line ? lines.indexOf(line) + 1 : 0,
+                text: match?.textContent ?? '',
+                inContent: content instanceof HTMLElement && match instanceof HTMLElement && content.contains(match)
+              }
+              if (observed.inContent && observed.text === 'beta' && observed.line === ${expectedLine}) {
+                return { ok: true, ...observed }
+              }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, ...observed }
+          })()`, true)
+          if (!result.ok) {
+            throw new Error(`${command} did not select beta on line ${expectedLine}: ${JSON.stringify(result)}`)
+          }
+        }
+        await sendFindAndWaitForLine('find-next', 1)
+        await sendFindAndWaitForLine('find-next', 3)
+        await sendFindAndWaitForLine('find-next', 1)
+        await sendFindAndWaitForLine('find-previous', 3)
+        const findClosed = await win.webContents.executeJavaScript(`(() => {
+          const close = document.querySelector('.cm-panel.cm-search button[name="close"]')
+          if (!(close instanceof HTMLButtonElement)) return false
+          close.click()
+          return !document.querySelector('.cm-panel.cm-search')
+        })()`, true)
+        if (!findClosed) throw new Error('CodeMirror find panel did not close after the navigation smoke test')
+
+        // A range ending at the next line's column zero must exclude that line.
+        // Sorting only alpha/beta proves gamma was outside the transformed span.
+        await replaceEditorText('alpha\nbeta\ngamma\n')
+        const lineBoundarySelection = await win.webContents.executeJavaScript(`(async () => {
+          const content = document.querySelector('.cm-content')
+          const lines = content ? [...content.querySelectorAll('.cm-line')] : []
+          if (!(content instanceof HTMLElement) || lines.length !== 4) return { ok: false, selected: '' }
+          const range = document.createRange()
+          range.setStart(lines[0], 0)
+          range.setEnd(lines[2], 0)
+          const selection = window.getSelection()
+          if (!selection) return { ok: false, selected: '' }
+          content.focus()
+          selection.removeAllRanges()
+          selection.addRange(range)
+          await new Promise((resolve) => window.setTimeout(resolve, 50))
+          return { ok: !selection.isCollapsed, selected: selection.toString() }
+        })()`, true)
+        if (!lineBoundarySelection.ok) {
+          throw new Error(`Could not prepare next-line-start selection: ${JSON.stringify(lineBoundarySelection)}`)
+        }
+        win.webContents.send(IPC.menuEvent, 'sort-lines-descending' as MenuEvent)
+        await waitForEditorText('beta\nalpha\ngamma\n', 'sort-lines-descending')
+
+        await replaceEditorText('alpha\nbeta\ngamma\n')
+        win.webContents.send(IPC.menuEvent, 'reverse-lines' as MenuEvent)
+        await waitForEditorText('gamma\nbeta\nalpha\n', 'reverse-lines')
+
+        await replaceEditorText('beta\nalpha\nbeta\ngamma\n')
+        win.webContents.send(IPC.menuEvent, 'unique-lines' as MenuEvent)
+        await waitForEditorText('beta\nalpha\ngamma\n', 'unique-lines')
         const navigationDocument = await win.webContents.executeJavaScript(`(() => {
           const tab = document.querySelector('#tab-bar > .tab.active')
           return {

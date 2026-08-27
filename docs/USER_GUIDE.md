@@ -277,6 +277,15 @@ current line to the next line. It leaves the document untouched and shows a stat
 there is no following line or no line break to join. The resulting line blocks keep a cursor and the
 whole action is undoable in one step.
 
+**Sort, reverse, and unique lines.** Run *Edit: Sort Lines Ascending*, *Sort Lines Descending*,
+*Reverse Lines*, or *Unique Lines* from the Edit menu or Command Palette. Every non-empty selection
+expands to the complete physical lines it touches. Disjoint line blocks are transformed independently,
+overlapping blocks are handled once, and selection direction and cursor positions remain mapped through
+the edit (positions inside a duplicate removed by *Unique Lines* follow its retained first occurrence).
+If every selection is empty, the command applies to the whole document. Sorting compares complete line contents, reversing
+only changes line order, and *Unique Lines* uses exact line matching while stably retaining the first
+occurrence. All four operations preserve whether the document has a final newline.
+
 **Reindent selection.** *Edit: Reindent Selection* (`Ctrl/Cmd+Alt+\`) uses the active language's
 local syntax indentation service to recalculate the leading whitespace of selected lines. Unlike
 manual indent/outdent, it is useful after pasting a malformed block or changing braces, Python
@@ -294,7 +303,10 @@ status message.
 | Duplicate line / selection | `Ctrl/Cmd+Shift+D` |
 | Delete line | `Ctrl/Cmd+Shift+K` |
 | Transpose adjacent characters | `Ctrl+T` |
-| Sort lines (selection, or whole doc) | Command Palette → *Edit: Sort Lines* |
+| Sort lines ascending | Edit menu or Command Palette → *Edit: Sort Lines Ascending* |
+| Sort lines descending | Edit menu or Command Palette → *Edit: Sort Lines Descending* |
+| Reverse lines | Edit menu or Command Palette → *Edit: Reverse Lines* |
+| Unique lines | Edit menu or Command Palette → *Edit: Unique Lines* |
 | Select line | `Alt+L` |
 | Select enclosing syntax | `Ctrl/Cmd+I` |
 
@@ -331,14 +343,17 @@ you trust.
 
 - **Find** — `Ctrl/Cmd+F` opens the search panel. The panel has regex, case-sensitive and
   whole-word toggles.
-- **Find next** — `F3` (or `Enter` while the search field is focused).
+- **Find next / previous** — `F3` / `Shift+F3` steps through matches in the current file. Both
+  commands are available from the Edit menu and Command Palette; `Enter` also finds the next match
+  while the search field is focused.
 - **Replace** — `Ctrl/Cmd+H` opens the panel with the replace row; use its *Replace* /
   *Replace All* buttons.
 - **Select all matches** — `Alt+F3` turns every match of the current selection into a
   cursor for bulk editing.
 
-> Note: `Ctrl/Cmd+G` is bound to **Goto Line** in Lumen (not "find next"), so use `F3` to step
-> through matches.
+> *Find Next* and *Find Previous* search the current file. They are distinct from `F4` /
+> `Shift+F4`, which navigate persistent workspace Find Results. `Ctrl/Cmd+G` is bound to
+> **Goto Line** in Lumen (not "find next").
 
 <a id="en-syntax"></a>
 
@@ -471,7 +486,8 @@ settings as `session.json` for the legacy window or `session-<id>.json` per wind
 | Close / Reopen tab | `Ctrl+W` / `Ctrl+Shift+T` | `Cmd+W` / `Cmd+Shift+T` |
 | Tab N / Next / Prev | `Ctrl+1..9` / `Ctrl+Alt+←/→` | `Cmd+1..9` / `Cmd+Alt+←/→` |
 | Find / Replace | `Ctrl+F` / `Ctrl+H` | `Cmd+F` / `Cmd+H` |
-| Find next | `F3` | `F3` |
+| Find next / previous in current file | `F3` / `Shift+F3` | `F3` / `Shift+F3` |
+| Next / previous workspace result | `F4` / `Shift+F4` | `F4` / `Shift+F4` |
 | Toggle Markdown preview | `Ctrl+Shift+V` | `Cmd+Shift+V` |
 | Add next occurrence | `Ctrl+D` | `Cmd+D` |
 | Undo / redo selection | `Ctrl+U` / `Alt+U` | `Cmd+U` / `Cmd+Shift+U` |
@@ -744,6 +760,13 @@ UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 
 多个独立选区分别处理，重叠范围只合并一次。没有选区时，合并光标所在行与下一行。最后一行等没有可合并
 换行的位置会保持文本不变并显示状态提示。每个合并后的行块保留一个光标，整个操作可一次撤销。
 
+**排序、反转与删除重复行。** 从“编辑”菜单或命令面板执行 *Edit: Sort Lines Ascending*、
+*Sort Lines Descending*、*Reverse Lines* 或 *Unique Lines*。每个非空选区都会扩展到其触及的完整物理行；
+不相邻的行块分别处理，重叠行块只处理一次，选区方向和光标位置会随编辑正确映射（位于被 *Unique Lines*
+删除的重复行内的位置会跟随保留下来的首次出现行）。所有选区均为空时处理整个文档。
+排序按完整行内容比较，反转只改变行的先后顺序；*Unique Lines* 按整行内容精确匹配，并按原顺序稳定保留
+第一次出现。四项操作都会保留文档原有的末尾换行状态。
+
 **自动重新缩进选区。** *Edit: Reindent Selection*（`Ctrl/Cmd+Alt+\`）利用当前语言的本地语法缩进
 服务重新计算选中行前导空白。它区别于手工增加/减少一级缩进，适合粘贴错位代码或修改括号、Python 块、
 列表、分支后恢复结构。它不会启动 LSP、终端或外部格式化器；语言没有可用缩进信息时，文本保持不变并
@@ -759,7 +782,10 @@ UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 
 | 复制行 / 选区 | `Ctrl/Cmd+Shift+D` |
 | 删除行 | `Ctrl/Cmd+Shift+K` |
 | 转置相邻字符 | `Ctrl+T` |
-| 行排序（选区或整篇） | 命令面板 → *Edit: Sort Lines* |
+| 升序排列行 | “编辑”菜单或命令面板 |
+| 降序排列行 | “编辑”菜单或命令面板 |
+| 反转行顺序 | “编辑”菜单或命令面板 |
+| 删除重复行 | “编辑”菜单或命令面板 |
 | 选中整行 | `Alt+L` |
 | 选中所在语法块 | `Ctrl/Cmd+I` |
 
@@ -787,11 +813,13 @@ UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 
 ## 6. 查找与替换
 
 - **查找** —— `Ctrl/Cmd+F` 打开查找面板，面板内有正则、区分大小写、全词匹配开关。
-- **查找下一个** —— `F3`（或查找框聚焦时按 `Enter`）。
+- **查找下一个 / 上一个** —— `F3` / `Shift+F3` 在当前文件的匹配间前后跳转。两项命令均可从
+  “编辑”菜单或命令面板执行；查找框聚焦时按 `Enter` 也会查找下一个。
 - **替换** —— `Ctrl/Cmd+H` 打开带替换行的面板，用其中的 *Replace* / *Replace All* 按钮。
 - **选中所有匹配** —— `Ctrl/Cmd+Shift+L` 把当前选区的每处匹配都变成光标，便于批量编辑。
 
-> 注意：在 Lumen 中 `Ctrl/Cmd+G` 绑定为**跳转到行**（而非“查找下一个”），所以用 `F3` 逐个跳匹配。
+> *Find Next* 和 *Find Previous* 只查找当前文件，区别于使用 `F4` / `Shift+F4` 导航的工作区
+> Find Results。在 Lumen 中 `Ctrl/Cmd+G` 绑定为**跳转到行**（而非“查找下一个”）。
 
 <a id="zh-syntax"></a>
 
@@ -900,7 +928,8 @@ Sublime 的 “hot exit”）。
 | 关闭 / 重开标签 | `Ctrl+W` / `Ctrl+Shift+T` | `Cmd+W` / `Cmd+Shift+T` |
 | 第 N / 下 / 上标签 | `Ctrl+1..9` / `Ctrl+Alt+←→` | `Cmd+1..9` / `Cmd+Alt+←→` |
 | 查找 / 替换 | `Ctrl+F` / `Ctrl+H` | `Cmd+F` / `Cmd+H` |
-| 查找下一个 | `F3` | `F3` |
+| 当前文件查找下一个 / 上一个 | `F3` / `Shift+F3` | `F3` / `Shift+F3` |
+| 工作区下一条 / 上一条查找结果 | `F4` / `Shift+F4` | `F4` / `Shift+F4` |
 | 切换 Markdown 预览 | `Ctrl+Shift+V` | `Cmd+Shift+V` |
 | 加入下一个匹配 | `Ctrl+D` | `Cmd+D` |
 | 撤销 / 重做选区 | `Ctrl+U` / `Alt+U` | `Cmd+U` / `Cmd+Shift+U` |

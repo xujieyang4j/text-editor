@@ -63,6 +63,8 @@ import {
   searchKeymap,
   highlightSelectionMatches,
   openSearchPanel,
+  findNext,
+  findPrevious,
   getSearchQuery,
   setSearchQuery,
   SearchQuery
@@ -81,6 +83,7 @@ import { setDiagnostics, lintGutter, type Diagnostic } from '@codemirror/lint'
 import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { rulers } from './extensions/rulers.js'
 import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
+import { planLineTransform, type LineTransformMode } from './lineTransforms.js'
 import {
   redoSelectionOnly,
   removeMainSelection,
@@ -217,9 +220,12 @@ function baseExtensions(
       { key: 'Mod-d', run: selectNextOccurrenceAsMain, preventDefault: true },
       { key: 'Mod-u', run: (view) => { undoSelectionOnly(view); return true }, preventDefault: true },
       { key: 'Alt-u', mac: 'Mod-Shift-u', run: (view) => { redoSelectionOnly(view); return true }, preventDefault: true },
-      // The native Ctrl/Cmd+G menu command owns Goto Line so it can record a
-      // successful semantic jump. Remove CodeMirror's separate Mod-Alt-g path.
-      ...searchKeymap.filter((binding) => binding.key !== 'Mod-Alt-g' && binding.key !== 'Mod-g'),
+      // Native menu accelerators own Goto Line and F3 navigation. Keeping the
+      // corresponding CodeMirror bindings would let one physical keypress run
+      // both paths (and could skip over a match).
+      ...searchKeymap.filter((binding) =>
+        binding.key !== 'Mod-Alt-g' && binding.key !== 'Mod-g' && binding.key !== 'F3'
+      ),
       ...historyKeymap,
       ...foldKeymap,
       ...completionKeymap,
@@ -723,28 +729,50 @@ export class Editor {
     })
   }
 
-  /** Sort the selected lines (or the whole document) alphabetically. */
-  sortLines(): void {
+  /** Transform complete selected lines, or the whole document without a selection. */
+  transformLines(mode: LineTransformMode): boolean {
     const { state } = this.view
-    const sel = state.selection.main
-    const fromLine = state.doc.lineAt(sel.from)
-    const toLine = state.doc.lineAt(sel.to)
-    // If nothing meaningful is selected, sort the entire document.
-    const spanFrom = sel.empty ? 0 : fromLine.from
-    const spanTo = sel.empty ? state.doc.length : toLine.to
-    const text = state.doc.sliceString(spanFrom, spanTo)
-    const sorted = text.split('\n').sort((a, b) => a.localeCompare(b)).join('\n')
-    if (sorted === text) return
-    this.view.dispatch({
-      changes: { from: spanFrom, to: spanTo, insert: sorted },
-      selection: EditorSelection.range(spanFrom, spanFrom + sorted.length)
+    const plan = planLineTransform(state.doc.toString(), state.selection.ranges, mode)
+    if (plan.changes.length === 0) return false
+    const ranges = plan.ranges.map((range, index) => {
+      const original = state.selection.ranges[index]
+      const bidiLevel = original.bidiLevel ?? undefined
+      if (range.anchor === range.head) {
+        return EditorSelection.cursor(range.head, original.assoc, bidiLevel, original.goalColumn)
+      }
+      if (original.undirectional) {
+        return EditorSelection.undirectionalRange(
+          Math.min(range.anchor, range.head),
+          Math.max(range.anchor, range.head)
+        )
+      }
+      return EditorSelection.range(range.anchor, range.head, original.goalColumn, bidiLevel, original.assoc)
     })
+    this.view.dispatch({
+      changes: plan.changes,
+      selection: EditorSelection.create(ranges, state.selection.mainIndex),
+      userEvent: `input.lines.${mode}`
+    })
+    return true
   }
+
+  sortLines(): boolean { return this.transformLines('sort-ascending') }
+  sortLinesDescending(): boolean { return this.transformLines('sort-descending') }
+  reverseLines(): boolean { return this.transformLines('reverse') }
+  uniqueLines(): boolean { return this.transformLines('unique') }
 
   // ---- Search / navigation ----
 
   openSearch(): void {
     openSearchPanel(this.view)
+  }
+
+  findNextMatch(): boolean {
+    return findNext(this.view)
+  }
+
+  findPreviousMatch(): boolean {
+    return findPrevious(this.view)
   }
 
   openReplace(): void {

@@ -103,7 +103,10 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Insert Blank Line Above', 'insert-blank-line-above', 'CmdOrCtrl+Shift+Enter'),
         item('Insert Blank Line Below', 'insert-blank-line', 'CmdOrCtrl+Enter'),
         item('Transpose Characters', 'transpose-characters', 'Ctrl+T'),
-        item('Sort Lines', 'sort-lines'),
+        item('Sort Lines Ascending', 'sort-lines'),
+        item('Sort Lines Descending', 'sort-lines-descending'),
+        item('Reverse Lines', 'reverse-lines'),
+        item('Unique Lines', 'unique-lines'),
         item('Upper Case', 'to-upper-case'),
         item('Lower Case', 'to-lower-case'),
         item('Title Case', 'to-title-case'),
@@ -115,6 +118,8 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Reindent Selection', 'reindent-selection', 'CmdOrCtrl+Alt+\\'),
         { type: 'separator' },
         item('Find', 'find', 'CmdOrCtrl+F'),
+        item('Find Next in Current Document', 'find-next', 'F3'),
+        item('Find Previous in Current Document', 'find-previous', 'Shift+F3'),
         item('Replace', 'replace', 'CmdOrCtrl+H'),
         item('Find in Files…', 'find-in-files', 'CmdOrCtrl+Shift+F'),
         item('Replace in Files…', 'replace-in-files', 'CmdOrCtrl+Shift+H'),
@@ -132,7 +137,6 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Redo Selection', 'redo-selection', isMac ? 'Cmd+Shift+U' : 'Alt+U'),
         { type: 'separator' },
         item('Duplicate Line/Selection', 'duplicate-selection', 'CmdOrCtrl+Shift+D'),
-        item('Sort Lines', 'sort-lines'),
         item('Split Selection into Lines', 'split-selection-lines')
         , item('Add Next Occurrence', 'select-next-occurrence', 'CmdOrCtrl+D')
         , item('Skip Current Occurrence', 'skip-current-occurrence')
