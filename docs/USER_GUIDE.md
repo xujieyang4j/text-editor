@@ -83,15 +83,15 @@ npm run dist:linux   # Linux: AppImage + .deb
 │           │   Editor (CodeMirror) + Minimap  │
 │           │                                  │
 │           ├─────────────────────────────────┤
-│           │  Status bar: Ln/Col · Lang · EOL │
+│           │ Status: Ln/Col · Lang · Enc · EOL │
 └───────────┴─────────────────────────────────┘
 ```
 
 - **Sidebar** — the workspace file tree. It starts collapsed; toggle with `Ctrl/Cmd+B`.
 - **Tab bar** — one tab per open document. A `●` marks unsaved changes; `×` closes the tab; pinned tabs receive an accent marker.
 - **Editor** — the CodeMirror text area, with an optional minimap on the right.
-- **Status bar** — cursor position, selection length, and a **clickable language** field
-  (click it or focus it with Tab and press Enter/Space to change the syntax).
+- **Status bar** — cursor position and selection length, plus clickable language, encoding, and
+  line-ending fields. Click the encoding or line-ending field to choose the next-save format.
 - **Keyboard and assistive technology** — interactive panels expose named regions and keyboard-operable
   results, restore focus when closed, and honour reduced-motion and forced-color system settings.
 
@@ -108,11 +108,23 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Remove a workspace root | *Project: Remove Folder from Project…* — keeps its open tabs but revokes the folder's workspace access |
 | Save | `Ctrl/Cmd+S` (untitled files prompt for a path) |
 | Save As | `Ctrl/Cmd+Shift+S` |
+| Save All | `Ctrl/Cmd+Alt+S` |
 | Pin / unpin tab | `Ctrl/Cmd+Alt+P`, double-click the tab, or use its context menu |
 | Close tab | `Ctrl/Cmd+W` (prompts if there are unsaved changes) |
 | Reopen closed tab | `Ctrl/Cmd+Shift+T` (LIFO stack of recently closed files) |
 | Switch to tab N | `Ctrl/Cmd+1` … `Ctrl/Cmd+9` |
 | Next / previous tab | `Ctrl/Cmd+Alt+→` / `Ctrl/Cmd+Alt+←` |
+
+The status bar's encoding menu offers **UTF-8**, **UTF-8 BOM**, **UTF-16 LE**, and
+**UTF-16 BE**; its line-ending menu offers **LF**, **CRLF**, and **CR**. Selecting either
+value sets the target for the next save and marks the document unsaved—it does not rewrite the
+file immediately. The target is written by **Save**, **Save All**, or a configured **Auto Save**.
+When a file containing mixed line endings is saved, all line endings are normalized to the selected
+style.
+
+On open, BOM detection distinguishes these four Unicode formats: a UTF-8 BOM selects **UTF-8
+BOM**, UTF-16 BOMs select **UTF-16 LE** or **UTF-16 BE**, and no BOM falls back to
+**UTF-8**. The editor does not guess legacy or other encodings from the file contents.
 
 In the file tree, click a folder to expand/collapse it (loaded on demand), and click a file to
 open it. Opening a file that's already open just focuses its tab.
@@ -396,8 +408,9 @@ Settings are stored as JSON in the OS user-data directory and applied live:
 }
 ```
 
-Unknown/missing keys fall back to defaults, so a partial file is fine. `session.json` in the
-same folder stores your open tabs + folder and is managed automatically.
+Unknown/missing keys fall back to defaults, so a partial file is fine. The app manages
+`session.json` for the legacy window and `session-<id>.json` for additional windows in the same
+folder.
 
 <a id="en-session"></a>
 
@@ -412,8 +425,8 @@ unexpected quit or a machine crash (Sublime's "hot exit").
 - **Untitled buffers with content are preserved too**, as untitled drafts.
 - The session is written **as you type** (debounced), not just on quit, so a hard crash or power
   loss can't lose more than the last fraction of a second.
-- The session file is written **atomically** (temp file + rename), so an interrupted write can
-  never corrupt your recovery data.
+- The session file uses a temporary file plus atomic replacement, preventing a partial write from
+  replacing the last complete recovery snapshot.
 - On restore, clean file-backed buffers are re-read from disk (so external changes show up),
   while dirty buffers keep your draft layered on top. If a file was deleted/moved but you had
   unsaved edits, the draft is kept as an untitled buffer rather than lost.
@@ -421,7 +434,8 @@ unexpected quit or a machine crash (Sublime's "hot exit").
   position. Undo history and folded ranges remain session-local rather than being serialised.
 
 Use `Ctrl/Cmd+Shift+T` to reopen the most recently closed tab. Session data lives next to your
-settings as `session.json` (see [Settings Reference](#en-settings)).
+settings as `session.json` for the legacy window or `session-<id>.json` per window (see
+[Settings Reference](#en-settings)).
 
 <a id="en-keys"></a>
 
@@ -436,7 +450,7 @@ settings as `session.json` (see [Settings Reference](#en-settings)).
 | Goto Matching Bracket | `Ctrl+Shift+\` | `Cmd+Shift+\` |
 | New / Open file | `Ctrl+N` / `Ctrl+O` | `Cmd+N` / `Cmd+O` |
 | Open folder | `Ctrl+Shift+O` | `Cmd+Shift+O` |
-| Save / Save As | `Ctrl+S` / `Ctrl+Shift+S` | `Cmd+S` / `Cmd+Shift+S` |
+| Save / Save As / Save All | `Ctrl+S` / `Ctrl+Shift+S` / `Ctrl+Alt+S` | `Cmd+S` / `Cmd+Shift+S` / `Cmd+Alt+S` |
 | Close / Reopen tab | `Ctrl+W` / `Ctrl+Shift+T` | `Cmd+W` / `Cmd+Shift+T` |
 | Tab N / Next / Prev | `Ctrl+1..9` / `Ctrl+Alt+←/→` | `Cmd+1..9` / `Cmd+Alt+←/→` |
 | Find / Replace | `Ctrl+F` / `Ctrl+H` | `Cmd+F` / `Cmd+H` |
@@ -560,15 +574,15 @@ npm run dist:linux   # Linux：AppImage + .deb
 │           │   编辑区 (CodeMirror) + Minimap   │
 │           │                                  │
 │           ├─────────────────────────────────┤
-│           │  状态栏：行列 · 语言 · 换行符      │
+│           │ 状态：行列 · 语言 · 编码 · 换行符   │
 └───────────┴─────────────────────────────────┘
 ```
 
 - **侧边栏** —— 工作区文件树，默认收起，按 `Ctrl/Cmd+B` 显隐。
 - **标签栏** —— 每个打开的文档一个标签；`●` 表示未保存，`×` 关闭；固定标签带强调色。
 - **编辑区** —— CodeMirror 文本区，右侧可选 Minimap。
-- **状态栏** —— 光标位置、选中长度，以及**可操作的语言按钮**（点击，或用 Tab 聚焦后按
-  Enter/空格可修改语法）。
+- **状态栏** —— 光标位置、选中长度，以及可点击的语言、编码和换行符字段。点击编码或
+  换行符字段，可以选择下次保存使用的格式。
 - **键盘与辅助技术** —— 面板和结果区域具有明确语义，结果可用键盘操作；关闭面板后恢复焦点，
   并遵循系统的减少动效和强制色设置。
 
@@ -583,11 +597,21 @@ npm run dist:linux   # Linux：AppImage + .deb
 | 打开文件夹（工作区） | `Ctrl/Cmd+Shift+O`，载入侧边栏 |
 | 保存 | `Ctrl/Cmd+S`（未命名文件会弹保存框） |
 | 另存为 | `Ctrl/Cmd+Shift+S` |
+| 全部保存 | `Ctrl/Cmd+Alt+S` |
 | 固定 / 取消固定标签 | `Ctrl/Cmd+Alt+P`、双击标签或标签右键菜单 |
 | 关闭标签 | `Ctrl/Cmd+W`（有未保存改动会确认） |
 | 重开关闭的标签 | `Ctrl/Cmd+Shift+T`（后进先出栈） |
 | 切到第 N 个标签 | `Ctrl/Cmd+1` … `Ctrl/Cmd+9` |
 | 下一个 / 上一个标签 | `Ctrl/Cmd+Alt+→` / `Ctrl/Cmd+Alt+←` |
+
+状态栏编码菜单可选 **UTF-8**、**UTF-8 BOM**、**UTF-16 LE** 和 **UTF-16 BE**，换行符
+菜单可选 **LF**、**CRLF** 和 **CR**。选择任一项只会设置下次保存的目标格式，并将文档标记为
+未保存，不会立即重写文件；执行**保存**、**全部保存**或已配置的**自动保存**时才会写入磁盘。
+如果文件中混用了多种换行符，保存时会将它们统一为所选格式。
+
+打开文件时，编辑器基于 BOM 区分这四种 Unicode 格式：UTF-8 BOM 选择 **UTF-8 BOM**，
+UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 读取。
+编辑器不会根据文件内容猜测旧式编码或其他编码。
 
 文件树中点文件夹展开/折叠（按需加载），点文件打开。打开已开的文件只会聚焦它的标签。
 
@@ -807,8 +831,8 @@ Git 面板会显示当前分支、已配置的上游以及本地缓存的领先/
 }
 ```
 
-缺失/未知键回退到默认值，写一部分也没问题。同目录的 `session.json` 保存打开的标签与文件夹，
-由程序自动管理。
+缺失/未知键回退到默认值，写一部分也没问题。旧窗口使用同目录的 `session.json`，多窗口使用
+`session-<id>.json` 保存打开的标签与文件夹，均由程序自动管理。
 
 <a id="zh-session"></a>
 
@@ -822,12 +846,12 @@ Sublime 的 “hot exit”）。
   的原样文本——不会偷偷写回磁盘。
 - **有内容的未命名缓冲区同样保留**，恢复为未命名草稿。
 - 会话**在你打字时就（防抖）写盘**，不只在退出时写，所以硬崩溃/断电最多只丢失最后零点几秒。
-- 会话文件采用**原子写入**（临时文件 + 重命名），写入被中断也不会损坏你的恢复数据。
+- 会话文件使用临时文件加原子替换，未完成的写入不会覆盖上一份完整恢复快照。
 - 恢复时，未改动的文件会重新从磁盘读取（因此外部改动会体现出来），有改动的则把你的草稿叠加在
   磁盘内容之上；若文件被删除/移动但你有未保存编辑，草稿会作为未命名缓冲区保留，而非丢弃。
 
-`Ctrl/Cmd+Shift+T` 可重开最近关闭的标签。会话数据以 `session.json` 存于设置同目录
-（见[设置项参考](#zh-settings)）。
+`Ctrl/Cmd+Shift+T` 可重开最近关闭的标签。旧窗口会话使用 `session.json`，多窗口分别使用
+`session-<id>.json`，都存于设置同目录（见[设置项参考](#zh-settings)）。
 
 <a id="zh-keys"></a>
 
@@ -842,7 +866,7 @@ Sublime 的 “hot exit”）。
 | 跳转到匹配括号 | `Ctrl+Shift+\` | `Cmd+Shift+\` |
 | 新建 / 打开文件 | `Ctrl+N` / `Ctrl+O` | `Cmd+N` / `Cmd+O` |
 | 打开文件夹 | `Ctrl+Shift+O` | `Cmd+Shift+O` |
-| 保存 / 另存为 | `Ctrl+S` / `Ctrl+Shift+S` | `Cmd+S` / `Cmd+Shift+S` |
+| 保存 / 另存为 / 全部保存 | `Ctrl+S` / `Ctrl+Shift+S` / `Ctrl+Alt+S` | `Cmd+S` / `Cmd+Shift+S` / `Cmd+Alt+S` |
 | 关闭 / 重开标签 | `Ctrl+W` / `Ctrl+Shift+T` | `Cmd+W` / `Cmd+Shift+T` |
 | 第 N / 下 / 上标签 | `Ctrl+1..9` / `Ctrl+Alt+←→` | `Cmd+1..9` / `Cmd+Alt+←→` |
 | 查找 / 替换 | `Ctrl+F` / `Ctrl+H` | `Cmd+F` / `Cmd+H` |

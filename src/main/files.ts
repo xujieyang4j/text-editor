@@ -1,18 +1,20 @@
 import { dialog, ipcMain, BrowserWindow, app, shell, clipboard, type IpcMainInvokeEvent } from 'electron'
-import { promises as fs, watch, type FSWatcher } from 'fs'
+import { createReadStream, promises as fs, watch, type FSWatcher } from 'fs'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process'
 import { promisify } from 'util'
 import { StringDecoder } from 'string_decoder'
 import { createHash } from 'crypto'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { detectLineEnding, encodeText as encodePreservedText } from '../shared/text.js'
+import { detectLineEnding, encodeText as encodePreservedText, jsonStringUtf8ByteLength, normalizeLineEndings } from '../shared/text.js'
 import { isBinaryBuffer, maxEditableBytes } from '../shared/filePolicy.js'
 import { extractWorkspaceSymbols } from '../shared/symbolIndex.js'
 import { parseGitRemoteLines, parseGitTracking } from '../shared/git.js'
 import { createLspMessageReader, encodeLspMessage, LspProtocolError } from '../shared/lspProtocol.js'
 import {
   IPC,
+  MAX_SESSION_OPEN_FILES,
+  MAX_SESSION_RECOVERY_BYTES,
   DEFAULT_SETTINGS,
   EMPTY_SESSION,
   type OpenedFile,
@@ -76,6 +78,7 @@ import {
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
 const MAX_SEARCH_RESULTS = 5_000
+const MAX_SESSION_SERIALIZED_BYTES = MAX_SESSION_RECOVERY_BYTES + 8 * 1024 * 1024
 
 /** Directory entries that are noisy and rarely useful in an editor workspace. */
 const IGNORED_ENTRIES = new Set([
@@ -92,6 +95,8 @@ const IGNORED_ENTRIES = new Set([
 
 /** Prevent concurrent writes from racing through one fixed temporary filename. */
 const writeQueues = new Map<string, Promise<void>>()
+/** Serialises path-changing operations with saves, including directory moves. */
+let fileMutationTail: Promise<void> = Promise.resolve()
 const workspaceWatchers = new Map<number, Map<string, FSWatcher>>()
 const builds = new Map<number, ChildProcessWithoutNullStreams>()
 /** The main process owns terminal child processes; the renderer only sees text I/O. */
@@ -199,7 +204,10 @@ const LANGUAGE_SERVER_GRACEFUL_TIMEOUT_MS = 500
 const LANGUAGE_SERVER_CLOSE_TIMEOUT_MS = 500
 const execFileAsync = promisify(execFile)
 const windowSessionIds = new Map<number, string>()
-const replaceUndoTransactions = new Map<string, { expiresAt: number; files: Map<string, Buffer> }>()
+const replaceUndoTransactions = new Map<string, {
+  expiresAt: number
+  files: Map<string, { content: Buffer; expectedRevision: string }>
+}>()
 const pendingSublimeImports = new Map<string, { senderId: number; expiresAt: number; sourcePath: string; roots: string[]; project: Session['project'] }>()
 const grantedFiles = new Map<number, Set<string>>()
 const grantedRoots = new Map<number, Set<string>>()
@@ -507,6 +515,31 @@ function encodeText(content: string, options: FileWriteOptions): Buffer {
   return encodePreservedText(content, options.encoding, options.eol)
 }
 
+function fileRevision(buffer: Uint8Array): string {
+  return `sha256:${createHash('sha256').update(buffer).digest('hex')}`
+}
+
+/** Hash exact disk bytes without applying the editor's text-size limit. */
+async function readRawFileRevision(filePath: string): Promise<string | null> {
+  try {
+    const hash = createHash('sha256')
+    for await (const chunk of createReadStream(filePath)) hash.update(chunk)
+    return `sha256:${hash.digest('hex')}`
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+function expectedFileRevision(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(value)) {
+    throw new Error('Invalid file revision.')
+  }
+  return value
+}
+
 function looksBinary(buffer: Buffer, encoding: TextEncoding): boolean {
   return isBinaryBuffer(buffer, encoding === 'utf16le' || encoding === 'utf16be')
 }
@@ -518,23 +551,162 @@ async function readFile(filePath: string): Promise<OpenedFile> {
   const byteLength = stat.size
   const maxBytes = maxEditableBytes((await readSettings()).maxFileSizeMB)
   if (byteLength > maxBytes) {
-    return { path: filePath, content: '', encoding: 'utf8', eol: 'LF', byteLength, isBinary: false, isTooLarge: true }
+    return { path: filePath, content: '', encoding: 'utf8', eol: 'LF', revision: null, byteLength, isBinary: false, isTooLarge: true }
   }
   const buffer = await fs.readFile(filePath)
+  const actualByteLength = buffer.byteLength
+  if (actualByteLength > maxBytes) {
+    return {
+      path: filePath,
+      content: '',
+      encoding: 'utf8',
+      eol: 'LF',
+      revision: fileRevision(buffer),
+      byteLength: actualByteLength,
+      isBinary: false,
+      isTooLarge: true
+    }
+  }
   const encoding = detectEncoding(buffer)
   if (looksBinary(buffer, encoding)) {
-    return { path: filePath, content: '', encoding, eol: 'LF', byteLength, isBinary: true, isTooLarge: false }
+    return { path: filePath, content: '', encoding, eol: 'LF', revision: fileRevision(buffer), byteLength: actualByteLength, isBinary: true, isTooLarge: false }
   }
-  const content = decodeText(buffer, encoding)
+  const decoded = decodeText(buffer, encoding)
   return {
     path: filePath,
-    content,
+    // CodeMirror normalises line breaks to LF. Normalise at the process
+    // boundary too so document baselines, drafts and watcher snapshots use
+    // the same logical representation; `eol` retains the physical format.
+    content: normalizeLineEndings(decoded),
     encoding,
-    eol: detectLineEnding(content),
-    byteLength,
+    eol: detectLineEnding(decoded),
+    revision: fileRevision(buffer),
+    byteLength: actualByteLength,
     isBinary: false,
     isTooLarge: false
   }
+}
+
+/** Validate a disk revision and write only when the observed bytes still match it. */
+async function saveFile(
+  filePath: string,
+  content: string,
+  options?: FileWriteOptions
+): Promise<SaveResult> {
+  const validated = validWriteOptions(options)
+  const expectedRevision = expectedFileRevision(options?.expectedRevision)
+  return saveFileBytes(filePath, encodeText(content, validated), expectedRevision)
+}
+
+async function saveFileBytes(
+  filePath: string,
+  bytes: Buffer,
+  expectedRevision: string | null | undefined
+): Promise<SaveResult> {
+  return withSerializedFileSave(filePath, async () => {
+    const writePath = await fileWriteTarget(filePath)
+    const nextRevision = fileRevision(bytes)
+    let checkedRevision: string | null | undefined
+    let current: OpenedFile | null = null
+    if (expectedRevision !== undefined) {
+      const currentRevision = await readRawFileRevision(writePath)
+      const revisionMatches = currentRevision === expectedRevision
+      if (!revisionMatches) {
+        // Concurrent identical saves are idempotent: the desired bytes have
+        // already landed, so return their observed revision without rewriting.
+        if (currentRevision === nextRevision) {
+          return { saved: true, path: filePath, revision: nextRevision }
+        }
+        if (currentRevision !== null) {
+          try { current = await readFile(writePath) }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+        }
+        return { saved: false, path: filePath, reason: 'conflict', conflict: current }
+      }
+      checkedRevision = currentRevision
+    }
+
+    // Regular files use a durable same-directory temporary file followed by
+    // one final revision check and atomic replacement. Refuse hard-linked
+    // targets: in-place writes can corrupt every alias on failure, while
+    // replacement would silently sever the user's link relationship.
+    let links = 1
+    let mode: number | undefined
+    try {
+      const stat = await fs.stat(writePath)
+      links = stat.nlink
+      mode = stat.mode & 0o777
+    } catch { /* Missing targets are created below. */ }
+    if (links > 1) {
+      return {
+        saved: false,
+        path: filePath,
+        reason: 'hardlink',
+        conflict: current ?? await readFile(writePath)
+      }
+    }
+
+    const tempPath = path.join(
+      path.dirname(writePath),
+      `.${path.basename(writePath)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`
+    )
+    let tempCreated = false
+    try {
+      const handle = await fs.open(tempPath, 'wx', mode ?? 0o666)
+      tempCreated = true
+      try {
+        if (mode !== undefined) await handle.chmod(mode)
+        await handle.writeFile(bytes)
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      if (expectedRevision !== undefined) {
+        const latestRevision = await readRawFileRevision(writePath)
+        let latest: OpenedFile | null = null
+        if (latestRevision !== checkedRevision) {
+          if (latestRevision !== null) {
+            try { latest = await readFile(writePath) }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+          }
+          return { saved: false, path: filePath, reason: 'conflict', conflict: latest }
+        }
+      }
+      if (expectedRevision === null) {
+        try {
+          await fs.link(tempPath, writePath)
+          return { saved: true, path: filePath, revision: nextRevision }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+          let conflict: OpenedFile | null = null
+          try { conflict = await readFile(writePath) } catch { /* Broken links remain a missing-target conflict. */ }
+          return { saved: false, path: filePath, reason: 'conflict', conflict }
+        }
+      }
+      const latestWritePath = await fileWriteTarget(filePath)
+      if (path.resolve(latestWritePath) !== path.resolve(writePath)) {
+        let conflict: OpenedFile | null = null
+        try { conflict = await readFile(filePath) } catch { /* The link/path became unavailable. */ }
+        return { saved: false, path: filePath, reason: 'conflict', conflict }
+      }
+      try {
+        if ((await fs.stat(writePath)).nlink > 1) {
+          return { saved: false, path: filePath, reason: 'hardlink', conflict: await readFile(writePath) }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        return { saved: false, path: filePath, reason: 'conflict', conflict: null }
+      }
+      await fs.rename(tempPath, writePath)
+      return { saved: true, path: filePath, revision: nextRevision }
+    } finally {
+      if (tempCreated) {
+        try { await fs.unlink(tempPath) } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`Could not remove save temporary file ${tempPath}:`, error)
+        }
+      }
+    }
+  })
 }
 
 /** Absolute path to a JSON file living in Electron's userData directory. */
@@ -553,8 +725,9 @@ async function readSettings(): Promise<Settings> {
   return sanitizeSettings(await readJson<unknown>(userDataFile('settings.json'), DEFAULT_SETTINGS))
 }
 
-async function readJson<T>(file: string, fallback: T): Promise<T> {
+async function readJson<T>(file: string, fallback: T, maxBytes?: number): Promise<T> {
   try {
+    if (maxBytes !== undefined && (await fs.stat(file)).size > maxBytes) return fallback
     return JSON.parse(await fs.readFile(file, 'utf-8')) as T
   } catch {
     return fallback
@@ -562,21 +735,67 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
 }
 
 /** Serialise writes per target, use unique temporary paths, and atomically replace the destination. */
-async function writeJson(file: string, data: unknown): Promise<void> {
+async function writeJson(file: string, data: unknown, maxBytes?: number): Promise<void> {
   const previous = writeQueues.get(file) ?? Promise.resolve()
   const next = previous
     .catch(() => undefined)
     .then(async () => {
       await fs.mkdir(path.dirname(file), { recursive: true })
       const tmp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`
-      await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8')
-      await fs.rename(tmp, file)
+      const serialized = JSON.stringify(data, null, 2)
+      if (maxBytes !== undefined && Buffer.byteLength(serialized, 'utf8') > maxBytes) {
+        throw new Error('Session recovery data exceeds the supported 208 MiB serialized limit.')
+      }
+      let tempCreated = false
+      try {
+        const handle = await fs.open(tmp, 'wx', 0o600)
+        tempCreated = true
+        try {
+          await handle.writeFile(serialized, 'utf8')
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+        await fs.rename(tmp, file)
+      } finally {
+        if (tempCreated) {
+          try { await fs.unlink(tmp) } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`Could not remove JSON temporary file ${tmp}:`, error)
+          }
+        }
+      }
     })
   writeQueues.set(file, next)
   try {
     await next
   } finally {
     if (writeQueues.get(file) === next) writeQueues.delete(file)
+  }
+}
+
+/** Run one mutation at a time for every resolved file identity it touches. */
+async function withSerializedFileMutation<T>(files: readonly string[], operation: () => Promise<T>): Promise<T> {
+  void files
+  // Queue synchronously before any path-resolution await. This deliberately
+  // serialises all editor-originated file mutations: saves are short, while a
+  // global ordering also covers directory moves and every path alias.
+  const previous = fileMutationTail
+  const result = previous.catch(() => undefined).then(operation)
+  const tail = result.then(() => undefined, () => undefined)
+  fileMutationTail = tail
+  return result
+}
+
+async function withSerializedFileSave<T>(file: string, operation: () => Promise<T>): Promise<T> {
+  return withSerializedFileMutation([file], operation)
+}
+
+/** Preserve the logical target of a symlink while still replacing atomically. */
+async function fileWriteTarget(file: string): Promise<string> {
+  try { return await fs.realpath(file) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    return path.resolve(file)
   }
 }
 
@@ -831,13 +1050,31 @@ function parseSublimeKeymap(value: unknown): { rules: KeyBindingRule[]; skipped:
   return { rules: rules.slice(0, 200), skipped }
 }
 
-function sanitizeSession(value: unknown): Session {
+function sanitizeSession(value: unknown, rejectOversizedText = false): Session {
   const raw = value && typeof value === 'object' ? (value as Partial<Session>) : {}
+  if (rejectOversizedText && Array.isArray(raw.openFiles) && raw.openFiles.length > MAX_SESSION_OPEN_FILES) {
+    throw new Error(`Session recovery supports at most ${MAX_SESSION_OPEN_FILES} open files.`)
+  }
+  const recoveryBudget = rejectOversizedText ? MAX_SESSION_RECOVERY_BYTES : MAX_SESSION_SERIALIZED_BYTES
+  let recoveryBytes = 0
+  const recoveryText = (candidate: unknown): string | undefined => {
+    if (typeof candidate !== 'string') return undefined
+    const remaining = recoveryBudget - recoveryBytes
+    const bytes = jsonStringUtf8ByteLength(candidate, remaining)
+    if (bytes > remaining) {
+      if (rejectOversizedText) throw new Error('Session recovery text exceeds the supported 200 MiB aggregate limit.')
+      return undefined
+    }
+    recoveryBytes += bytes
+    return candidate
+  }
   const openFiles = Array.isArray(raw.openFiles)
     ? raw.openFiles
         .filter((item): item is Session['openFiles'][number] => !!item && typeof item === 'object')
-        .slice(0, 100)
+        .slice(0, MAX_SESSION_OPEN_FILES)
         .map((file) => {
+          const draft = recoveryText(file.draft)
+          const recoveryContent = recoveryText(file.recoveryContent)
           const views = sanitizeSessionViewStates(file.views)
           return {
             path: typeof file.path === 'string' && path.isAbsolute(file.path) ? file.path : null,
@@ -845,7 +1082,12 @@ function sanitizeSession(value: unknown): Session {
             ...(file.pinned === true ? { pinned: true } : {}),
             language: typeof file.language === 'string' ? file.language.slice(0, 100) : 'Plain Text',
             languageLocked: file.languageLocked === true,
-            ...(typeof file.draft === 'string' && file.draft.length <= 20 * 1024 * 1024 ? { draft: file.draft } : {}),
+            ...(draft !== undefined ? { draft } : {}),
+            ...(recoveryContent !== undefined ? { recoveryContent } : {}),
+            ...(typeof file.formatDirty === 'boolean' ? { formatDirty: file.formatDirty } : {}),
+            ...(file.baseRevision === null || (typeof file.baseRevision === 'string' && /^sha256:[a-f0-9]{64}$/.test(file.baseRevision))
+              ? { baseRevision: file.baseRevision }
+              : {}),
             ...(file.encoding === 'utf8' || file.encoding === 'utf8bom' || file.encoding === 'utf16le' || file.encoding === 'utf16be' ? { encoding: file.encoding } : {}),
             ...(file.eol === 'LF' || file.eol === 'CRLF' || file.eol === 'CR' ? { eol: file.eol } : {}),
             ...(Array.isArray(file.bookmarks)
@@ -1117,7 +1359,7 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
   const re = makeSearchRegExp(request)
   let changedFiles = 0
   let replacements = 0
-  const undoFiles = new Map<string, Buffer>()
+  const undoFiles = new Map<string, { content: Buffer; expectedRevision: string }>()
 
   for (const root of workspaceRoots(request)) {
     const files = await listFilesRecursive(root)
@@ -1140,12 +1382,15 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
           }
           return request.replacement
         })
-        if (count > 0) {
-          undoFiles.set(file, await fs.readFile(file))
-          await fs.writeFile(file, encodeText(next, { encoding: opened.encoding, eol: opened.eol }))
-          changedFiles += 1
-          replacements += count
-        }
+        if (count === 0 || opened.revision === null) continue
+        const original = await fs.readFile(file)
+        if (fileRevision(original) !== opened.revision) continue
+        const nextBytes = encodeText(next, { encoding: opened.encoding, eol: opened.eol })
+        const result = await saveFileBytes(file, nextBytes, opened.revision)
+        if (!result.saved || !result.revision) continue
+        undoFiles.set(file, { content: original, expectedRevision: result.revision })
+        changedFiles += 1
+        replacements += count
       } catch {
         // Preserve a best-effort replace: inaccessible files are skipped, not partially rewritten.
       }
@@ -1172,9 +1417,16 @@ async function undoWorkspaceReplace(token: string): Promise<WorkspaceReplaceResu
     replaceUndoTransactions.delete(token)
     throw new Error('The workspace replace undo snapshot has expired.')
   }
-  for (const [file, content] of transaction.files) await fs.writeFile(file, content)
+  const total = transaction.files.size
+  for (const [file, snapshot] of [...transaction.files]) {
+    const result = await saveFileBytes(file, snapshot.content, snapshot.expectedRevision)
+    if (!result.saved) {
+      throw new Error(`Cannot undo replacement in ${file} because the file changed afterwards.`)
+    }
+    transaction.files.delete(file)
+  }
   replaceUndoTransactions.delete(token)
-  return { files: transaction.files.size, replacements: 0 }
+  return { files: total, replacements: 0 }
 }
 
 function sanitizeMacroEdits(value: unknown): Array<{ from: number; to: number; insert: string }> {
@@ -3039,8 +3291,7 @@ export function registerFileHandlers(): void {
       if (filePath === null) return saveAs(event.sender, content, undefined, options)
       assertAbsolutePath(filePath)
       assertGrantedFile(event, filePath)
-      await fs.writeFile(filePath, encodeText(content, validWriteOptions(options)))
-      return { saved: true, path: filePath }
+      return saveFile(filePath, content, options)
     }
   )
 
@@ -3077,7 +3328,11 @@ export function registerFileHandlers(): void {
   })
   ipcMain.handle(IPC.sessionRead, async (event): Promise<Session> => {
     assertTrustedSender(event)
-    const session = sanitizeSession(await readJson<unknown>(windowSessionFile(event.sender.id), EMPTY_SESSION))
+    const session = sanitizeSession(await readJson<unknown>(
+      windowSessionFile(event.sender.id),
+      EMPTY_SESSION,
+      MAX_SESSION_SERIALIZED_BYTES
+    ))
     for (const folder of session.folders ?? []) grantRoot(event.sender.id, folder)
     if (session.folder) grantRoot(event.sender.id, session.folder)
     for (const file of session.openFiles) if (file.path) grantFile(event.sender.id, file.path)
@@ -3085,7 +3340,11 @@ export function registerFileHandlers(): void {
   })
   ipcMain.handle(IPC.sessionWrite, async (event, session: unknown): Promise<void> => {
     assertTrustedSender(event)
-    await writeJson(windowSessionFile(event.sender.id), sanitizeSession(session))
+    await writeJson(
+      windowSessionFile(event.sender.id),
+      sanitizeSession(session, true),
+      MAX_SESSION_SERIALIZED_BYTES
+    )
   })
 
   ipcMain.handle(IPC.recentProjectsRead, async (event): Promise<RecentProject[]> => {
@@ -3197,11 +3456,13 @@ export function registerFileHandlers(): void {
     assertAbsolutePath(target, 'new file path')
     assertGrantedFile(event, path.dirname(target))
     if (typeof isDirectory !== 'boolean') throw new Error('Invalid create request.')
-    if (isDirectory) await fs.mkdir(target, { recursive: false })
-    else {
-      await fs.mkdir(path.dirname(target), { recursive: true })
-      await fs.writeFile(target, '', { flag: 'wx' })
-    }
+    await withSerializedFileMutation([target], async () => {
+      if (isDirectory) await fs.mkdir(target, { recursive: false })
+      else {
+        await fs.mkdir(path.dirname(target), { recursive: true })
+        await fs.writeFile(target, '', { flag: 'wx' })
+      }
+    })
     return { name: path.basename(target), path: target, isDirectory }
   })
 
@@ -3212,7 +3473,7 @@ export function registerFileHandlers(): void {
     assertGrantedFile(event, source)
     assertGrantedFile(event, path.dirname(target))
     if (path.dirname(source) !== path.dirname(target)) throw new Error('Moving files across folders is not supported here.')
-    await fs.rename(source, target)
+    await withSerializedFileMutation([source, target], () => fs.rename(source, target))
   })
 
   ipcMain.handle(IPC.fileMove, async (event, source: unknown): Promise<string | null> => {
@@ -3224,9 +3485,11 @@ export function registerFileHandlers(): void {
     if (result.canceled || !result.filePaths[0]) return null
     const target = path.join(result.filePaths[0], path.basename(source))
     if (path.resolve(target) === path.resolve(source)) return source
-    try { await fs.access(target); throw new Error(`A file named “${path.basename(source)}” already exists in the destination.`) }
-    catch (error) { if (!(error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')) throw error }
-    await fs.rename(source, target)
+    await withSerializedFileMutation([source, target], async () => {
+      try { await fs.access(target); throw new Error(`A file named “${path.basename(source)}” already exists in the destination.`) }
+      catch (error) { if (!(error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')) throw error }
+      await fs.rename(source, target)
+    })
     grantFile(event.sender.id, target)
     return target
   })
@@ -3235,7 +3498,7 @@ export function registerFileHandlers(): void {
     assertTrustedSender(event)
     assertAbsolutePath(target, 'delete path')
     assertGrantedFile(event, target)
-    await shell.trashItem(target)
+    await withSerializedFileMutation([target], () => shell.trashItem(target))
   })
 
   ipcMain.handle(IPC.revealInFolder, async (event, target: unknown): Promise<void> => {
@@ -3671,8 +3934,15 @@ async function saveAs(
 ): Promise<SaveResult> {
   const win = BrowserWindow.fromWebContents(sender)
   const result = await dialog.showSaveDialog(win!, { title: 'Save File', defaultPath: suggestedName })
-  if (result.canceled || !result.filePath) return { saved: false }
+  if (result.canceled || !result.filePath) return { saved: false, reason: 'cancelled' }
   grantFile(sender.id, result.filePath)
-  await fs.writeFile(result.filePath, encodeText(content, validWriteOptions(options)))
-  return { saved: true, path: result.filePath }
+  // Capture the selected target after the dialog returns, then use the same
+  // optimistic checks as a normal save. A change after the user's overwrite
+  // confirmation must not be silently replaced.
+  const expectedRevision = await readRawFileRevision(result.filePath)
+  return saveFile(result.filePath, content, {
+    encoding: options?.encoding ?? 'utf8',
+    eol: options?.eol ?? 'LF',
+    expectedRevision
+  })
 }

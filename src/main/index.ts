@@ -1,9 +1,11 @@
-import { app, BrowserWindow, ipcMain, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, type WebContents } from 'electron'
+import { promises as fs } from 'fs'
+import { createHash } from 'crypto'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { authorizePathForRenderer, authorizeWorkspaceForRenderer, clearWindowSessionId, listWindowSessionIds, registerFileHandlers, setWindowSessionId } from './files.js'
 import { buildMenu } from './menu.js'
-import { IPC, type MenuEvent } from '../shared/ipc.js'
+import { IPC, type MenuEvent, type SaveResult } from '../shared/ipc.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -58,9 +60,25 @@ function flushWindowSession(win: BrowserWindow, afterFlush: () => void): void {
     afterFlush()
     return
   }
+  if (pendingSessionFlushes.has(contents)) return
   const timeout = setTimeout(() => {
-    if (pendingSessionFlushes.delete(contents)) afterFlush()
-  }, 1_500)
+    if (!pendingSessionFlushes.has(contents) || win.isDestroyed()) return
+    void dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Keep Window Open', 'Close Anyway'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Session recovery could not be confirmed',
+      message: 'The editor could not confirm that all unsaved work was added to session recovery.',
+      detail: 'Keep the window open and save important files manually, or close anyway and risk losing unsaved changes.'
+    }).then(({ response }) => {
+      if (response === 1 && pendingSessionFlushes.delete(contents)) afterFlush()
+      else if (response === 0) {
+        pendingSessionFlushes.delete(contents)
+        quitRequested = false
+      }
+    })
+  }, 30_000)
   pendingSessionFlushes.set(contents, () => {
     clearTimeout(timeout)
     afterFlush()
@@ -141,6 +159,9 @@ function createWindow(sessionId = newSessionId()): void {
       try {
         const smokeRoot = process.cwd()
         authorizeWorkspaceForRenderer(win.webContents.id, smokeRoot)
+        const revisionSmokePath = path.join(app.getPath('userData'), 'revision-smoke.txt')
+        await fs.writeFile(revisionSmokePath, 'one\r\ntwo\r\n', 'utf8')
+        authorizePathForRenderer(win.webContents.id, revisionSmokePath)
         const initialUi = await win.webContents.executeJavaScript(`(async () => {
           const deadline = Date.now() + 3_000
           let editor = document.querySelector('.cm-content')
@@ -185,6 +206,115 @@ function createWindow(sessionId = newSessionId()): void {
           throw new Error(`Language server panel did not mount with its expected initial accessibility state: ${JSON.stringify(initialUi)}`)
         }
         if (!initialUi.accessibilityMounted) throw new Error('Accessibility status regions or language button did not mount')
+        const openedRevisionFile = await win.webContents.executeJavaScript(`window.editor.openPath(${JSON.stringify(revisionSmokePath)})`, true)
+        if (openedRevisionFile.content !== 'one\ntwo\n' || openedRevisionFile.eol !== 'CRLF' ||
+          typeof openedRevisionFile.revision !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(openedRevisionFile.revision)) {
+          throw new Error(`Physical line-ending read or revision failed: ${JSON.stringify(openedRevisionFile)}`)
+        }
+        const concurrentSaves = await win.webContents.executeJavaScript(`Promise.all([
+          window.editor.save(${JSON.stringify(revisionSmokePath)}, ${JSON.stringify('first\n')}, {
+            encoding: 'utf8', eol: 'CRLF', expectedRevision: ${JSON.stringify(openedRevisionFile.revision)}
+          }),
+          window.editor.save(${JSON.stringify(revisionSmokePath)}, ${JSON.stringify('second\n')}, {
+            encoding: 'utf8', eol: 'CRLF', expectedRevision: ${JSON.stringify(openedRevisionFile.revision)}
+          })
+        ])`, true) as SaveResult[]
+        const successfulSaves = concurrentSaves.filter((result) => result.saved)
+        const conflictedSaves = concurrentSaves.filter((result) => result.reason === 'conflict')
+        if (successfulSaves.length !== 1 || conflictedSaves.length !== 1 ||
+          typeof successfulSaves[0].revision !== 'string') {
+          throw new Error(`Serialised optimistic saves failed: ${JSON.stringify(concurrentSaves)}`)
+        }
+        const winningText = concurrentSaves[0].saved ? 'first\r\n' : 'second\r\n'
+        if (await fs.readFile(revisionSmokePath, 'utf8') !== winningText) {
+          throw new Error('Successful save did not preserve the selected CRLF line ending')
+        }
+        await fs.writeFile(revisionSmokePath, 'external\r\n', 'utf8')
+        const staleSave = await win.webContents.executeJavaScript(`window.editor.save(
+          ${JSON.stringify(revisionSmokePath)},
+          ${JSON.stringify('stale local\n')},
+          { encoding: 'utf8', eol: 'CRLF', expectedRevision: ${JSON.stringify(successfulSaves[0].revision)} }
+        )`, true)
+        if (staleSave.saved || staleSave.reason !== 'conflict' ||
+          staleSave.conflict?.content !== 'external\n' || staleSave.conflict?.eol !== 'CRLF' ||
+          await fs.readFile(revisionSmokePath, 'utf8') !== 'external\r\n') {
+          throw new Error(`Stale save was not rejected safely: ${JSON.stringify(staleSave)}`)
+        }
+        // Revision checks must hash raw bytes independently of the editor's
+        // open-file size limit. Save As uses the same path after its dialog.
+        const oversizedRevisionPath = path.join(app.getPath('userData'), 'revision-oversized.txt')
+        const oversizedBytes = Buffer.alloc(20 * 1024 * 1024 + 1, 0x78)
+        await fs.writeFile(oversizedRevisionPath, oversizedBytes)
+        authorizePathForRenderer(win.webContents.id, oversizedRevisionPath)
+        const oversizedOpened = await win.webContents.executeJavaScript(
+          `window.editor.openPath(${JSON.stringify(oversizedRevisionPath)})`, true
+        )
+        const oversizedRevision = `sha256:${createHash('sha256').update(oversizedBytes).digest('hex')}`
+        const oversizedSave = await win.webContents.executeJavaScript(`window.editor.save(
+          ${JSON.stringify(oversizedRevisionPath)},
+          ${JSON.stringify('safe replacement\n')},
+          { encoding: 'utf8', eol: 'LF', expectedRevision: ${JSON.stringify(oversizedRevision)} }
+        )`, true) as SaveResult
+        if (!oversizedOpened.isTooLarge || oversizedOpened.revision !== null || !oversizedSave.saved ||
+          await fs.readFile(oversizedRevisionPath, 'utf8') !== 'safe replacement\n') {
+          throw new Error(`Oversized raw-byte revision save failed: ${JSON.stringify({ oversizedOpened, oversizedSave })}`)
+        }
+        const missingRevisionPath = path.join(app.getPath('userData'), 'revision-missing.txt')
+        authorizePathForRenderer(win.webContents.id, missingRevisionPath)
+        const missingSave = await win.webContents.executeJavaScript(`window.editor.save(
+          ${JSON.stringify(missingRevisionPath)},
+          ${JSON.stringify('created\n')},
+          { encoding: 'utf8', eol: 'LF', expectedRevision: null }
+        )`, true) as SaveResult
+        const staleMissingSave = await win.webContents.executeJavaScript(`window.editor.save(
+          ${JSON.stringify(missingRevisionPath)},
+          ${JSON.stringify('must not overwrite\n')},
+          { encoding: 'utf8', eol: 'LF', expectedRevision: null }
+        )`, true) as SaveResult
+        if (!missingSave.saved || staleMissingSave.reason !== 'conflict' ||
+          await fs.readFile(missingRevisionPath, 'utf8') !== 'created\n') {
+          throw new Error(`Missing-path revision semantics failed: ${JSON.stringify({ missingSave, staleMissingSave })}`)
+        }
+        const idempotentOpened = await win.webContents.executeJavaScript(`window.editor.openPath(${JSON.stringify(missingRevisionPath)})`, true)
+        const idempotentSaves = await win.webContents.executeJavaScript(`Promise.all([
+          window.editor.save(${JSON.stringify(missingRevisionPath)}, ${JSON.stringify('same\n')}, {
+            encoding: 'utf8', eol: 'LF', expectedRevision: ${JSON.stringify(idempotentOpened.revision)}
+          }),
+          window.editor.save(${JSON.stringify(missingRevisionPath)}, ${JSON.stringify('same\n')}, {
+            encoding: 'utf8', eol: 'LF', expectedRevision: ${JSON.stringify(idempotentOpened.revision)}
+          })
+        ])`, true) as SaveResult[]
+        if (!idempotentSaves.every((result) => result.saved && result.revision === idempotentSaves[0].revision)) {
+          throw new Error(`Idempotent concurrent saves failed: ${JSON.stringify(idempotentSaves)}`)
+        }
+        const hardLinkPath = path.join(app.getPath('userData'), 'revision-hardlink.txt')
+        await fs.link(missingRevisionPath, hardLinkPath)
+        authorizePathForRenderer(win.webContents.id, hardLinkPath)
+        const aliasOpened = await win.webContents.executeJavaScript(`window.editor.openPath(${JSON.stringify(hardLinkPath)})`, true)
+        const aliasSaves = await win.webContents.executeJavaScript(`Promise.all([
+          window.editor.save(${JSON.stringify(missingRevisionPath)}, ${JSON.stringify('real path\n')}, {
+            encoding: 'utf8', eol: 'LF', expectedRevision: ${JSON.stringify(aliasOpened.revision)}
+          }),
+          window.editor.save(${JSON.stringify(hardLinkPath)}, ${JSON.stringify('hard link\n')}, {
+            encoding: 'utf8', eol: 'LF', expectedRevision: ${JSON.stringify(aliasOpened.revision)}
+          })
+        ])`, true) as SaveResult[]
+        if (!aliasSaves.every((result) => !result.saved && result.reason === 'hardlink') ||
+          await fs.readFile(missingRevisionPath, 'utf8') !== 'same\n') {
+          throw new Error(`Hard-linked saves were not rejected safely: ${JSON.stringify(aliasSaves)}`)
+        }
+        await fs.unlink(hardLinkPath)
+        const unconditionalSave = await win.webContents.executeJavaScript(`window.editor.save(
+          ${JSON.stringify(missingRevisionPath)},
+          ${JSON.stringify('explicit overwrite\n')},
+          { encoding: 'utf8', eol: 'LF' }
+        )`, true) as SaveResult
+        if (!unconditionalSave.saved || await fs.readFile(missingRevisionPath, 'utf8') !== 'explicit overwrite\n') {
+          throw new Error(`Legacy unconditional save failed: ${JSON.stringify(unconditionalSave)}`)
+        }
+        await fs.unlink(revisionSmokePath)
+        await fs.unlink(missingRevisionPath)
+        await fs.unlink(oversizedRevisionPath)
         const accessibilityPrepared = await win.webContents.executeJavaScript(`(() => {
           const languageButton = document.querySelector('#status-language')
           if (!(languageButton instanceof HTMLButtonElement)) return false
@@ -292,6 +422,178 @@ function createWindow(sessionId = newSessionId()): void {
         })()`, true)
         if (!tabCloseResult.preservedAdjacentContent || !tabCloseResult.freshUntitled) {
           throw new Error(`Tab close lifecycle failed: ${JSON.stringify(tabCloseResult)}`)
+        }
+        // did-finish-load can precede ready-to-show under Xvfb, so make the
+        // smoke window explicit before exercising keyboard-only controls.
+        win.show()
+        win.focus()
+        win.webContents.focus()
+        await new Promise<void>((resolve) => setTimeout(resolve, 50))
+        const metadataKeyboardPrepared = await win.webContents.executeJavaScript(`(() => {
+          const eolButton = document.querySelector('#status-eol')
+          const encodingButton = document.querySelector('#status-encoding')
+          if (!(eolButton instanceof HTMLButtonElement) ||
+            !(encodingButton instanceof HTMLButtonElement)) {
+            return { buttons: false }
+          }
+          eolButton.focus()
+          return {
+            buttons: eolButton.type === 'button' && encodingButton.type === 'button',
+            focused: document.activeElement === eolButton,
+            clean: (document.querySelector('#tab-bar > .tab.active .tab-dirty')?.textContent ?? '') === ''
+          }
+        })()`, true)
+        if (!metadataKeyboardPrepared.buttons || !metadataKeyboardPrepared.focused || !metadataKeyboardPrepared.clean) {
+          throw new Error(`Could not prepare keyboard metadata selection: ${JSON.stringify(metadataKeyboardPrepared)}`)
+        }
+        const pressKey = async (key: string): Promise<void> => {
+          const dispatched = await win.webContents.executeJavaScript(`(() => {
+            const target = document.activeElement
+            return target instanceof HTMLElement && target.dispatchEvent(new KeyboardEvent('keydown', {
+              key: ${JSON.stringify(key)},
+              bubbles: true,
+              cancelable: true
+            })) === false
+          })()`, true)
+          if (!dispatched) throw new Error(`Focused control did not handle ${key}`)
+          await new Promise<void>((resolve) => setTimeout(resolve, 30))
+        }
+        // Accepting the first row selects the current value and must remain clean.
+        await pressKey(' ')
+        await pressKey('Enter')
+        const currentEolNoop = await win.webContents.executeJavaScript(`(() => {
+          const eolButton = document.querySelector('#status-eol')
+          return eolButton instanceof HTMLButtonElement
+            && document.activeElement === eolButton
+            && eolButton.textContent?.trim() === 'LF'
+            && (document.querySelector('#tab-bar > .tab.active .tab-dirty')?.textContent ?? '') === ''
+        })()`, true)
+        if (!currentEolNoop) throw new Error('Selecting the current line ending created a dirty document')
+        await pressKey('Enter')
+        await pressKey('ArrowDown')
+        await pressKey('Enter')
+        const eolKeyboardSelected = await win.webContents.executeJavaScript(`(() => {
+          const button = document.querySelector('#status-eol')
+          return {
+            ok: button instanceof HTMLButtonElement
+              && document.activeElement === button
+              && button.textContent?.trim() === 'CRLF'
+              && (document.querySelector('#tab-bar > .tab.active .tab-dirty')?.textContent ?? '') === '●',
+            text: button?.textContent?.trim(),
+            activeId: document.activeElement?.id,
+            paletteOpen: !document.querySelector('.palette-overlay')?.classList.contains('hidden'),
+            activeOption: document.querySelector('.palette-item.active .palette-item-main')?.textContent?.trim(),
+            dirty: document.querySelector('#tab-bar > .tab.active .tab-dirty')?.textContent ?? ''
+          }
+        })()`, true)
+        const encodingFocused = await win.webContents.executeJavaScript(`(() => {
+          const button = document.querySelector('#status-encoding')
+          if (!(button instanceof HTMLButtonElement)) return false
+          button.focus()
+          return document.activeElement === button
+        })()`, true)
+        if (!encodingFocused) throw new Error('Could not focus the encoding status button')
+        await pressKey('Enter')
+        await pressKey('ArrowDown')
+        await pressKey('Enter')
+        const encodingKeyboardSelected = await win.webContents.executeJavaScript(`(() => {
+          const button = document.querySelector('#status-encoding')
+          return {
+            ok: button instanceof HTMLButtonElement
+              && document.activeElement === button
+              && button.textContent?.trim() === 'UTF-8 BOM'
+              && (document.querySelector('#tab-bar > .tab.active .tab-dirty')?.textContent ?? '') === '●',
+            text: button?.textContent?.trim(),
+            activeId: document.activeElement?.id,
+            paletteOpen: !document.querySelector('.palette-overlay')?.classList.contains('hidden'),
+            activeOption: document.querySelector('.palette-item.active .palette-item-main')?.textContent?.trim(),
+            dirty: document.querySelector('#tab-bar > .tab.active .tab-dirty')?.textContent ?? ''
+          }
+        })()`, true)
+        const documentMetadataResult = {
+          eolKeyboardSelected,
+          encodingKeyboardSelected
+        }
+        if (!documentMetadataResult.eolKeyboardSelected.ok || !documentMetadataResult.encodingKeyboardSelected.ok) {
+          throw new Error(`Status metadata selection lifecycle failed: ${JSON.stringify(documentMetadataResult)}`)
+        }
+        const nestedPalettePrepared = await win.webContents.executeJavaScript(`(() => {
+          const editor = document.querySelector('.cm-content')
+          if (!(editor instanceof HTMLElement)) return false
+          editor.focus()
+          return document.activeElement === editor
+        })()`, true)
+        if (!nestedPalettePrepared) throw new Error('Could not prepare nested palette focus test')
+        win.webContents.send(IPC.menuEvent, 'command-palette' as MenuEvent)
+        await new Promise<void>((resolve) => setTimeout(resolve, 50))
+        const commandFiltered = await win.webContents.executeJavaScript(`(() => {
+          const input = document.querySelector('.palette-overlay:not(.hidden) .palette-input')
+          if (!(input instanceof HTMLInputElement) || document.activeElement !== input) return false
+          input.value = '编码'
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          return true
+        })()`, true)
+        if (!commandFiltered) throw new Error('Could not filter the command palette for encoding')
+        await new Promise<void>((resolve) => setTimeout(resolve, 30))
+        await pressKey('Enter')
+        const nestedPickerOpen = await win.webContents.executeJavaScript(`(() => {
+          const input = document.querySelector('.palette-overlay:not(.hidden) .palette-input')
+          return input instanceof HTMLInputElement
+            && document.activeElement === input
+            && /编码|encoding/i.test(input.getAttribute('aria-label') ?? '')
+        })()`, true)
+        if (!nestedPickerOpen) throw new Error('Encoding picker did not open from the command palette')
+        await pressKey('Escape')
+        const nestedFocusRestored = await win.webContents.executeJavaScript(`(() => {
+          const editor = document.querySelector('.cm-content')
+          const palette = document.querySelector('.palette-overlay')
+          return editor instanceof HTMLElement && document.activeElement === editor
+            && palette instanceof HTMLElement && palette.classList.contains('hidden')
+        })()`, true)
+        if (!nestedFocusRestored) throw new Error('Nested metadata picker did not restore editor focus')
+        win.webContents.send(IPC.menuEvent, 'persist-session' as MenuEvent)
+        const metadataSessionResult = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const session = await window.editor.readSession()
+            const file = session.openFiles.find((candidate) => candidate.name === 'Untitled-1')
+            if (file?.formatDirty === true) {
+              return {
+                formatDirty: true,
+                hasDraft: Object.prototype.hasOwnProperty.call(file, 'draft'),
+                encoding: file.encoding,
+                eol: file.eol
+              }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 25))
+          }
+          return { formatDirty: false }
+        })()`, true)
+        if (!metadataSessionResult.formatDirty || metadataSessionResult.hasDraft ||
+          metadataSessionResult.encoding !== 'utf8bom' || metadataSessionResult.eol !== 'CRLF') {
+          throw new Error(`Metadata-only session persistence failed: ${JSON.stringify(metadataSessionResult)}`)
+        }
+        const largeSessionRoundTrip = await win.webContents.executeJavaScript(`(async () => {
+          const draft = 'x'.repeat(21 * 1024 * 1024)
+          await window.editor.writeSession({
+            openFiles: [{
+              path: null,
+              name: 'large-recovery.txt',
+              language: 'Plain Text',
+              languageLocked: false,
+              draft,
+              formatDirty: false,
+              encoding: 'utf8',
+              eol: 'LF'
+            }],
+            activeIndex: 0,
+            folder: null
+          })
+          const restored = await window.editor.readSession()
+          return restored.openFiles[0]?.draft?.length ?? -1
+        })()`, true)
+        if (largeSessionRoundTrip !== 21 * 1024 * 1024) {
+          throw new Error(`Large hot-exit draft was truncated: ${largeSessionRoundTrip}`)
         }
         const selectionResult = await win.webContents.executeJavaScript(`(async () => {
           const content = document.querySelector('.cm-content')

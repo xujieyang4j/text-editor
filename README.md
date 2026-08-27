@@ -47,7 +47,12 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   (`Ctrl/Cmd+Shift+T`)
 - **Persistent settings** (JSON in userData): font size, tab size, theme, wrap, minimap, rulers
 - **Font zoom** (`Ctrl/Cmd+=` / `-` / `0`), dark/light theme, word-wrap, collapsible sidebar
-- **Status bar**: line/column, selection length, language, encoding, line-ending
+- **Clickable encoding & line endings** in the status bar: choose `UTF-8`, `UTF-8 BOM`,
+  `UTF-16 LE`, or `UTF-16 BE`, and `LF`, `CRLF`, or `CR`. A choice sets the target for
+  the next Save, Save All, or Auto Save and marks the document unsaved; saving also
+  normalizes mixed line endings to the selected style. On open, BOM detection distinguishes the
+  four Unicode formats: a UTF-8 BOM selects UTF-8 BOM, UTF-16 BOMs select LE or BE, and no
+  BOM falls back to UTF-8; the editor does not guess legacy encodings from content
 - **Native application menu** with standard keyboard accelerators on every platform
 - **Accessibility foundation** — visible keyboard focus, semantic dialogs and result regions,
   screen-reader status announcements, focus restoration, reduced-motion and forced-color support

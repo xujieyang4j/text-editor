@@ -10,7 +10,7 @@ import { incrementalChanges, revertIncrementalChange, type IncrementalChange } f
 import { JsonView } from './jsonView.js'
 import { OutlinePanel } from './outlinePanel.js'
 import { parseLosslessJson, stringifyLosslessJson } from '../../shared/losslessJson.js'
-import { textStatistics, type TextStatistics } from '../../shared/text.js'
+import { jsonStringUtf8ByteLength, textStatistics, type TextStatistics } from '../../shared/text.js'
 import { BuildPanel } from './buildPanel.js'
 import { TerminalPanel } from './terminalPanel.js'
 import { LanguageServerPanel } from './languageServerPanel.js'
@@ -25,6 +25,7 @@ import {
   createFromFile,
   createFromSession,
   isDirty,
+  isCurrentDocumentSaveConflict,
   baseName,
   type Doc
 } from './documents.js'
@@ -33,6 +34,8 @@ import type { Diagnostic } from '@codemirror/lint'
 import type { CompletionContext, Completion } from '@codemirror/autocomplete'
 import {
   DEFAULT_SETTINGS,
+  MAX_SESSION_OPEN_FILES,
+  MAX_SESSION_RECOVERY_BYTES,
   type MenuEvent,
   type Settings,
   type Session,
@@ -70,6 +73,29 @@ function globMatches(relativePath: string, pattern: string, isDirectory = false)
     .replace(/\?/g, '[^/]')
   const matcher = new RegExp(`^${source}$`, 'i')
   return matcher.test(relativePath) || (isDirectory && matcher.test(`${relativePath}/`))
+}
+
+interface PhysicalTextSnapshot {
+  content: string
+  encoding: Doc['encoding']
+  eol: Doc['eol']
+  revision: string | null
+}
+
+/** Physical file equality includes bytes-affecting metadata, not just editor text. */
+function samePhysicalText(left: PhysicalTextSnapshot, right: PhysicalTextSnapshot): boolean {
+  if (left.revision !== null && right.revision !== null) return left.revision === right.revision
+  return left.content === right.content && left.encoding === right.encoding && left.eol === right.eol
+}
+
+/** Keep encoding labels consistent between the status bar and selection palette. */
+function encodingLabel(encoding: Doc['encoding']): string {
+  switch (encoding) {
+    case 'utf8': return 'UTF-8'
+    case 'utf8bom': return 'UTF-8 BOM'
+    case 'utf16le': return 'UTF-16 LE'
+    case 'utf16be': return 'UTF-16 BE'
+  }
 }
 
 interface EditorGroup {
@@ -145,6 +171,9 @@ class App {
   private pendingMenuEvents: MenuEvent[] = []
   private pendingLaunchPaths: string[] = []
   private workspacePollTimer: number | null = null
+  /** Only the newest asynchronous disk read for a path may update its document. */
+  private externalChangeGeneration = 0
+  private externalChangeRequests = new Map<string, number>()
   private conflictBar: HTMLDivElement | null = null
   private conflictDocId: string | null = null
   private navigationBack: Array<{ path: string; line: number; column: number }> = []
@@ -183,9 +212,9 @@ class App {
   private workspaceName = document.getElementById('workspace-name')!
   private statusPosition = document.getElementById('status-position')!
   private statusSelection = document.getElementById('status-selection')!
-  private statusLanguage = document.getElementById('status-language')!
-  private statusEol = document.getElementById('status-eol')!
-  private statusEncoding = document.getElementById('status-encoding')!
+  private statusLanguage = document.getElementById('status-language') as HTMLButtonElement
+  private statusEol = document.getElementById('status-eol') as HTMLButtonElement
+  private statusEncoding = document.getElementById('status-encoding') as HTMLButtonElement
   private sidebar = document.getElementById('sidebar')!
   private a11yStatus = document.getElementById('a11y-status')!
   private a11yAlert = document.getElementById('a11y-alert')!
@@ -294,9 +323,19 @@ class App {
     document.body.appendChild(this.languageServerPanel.element)
     this.palette.beforeOpen = () => this.languageServerPanel.toggle(false)
     this.createConflictBar()
-    // The status-bar language field opens the syntax picker (like Sublime).
-    this.statusLanguage.addEventListener('click', () => this.pickLanguage())
-    this.statusLanguage.classList.add('clickable')
+    // Status-bar metadata fields share the same command path as the palette.
+    const bindStatusCommand = (button: HTMLButtonElement, command: MenuEvent): void => {
+      button.addEventListener('click', () => this.run(command))
+      button.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        this.run(command)
+      })
+      button.classList.add('clickable')
+    }
+    bindStatusCommand(this.statusLanguage, 'select-language')
+    bindStatusCommand(this.statusEol, 'select-line-ending')
+    bindStatusCommand(this.statusEncoding, 'select-encoding')
 
     // Floating browser icon (shown only for HTML docs) → open in browser.
     this.browserBtn.addEventListener('click', () => this.run('open-in-browser'))
@@ -441,11 +480,26 @@ class App {
         // buffer reflects external edits; the draft (if any) is layered on top.
         // Untitled buffers have no path, so disk content is empty.
         const opened = sf.path ? await window.editor.openPath(sf.path) : null
-        if (opened?.isBinary || opened?.isTooLarge) continue
-        const restored = createFromSession(opened?.content ?? '', {
-          ...sf,
-          encoding: opened?.encoding ?? sf.encoding,
-          eol: opened?.eol ?? sf.eol
+        if (opened?.isBinary || opened?.isTooLarge) {
+          if (sf.draft === undefined && sf.formatDirty !== true) continue
+          const recovered = createFromSession('', {
+            ...sf,
+            path: null,
+            name: `${sf.name} (recovered)`,
+            draft: sf.draft ?? sf.recoveryContent ?? ''
+          }, {
+            encoding: sf.encoding ?? 'utf8',
+            eol: sf.eol ?? 'LF',
+            revision: null
+          })
+          this.docs.push(recovered)
+          restoredBySessionIndex[sessionIndex] = recovered
+          continue
+        }
+        const restored = createFromSession(opened?.content ?? '', sf, {
+          encoding: opened?.encoding ?? 'utf8',
+          eol: opened?.eol ?? 'LF',
+          revision: opened?.revision ?? null
         })
         this.docs.push(restored)
         restoredBySessionIndex[sessionIndex] = restored
@@ -453,13 +507,16 @@ class App {
         // File was moved/deleted since last run. If we still hold the user's
         // unsaved draft, keep it as an untitled-style buffer rather than lose
         // their work; otherwise skip.
-        if (sf.draft !== undefined) {
+        if (sf.draft !== undefined || sf.formatDirty === true) {
           const restored = createFromSession('', {
             ...sf,
             path: null,
             name: `${sf.name} (recovered)`,
+            draft: sf.draft ?? sf.recoveryContent ?? ''
+          }, {
             encoding: sf.encoding ?? 'utf8',
-            eol: sf.eol ?? 'LF'
+            eol: sf.eol ?? 'LF',
+            revision: null
           })
           this.docs.push(restored)
           restoredBySessionIndex[sessionIndex] = restored
@@ -538,7 +595,7 @@ class App {
    * command palette all funnel through here so behaviour stays consistent.
    */
   run(event: MenuEvent): void {
-    if (!this.booted && event !== 'persist-session') {
+    if (!this.booted) {
       this.pendingMenuEvents.push(event)
       return
     }
@@ -925,6 +982,12 @@ class App {
       case 'select-language':
         void this.pickLanguage()
         break
+      case 'select-line-ending':
+        this.pickLineEnding()
+        break
+      case 'select-encoding':
+        this.pickEncoding()
+        break
       case 'toggle-comment':
         this.editor.toggleComment()
         break
@@ -1069,7 +1132,9 @@ class App {
         void this.openInBrowser()
         break
       case 'persist-session':
-        void this.persistSessionNow().finally(() => void window.editor.sessionFlushed())
+        void this.persistSessionNow().then((saved) => {
+          if (saved) void window.editor.sessionFlushed()
+        })
         break
     }
   }
@@ -1580,19 +1645,25 @@ class App {
     for (const edit of edits) grouped.set(edit.filePath, [...(grouped.get(edit.filePath) ?? []), edit])
     for (const [filePath, fileEdits] of grouped) {
       const doc = this.docs.find((candidate) => candidate.path === filePath)
+      if (doc?.externalChange) {
+        throw new Error(`Resolve the external change for ${baseName(filePath)} before renaming.`)
+      }
       let content: string
       let encoding: Doc['encoding'] = 'utf8'
       let eol: Doc['eol'] = 'LF'
+      let revision: string | null = null
       if (doc) {
         content = doc.content
         encoding = doc.encoding
         eol = doc.eol
+        revision = doc.diskRevision
       } else {
         const opened = await window.editor.openPath(filePath)
         if (opened.isBinary || opened.isTooLarge) throw new Error(`Cannot rename inside non-text file ${baseName(filePath)}.`)
         content = opened.content
         encoding = opened.encoding
         eol = opened.eol
+        revision = opened.revision
       }
       const lines = content.split('\n')
       const offset = (lineIndex: number, character: number): number => {
@@ -1607,12 +1678,36 @@ class App {
       }
       if (doc) {
         doc.content = next
-        doc.savedContent = next
         doc.editorState = undefined
         if (this.activeId === doc.id) await this.activate(doc.id)
       }
-      const result = await window.editor.save(filePath, next, { encoding, eol })
-      if (!result.saved) throw new Error(`Could not write ${baseName(filePath)}.`)
+      const result = await window.editor.save(filePath, next, {
+        encoding,
+        eol,
+        expectedRevision: revision
+      })
+      if (!result.saved) {
+        if ((result.reason === 'conflict' || result.reason === 'hardlink') && doc?.path === filePath) {
+          this.handleSaveConflict(
+            doc,
+            result.conflict ?? null,
+            this.activeId === doc.id,
+            result.reason === 'hardlink' ? 'hardlink' : undefined
+          )
+        }
+        throw new Error(result.reason === 'hardlink'
+          ? `Could not safely replace hard-linked file ${baseName(filePath)}. Use Save As.`
+          : `Could not write ${baseName(filePath)} because it changed on disk.`)
+      }
+      this.invalidateExternalChangeRead(filePath)
+      if (doc) {
+        doc.savedContent = next
+        doc.savedEncoding = encoding
+        doc.savedEol = eol
+        doc.diskRevision = result.revision ?? doc.diskRevision
+        doc.requiresSave = false
+        this.reconcileSuccessfulSave(doc, result.revision)
+      }
     }
     this.renderTabs()
     this.statusSelection.textContent = `Renamed symbol in ${grouped.size} file${grouped.size === 1 ? '' : 's'}`
@@ -1756,6 +1851,7 @@ class App {
     // Persist drafts as the user types (debounced) so an unexpected quit or
     // machine crash never loses unsaved work — this is the core of hot exit.
     this.scheduleSessionSave()
+    this.scheduleAutoSave()
     this.scheduleLanguageServerSync(doc)
   }
 
@@ -1889,8 +1985,52 @@ class App {
     if (!doc.externalChange || !this.conflictBar) return
     this.conflictDocId = doc.id
     const message = this.conflictBar.querySelector<HTMLElement>('.external-conflict-message')
-    if (message) message.textContent = `“${doc.name}” changed on disk while you have unsaved edits.`
+    if (message) message.textContent = doc.externalChange.unavailable === 'missing'
+      ? `“${doc.name}” was deleted on disk while you have unsaved edits.`
+      : doc.externalChange.unavailable === 'hardlink'
+        ? `“${doc.name}” has multiple hard links and cannot be replaced safely. Use Save Local As.`
+      : doc.externalChange.unavailable
+        ? `“${doc.name}” changed to a ${doc.externalChange.unavailable === 'binary' ? 'binary' : 'large'} file while you have unsaved edits.`
+        : `“${doc.name}” changed on disk while you have unsaved edits.`
     this.conflictBar.classList.remove('hidden')
+  }
+
+  /** Convert a failed optimistic save into the existing external-change flow. */
+  private handleSaveConflict(
+    doc: Doc,
+    current: OpenedFile | null,
+    show = this.activeId === doc.id,
+    unavailable?: NonNullable<Doc['externalChange']>['unavailable']
+  ): void {
+    this.invalidateExternalChangeRead(doc.path)
+    doc.externalChange = current
+      ? {
+          content: current.content,
+          encoding: current.encoding,
+          eol: current.eol,
+          revision: current.revision,
+          ...(unavailable ? { unavailable } : {}),
+          ...(current.isBinary ? { unavailable: 'binary' as const } : {}),
+          ...(current.isTooLarge ? { unavailable: 'too-large' as const } : {})
+        }
+      : {
+          content: doc.savedContent,
+          encoding: doc.savedEncoding,
+          eol: doc.savedEol,
+          revision: null,
+          unavailable: 'missing'
+        }
+    this.renderTabs()
+    this.scheduleSessionSave()
+    if (show) this.showExternalConflict(doc)
+  }
+
+  /** Clear only watcher state that describes the bytes this save produced. */
+  private reconcileSuccessfulSave(doc: Doc, revision: string | undefined): void {
+    if (!doc.externalChange || doc.externalChange.unavailable === 'hardlink'
+      || (revision !== undefined && doc.externalChange.revision === revision)) {
+      doc.externalChange = undefined
+    }
   }
 
   private hideExternalConflict(): void {
@@ -1906,6 +2046,10 @@ class App {
   private compareExternalChange(): void {
     const doc = this.conflictDoc
     if (!doc?.externalChange) return
+    if (doc.externalChange.unavailable) {
+      this.notify('The current disk version cannot be opened for comparison.')
+      return
+    }
     const comparison = createUntitled()
     comparison.name = `${doc.name} (disk version)`
     comparison.content = doc.externalChange.content
@@ -1913,32 +2057,52 @@ class App {
     comparison.language = doc.language
     comparison.languageLocked = true
     comparison.encoding = doc.externalChange.encoding
+    comparison.savedEncoding = doc.externalChange.encoding
     comparison.eol = doc.externalChange.eol
+    comparison.savedEol = doc.externalChange.eol
     this.addDoc(comparison)
   }
 
   private reloadExternalChange(): void {
     const doc = this.conflictDoc
     if (!doc?.externalChange) return
+    if (doc.externalChange.unavailable) {
+      this.notify('The current disk version cannot be reloaded as text.')
+      return
+    }
     doc.content = doc.externalChange.content
     doc.savedContent = doc.externalChange.content
     doc.encoding = doc.externalChange.encoding
+    doc.savedEncoding = doc.externalChange.encoding
     doc.eol = doc.externalChange.eol
+    doc.savedEol = doc.externalChange.eol
+    doc.diskRevision = doc.externalChange.revision
     doc.editorState = undefined
     doc.externalChange = undefined
-    doc.ignoredExternalContent = undefined
     if (this.activeId === doc.id) void this.activate(doc.id)
     this.renderTabs()
     this.hideExternalConflict()
+    this.scheduleSessionSave()
   }
 
   private keepLocalExternalChange(): void {
     const doc = this.conflictDoc
     if (!doc?.externalChange) return
-    doc.ignoredExternalContent = doc.externalChange.content
+    if (doc.externalChange.unavailable) {
+      this.notify('Save the local version to a new path before resolving this conflict.')
+      return
+    }
+    // The user has acknowledged this disk version. Adopt it as the baseline
+    // while preserving the local current value, which remains dirty relative
+    // to the acknowledged bytes and can now be saved without repeat prompts.
+    doc.savedContent = doc.externalChange.content
+    doc.savedEncoding = doc.externalChange.encoding
+    doc.savedEol = doc.externalChange.eol
+    doc.diskRevision = doc.externalChange.revision
     doc.externalChange = undefined
     this.renderTabs()
     this.hideExternalConflict()
+    this.scheduleSessionSave()
   }
 
   private async saveExternalConflictAs(): Promise<void> {
@@ -2169,7 +2333,6 @@ class App {
       }
       await this.reloadWorkspaceTree()
     } catch (error) {
-      this.replaceUndoToken = null
       this.showError('Workspace replace could not be undone.', error)
     }
   }
@@ -2256,7 +2419,7 @@ class App {
       this.showError(`“${baseName(file.path)}” is ${mb} MB and exceeds the safe editor limit.`)
       return
     }
-    this.openLoaded(file.path, file.content, file.encoding, file.eol)
+    this.openLoaded(file.path, file.content, file.encoding, file.eol, file.revision)
   }
 
   /** Create (or focus) a tab for an already-loaded file. */
@@ -2264,7 +2427,8 @@ class App {
     path: string,
     content: string,
     encoding: Doc['encoding'] = 'utf8',
-    eol: Doc['eol'] = 'LF'
+    eol: Doc['eol'] = 'LF',
+    revision: string | null = null
   ): void {
     const existing = this.docs.find((d) => d.path === path)
     if (existing) {
@@ -2289,10 +2453,10 @@ class App {
       ? currentDoc
       : null
     if (!placeholder) {
-      this.addDoc(createFromFile(path, content, encoding, eol))
+      this.addDoc(createFromFile(path, content, encoding, eol, revision))
       return
     }
-    const opened = createFromFile(path, content, encoding, eol)
+    const opened = createFromFile(path, content, encoding, eol, revision)
     const group = currentGroup
     const index = group.docIds.indexOf(placeholder.id)
     this.docs.push(opened)
@@ -2939,15 +3103,16 @@ class App {
 
   /**
    * `fs.watch({recursive:true})` is not available on every Linux filesystem.
-   * This small fallback keeps clean open buffers and the root tree current even
-   * where the native watcher cannot recurse. Dirty buffers are never replaced.
+   * This small fallback keeps open buffers and the root tree current even where
+   * the native watcher cannot recurse. Dirty buffers surface a conflict and are
+   * never replaced automatically.
    */
   private startWorkspacePolling(): void {
     if (this.workspacePollTimer !== null) return
     this.workspacePollTimer = window.setInterval(() => {
       if (this.folder) void this.reloadWorkspaceTree()
       for (const doc of this.docs) {
-        if (doc.path && !isDirty(doc)) void this.handleExternalFileChange(doc.path)
+        if (doc.path) void this.handleExternalFileChange(doc.path)
       }
     }, 5_000)
     window.addEventListener('beforeunload', () => {
@@ -2958,16 +3123,30 @@ class App {
 
   /** Offer a safe reload when a clean open file changes outside Lumen. */
   private async handleExternalFileChange(changedPath: string): Promise<void> {
-    const doc = this.docs.find((candidate) => candidate.path === changedPath)
-    if (!doc || isDirty(doc)) return
+    const initialDoc = this.docs.find((candidate) => candidate.path === changedPath)
+    if (!initialDoc) return
+    const docId = initialDoc.id
+    const request = ++this.externalChangeGeneration
+    this.externalChangeRequests.set(changedPath, request)
     try {
       const opened = await window.editor.openPath(changedPath)
-      if (opened.isBinary || opened.isTooLarge) return
-      if (opened.content === doc.savedContent && opened.encoding === doc.encoding && opened.eol === doc.eol) return
+      if (this.externalChangeRequests.get(changedPath) !== request) return
+      const doc = this.docs.find((candidate) => candidate.id === docId && candidate.path === changedPath)
+      if (!doc) return
+      if (opened.isBinary || opened.isTooLarge) {
+        this.handleSaveConflict(doc, opened, this.activeId === doc.id, opened.isBinary ? 'binary' : 'too-large')
+        return
+      }
+      const savedSnapshot = {
+        content: doc.savedContent,
+        encoding: doc.savedEncoding,
+        eol: doc.savedEol,
+        revision: doc.diskRevision
+      }
+      if (samePhysicalText(opened, savedSnapshot)) return
       if (isDirty(doc)) {
-        if (doc.externalChange?.content === opened.content || doc.ignoredExternalContent === opened.content) return
-        doc.externalChange = { content: opened.content, encoding: opened.encoding, eol: opened.eol }
-        doc.ignoredExternalContent = undefined
+        if (doc.externalChange && samePhysicalText(doc.externalChange, opened)) return
+        doc.externalChange = { content: opened.content, encoding: opened.encoding, eol: opened.eol, revision: opened.revision }
         this.renderTabs()
         if (this.activeId === doc.id) this.showExternalConflict(doc)
         return
@@ -2975,15 +3154,27 @@ class App {
       doc.content = opened.content
       doc.savedContent = opened.content
       doc.encoding = opened.encoding
+      doc.savedEncoding = opened.encoding
       doc.eol = opened.eol
+      doc.savedEol = opened.eol
+      doc.diskRevision = opened.revision
       doc.editorState = undefined
       doc.externalChange = undefined
-      doc.ignoredExternalContent = undefined
       if (this.activeId === doc.id) await this.activate(doc.id)
       this.renderTabs()
+      this.scheduleSessionSave()
     } catch {
       // A delete/rename is reflected by the tree. Keep any already-open buffer.
+    } finally {
+      if (this.externalChangeRequests.get(changedPath) === request) {
+        this.externalChangeRequests.delete(changedPath)
+      }
     }
+  }
+
+  /** Ignore watcher reads that began before this process finished writing. */
+  private invalidateExternalChangeRead(filePath: string | null): void {
+    if (filePath) this.externalChangeRequests.delete(filePath)
   }
 
   private async createPath(parent: string, isDirectory: boolean): Promise<void> {
@@ -3017,8 +3208,11 @@ class App {
           doc.path === source ||
           (doc.path !== null && (doc.path.startsWith(`${source}/`) || doc.path.startsWith(`${source}\\`)))
         ) {
+          const previousPath = doc.path
           doc.path = doc.path === source ? target : `${target}${doc.path.slice(source.length)}`
           doc.name = baseName(doc.path)
+          this.invalidateExternalChangeRead(previousPath)
+          this.invalidateExternalChangeRead(doc.path)
         }
       }
       this.renderTabs()
@@ -3035,8 +3229,11 @@ class App {
       if (!target || target === source) return
       for (const doc of this.docs) {
         if (doc.path === source || (doc.path !== null && (doc.path.startsWith(`${source}/`) || doc.path.startsWith(`${source}\\`)))) {
+          const previousPath = doc.path
           doc.path = doc.path === source ? target : `${target}${doc.path.slice(source.length)}`
           doc.name = baseName(doc.path)
+          this.invalidateExternalChangeRead(previousPath)
+          this.invalidateExternalChangeRead(doc.path)
         }
       }
       await this.reloadWorkspaceTree()
@@ -3065,27 +3262,58 @@ class App {
   private async save(forceDialog: boolean): Promise<void> {
     const doc = this.active
     if (!doc) return
+    const originalPath = doc.path
     const savedSnapshot = this.editor.getContent()
+    const savedEncodingSnapshot = doc.encoding
+    const savedEolSnapshot = doc.eol
+    const promptedForDestination = forceDialog || originalPath === null
     doc.content = savedSnapshot
 
     let result
     try {
       result = forceDialog
-        ? await window.editor.saveAs(savedSnapshot, doc.name, { encoding: doc.encoding, eol: doc.eol })
-        : await window.editor.save(doc.path, savedSnapshot, { encoding: doc.encoding, eol: doc.eol })
+        ? await window.editor.saveAs(savedSnapshot, doc.name, { encoding: savedEncodingSnapshot, eol: savedEolSnapshot })
+        : await window.editor.save(doc.path, savedSnapshot, {
+            encoding: savedEncodingSnapshot,
+            eol: savedEolSnapshot,
+            ...(doc.path ? { expectedRevision: doc.diskRevision } : {})
+          })
     } catch (error) {
       this.showError(`Could not save “${doc.name}”.`, error)
       return
     }
 
-    if (!result.saved || !result.path) return
-    doc.path = result.path
-    doc.name = baseName(result.path)
+    if (!result.saved || !result.path) {
+      if (result.reason === 'hardlink' && promptedForDestination) {
+        this.showError('The selected destination has multiple hard links. Choose a different path.')
+      } else if (result.reason === 'conflict' && promptedForDestination) {
+        this.showError('The selected destination changed before it could be saved. Review it and try Save As again.')
+      } else if ((result.reason === 'conflict' || result.reason === 'hardlink') &&
+        isCurrentDocumentSaveConflict(promptedForDestination, originalPath, doc.path, result.path)) {
+        this.handleSaveConflict(
+          doc,
+          result.conflict ?? null,
+          this.activeId === doc.id,
+          result.reason === 'hardlink' ? 'hardlink' : undefined
+        )
+      }
+      return
+    }
+    this.invalidateExternalChangeRead(originalPath)
+    this.invalidateExternalChangeRead(result.path)
+    if (forceDialog || doc.path === originalPath) {
+      doc.path = result.path
+      doc.name = baseName(result.path)
+    }
     // Mark only the exact snapshot written to disk as saved. Edits made while
     // the async write was in flight remain dirty and cannot be silently lost.
     doc.savedContent = savedSnapshot
-    doc.externalChange = undefined
-    doc.ignoredExternalContent = undefined
+    doc.savedEncoding = savedEncodingSnapshot
+    doc.savedEol = savedEolSnapshot
+    doc.diskRevision = result.revision ?? doc.diskRevision
+    doc.requiresSave = false
+    if (forceDialog || originalPath !== result.path) doc.externalChange = undefined
+    else this.reconcileSuccessfulSave(doc, result.revision)
     if (!doc.languageLocked && this.activeId === doc.id) {
       try {
         doc.language = await this.editor.setLanguageForFile(doc.name)
@@ -3097,7 +3325,11 @@ class App {
     this.updateStatus()
     this.scheduleSessionSave()
     this.syncEditorChrome()
-    this.hideExternalConflict()
+    if (doc.externalChange) {
+      if (this.activeId === doc.id) this.showExternalConflict(doc)
+    } else if (this.conflictDocId === doc.id) {
+      this.hideExternalConflict()
+    }
   }
 
   /** Close the active tab, guarding against losing unsaved changes. */
@@ -3158,17 +3390,40 @@ class App {
     for (const doc of this.docs.filter((item) => !!item.path && isDirty(item) && !item.externalChange && !this.autoSaveInFlight.has(item.id))) {
       this.autoSaveInFlight.add(doc.id)
       const snapshot = doc.content
+      const encodingSnapshot = doc.encoding
+      const eolSnapshot = doc.eol
+      const pathSnapshot = doc.path
+      let saved = false
       try {
-        const result = await window.editor.save(doc.path, snapshot, { encoding: doc.encoding, eol: doc.eol })
+        const result = await window.editor.save(pathSnapshot, snapshot, {
+          encoding: encodingSnapshot,
+          eol: eolSnapshot,
+          expectedRevision: doc.diskRevision
+        })
         if (result.saved) {
+          this.invalidateExternalChangeRead(pathSnapshot)
           doc.savedContent = snapshot
-          doc.externalChange = undefined
-          doc.ignoredExternalContent = undefined
+          doc.savedEncoding = encodingSnapshot
+          doc.savedEol = eolSnapshot
+          doc.diskRevision = result.revision ?? doc.diskRevision
+          doc.requiresSave = false
+          this.reconcileSuccessfulSave(doc, result.revision)
+          saved = true
+        } else if ((result.reason === 'conflict' || result.reason === 'hardlink') && doc.path === pathSnapshot) {
+          this.handleSaveConflict(
+            doc,
+            result.conflict ?? null,
+            this.activeId === doc.id,
+            result.reason === 'hardlink' ? 'hardlink' : undefined
+          )
         }
       } catch (error) {
         this.showError(`Auto Save could not save “${doc.name}”.`, error)
       } finally {
         this.autoSaveInFlight.delete(doc.id)
+        // A new text/encoding/EOL edit may have landed while this snapshot was
+        // being written. Queue one trailing pass instead of losing that edit.
+        if (saved && isDirty(doc)) this.scheduleAutoSave()
       }
     }
     this.renderTabs()
@@ -3461,6 +3716,40 @@ class App {
     })
   }
 
+  /** Choose the newline convention used the next time the active document is saved. */
+  private pickLineEnding(): void {
+    const doc = this.active
+    if (!doc) return
+    const values: Doc['eol'][] = ['LF', 'CRLF', 'CR']
+    const ordered = [doc.eol, ...values.filter((value) => value !== doc.eol)]
+    this.palette.open({
+      placeholder: this.t('lineEndingPickerPlaceholder'),
+      items: ordered.map((value) => ({
+        label: value,
+        hint: value === doc.eol ? this.t('current') : undefined,
+        value
+      })),
+      onAccept: (item) => this.setDocumentEol(item.value as Doc['eol'])
+    })
+  }
+
+  /** Choose the Unicode encoding used the next time the active document is saved. */
+  private pickEncoding(): void {
+    const doc = this.active
+    if (!doc) return
+    const values: Doc['encoding'][] = ['utf8', 'utf8bom', 'utf16le', 'utf16be']
+    const ordered = [doc.encoding, ...values.filter((value) => value !== doc.encoding)]
+    this.palette.open({
+      placeholder: this.t('encodingPickerPlaceholder'),
+      items: ordered.map((value) => ({
+        label: encodingLabel(value),
+        hint: value === doc.encoding ? this.t('current') : undefined,
+        value
+      })),
+      onAccept: (item) => this.setDocumentEncoding(item.value as Doc['encoding'])
+    })
+  }
+
   private expandSnippetTrigger(): boolean {
     const doc = this.active
     if (!doc) return false
@@ -3483,11 +3772,24 @@ class App {
 
   private setDocumentEol(eol: Doc['eol']): void {
     const doc = this.active
-    if (!doc) return
+    if (!doc || doc.eol === eol) return
     doc.eol = eol
+    this.renderTabs()
     this.updateStatus()
     this.scheduleSessionSave()
-    this.statusSelection.textContent = `Save line endings as ${eol}`
+    this.scheduleAutoSave()
+    this.notify(`${this.t('lineEndingChanged')}${eol}`)
+  }
+
+  private setDocumentEncoding(encoding: Doc['encoding']): void {
+    const doc = this.active
+    if (!doc || doc.encoding === encoding) return
+    doc.encoding = encoding
+    this.renderTabs()
+    this.updateStatus()
+    this.scheduleSessionSave()
+    this.scheduleAutoSave()
+    this.notify(`${this.t('encodingChanged')}${encodingLabel(encoding)}`)
   }
 
   /** Execute the configured build command inside the active project directory. */
@@ -4177,12 +4479,15 @@ class App {
   }
 
   /**
-   * Write the current session immediately. Persists a draft for every buffer
-   * that is dirty or untitled-with-content, so unsaved work survives an
-   * unexpected quit (hot exit). Clean file-backed buffers store only their
-   * path and are re-read from disk on restore.
+   * Write the current session immediately. Text drafts and pending physical
+   * format choices are tracked separately so a metadata-only edit can restore
+   * on top of the latest disk text instead of reviving a stale full-text copy.
    */
-  private async persistSessionNow(): Promise<void> {
+  private async persistSessionNow(): Promise<boolean> {
+    if (this.saveSessionTimer !== null) {
+      window.clearTimeout(this.saveSessionTimer)
+      this.saveSessionTimer = null
+    }
     // Keep all group-local active buffers current before snapshotting.
     for (const group of this.groups) {
       const doc = group.renderedDocId ? this.docs.find((candidate) => candidate.id === group.renderedDocId) : undefined
@@ -4194,11 +4499,18 @@ class App {
       }
     }
 
-    // Drop pristine untitled buffers (no path, no content) — nothing to keep.
-    const persistedDocs = this.docs.filter((doc) => doc.path !== null || doc.content.length > 0)
+    // Drop only truly pristine untitled buffers. A format-only choice is user
+    // intent and must survive hot exit even when the buffer text is empty.
+    const persistedDocs = this.docs.filter((doc) => doc.path !== null || doc.content.length > 0 || isDirty(doc))
+    if (persistedDocs.length > MAX_SESSION_OPEN_FILES) {
+      this.showError(`Session recovery supports at most ${MAX_SESSION_OPEN_FILES} open files.`)
+      return false
+    }
     const idToIndex = new Map(persistedDocs.map((doc, index) => [doc.id, index]))
     const openFiles: SessionFile[] = persistedDocs.map((d) => {
-      const keepDraft = isDirty(d) || (d.path === null && d.content.length > 0)
+      const contentDirty = d.content !== d.savedContent
+      const formatDirty = d.encoding !== d.savedEncoding || d.eol !== d.savedEol
+      const keepDraft = contentDirty || d.externalChange !== undefined || d.requiresSave || (d.path === null && d.content.length > 0)
       return {
         path: d.path,
         name: d.name,
@@ -4207,11 +4519,27 @@ class App {
         languageLocked: d.languageLocked,
         encoding: d.encoding,
         eol: d.eol,
+        formatDirty,
+        ...((contentDirty || formatDirty || d.externalChange) ? { baseRevision: d.diskRevision } : {}),
+        ...(formatDirty && !keepDraft && d.path !== null ? { recoveryContent: d.content } : {}),
         ...(d.bookmarks.length > 0 ? { bookmarks: d.bookmarks } : {}),
         ...(d.viewStates.size > 0 ? { views: [...d.viewStates.values()] } : {}),
         ...(keepDraft ? { draft: d.content } : {})
       }
     })
+    let recoveryBytes = 0
+    for (const file of openFiles) {
+      for (const text of [file.draft, file.recoveryContent]) {
+        if (text === undefined) continue
+        const remaining = MAX_SESSION_RECOVERY_BYTES - recoveryBytes
+        const bytes = jsonStringUtf8ByteLength(text, remaining)
+        if (bytes > remaining) {
+          this.showError('Session recovery data exceeds the supported 200 MiB aggregate limit.')
+          return false
+        }
+        recoveryBytes += bytes
+      }
+    }
     const activeDoc = this.active
     const activeIndex = activeDoc ? idToIndex.get(activeDoc.id) ?? 0 : 0
     const layout: SessionLayout = {
@@ -4229,8 +4557,10 @@ class App {
     const session: Session = { openFiles, activeIndex, folder: this.folder, folders: this.folders, layout }
     try {
       await window.editor.writeSession(session)
+      return true
     } catch (error) {
       this.showError('Session recovery data could not be saved.', error)
+      return false
     }
   }
 
@@ -4392,12 +4722,21 @@ class App {
   /** Refresh all status-bar fields for the active document. */
   private updateStatus(): void {
     const doc = this.active
+    this.statusLanguage.disabled = !doc
+    this.statusEol.disabled = !doc
+    this.statusEncoding.disabled = !doc
     this.statusLanguage.textContent = !doc || doc.language === 'Plain Text' ? this.t('plainText') : doc.language
     this.statusLanguage.setAttribute('aria-label', this.settings.locale === 'zh-CN'
       ? `选择语法，当前为${this.statusLanguage.textContent}`
       : `Select syntax, currently ${this.statusLanguage.textContent}`)
-    this.statusEol.textContent = doc?.eol ?? 'LF'
-    this.statusEncoding.textContent = doc?.encoding === 'utf8bom' ? 'UTF-8 BOM' : doc?.encoding.toUpperCase() ?? 'UTF-8'
+    this.statusEol.textContent = doc?.eol ?? '—'
+    this.statusEol.setAttribute('aria-label', doc
+      ? `${this.t('lineEndingAriaLabel')}${this.statusEol.textContent}`
+      : this.t('lineEndingPickerPlaceholder'))
+    this.statusEncoding.textContent = doc ? encodingLabel(doc.encoding) : '—'
+    this.statusEncoding.setAttribute('aria-label', doc
+      ? `${this.t('encodingAriaLabel')}${this.statusEncoding.textContent}`
+      : this.t('encodingPickerPlaceholder'))
     this.updatePositionStatus(this.editor.view.state)
   }
 

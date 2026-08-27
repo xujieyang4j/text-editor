@@ -320,6 +320,14 @@ export class Palette {
     const focusTarget = this.previouslyFocused
     this.close(false)
     accept(item)
+    // A command may synchronously replace this palette with a second picker.
+    // Carry the original trigger through that nested lifecycle so accepting or
+    // cancelling the child returns focus to the editor/button, not the hidden
+    // palette input that happened to be active between the two opens.
+    if (this.isOpen) {
+      this.previouslyFocused = focusTarget
+      return
+    }
     if ((document.activeElement === document.body || this.root.contains(document.activeElement)) &&
       focusTarget instanceof HTMLElement && focusTarget.isConnected) focusTarget.focus()
   }

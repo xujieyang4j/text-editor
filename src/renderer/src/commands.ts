@@ -29,6 +29,8 @@ export const COMMANDS: Command[] = [
   { id: 'save', title: 'File: Save', hint: 'Ctrl/Cmd+S' },
   { id: 'save-as', title: 'File: Save As…', hint: 'Ctrl/Cmd+Shift+S' },
   { id: 'save-all', title: 'File: Save All', hint: 'Ctrl/Cmd+Alt+S' },
+  { id: 'select-line-ending', title: 'File: Select Line Ending…' },
+  { id: 'select-encoding', title: 'File: Select Encoding…' },
   { id: 'toggle-pin-tab', title: 'File: Pin / Unpin Tab', hint: 'Ctrl/Cmd+Alt+P' },
   { id: 'close-tab', title: 'File: Close Tab', hint: 'Ctrl/Cmd+W' },
   { id: 'close-other-tabs', title: 'File: Close Other Tabs' },

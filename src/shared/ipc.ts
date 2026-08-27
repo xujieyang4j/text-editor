@@ -90,16 +90,22 @@ export const IPC = {
   menuEvent: 'menu:event'
 } as const
 
+/** Aggregate UTF-8 JSON budget for all hot-exit text in one window session. */
+export const MAX_SESSION_RECOVERY_BYTES = 200 * 1024 * 1024
+export const MAX_SESSION_OPEN_FILES = 100
+
 /** A file successfully read from disk. */
 export interface OpenedFile {
   /** Absolute path on disk. */
   path: string
-  /** UTF-8 text content. */
+  /** Decoded Unicode text with logical LF line endings. */
   content: string
   /** Encoding detected on read and used when the file is saved again. */
   encoding: TextEncoding
   /** Original line-ending convention. CodeMirror internally normalises to LF. */
   eol: LineEnding
+  /** SHA-256 of exact bytes read, or null when an oversized file was not read. */
+  revision: string | null
   /** Size on disk, in bytes. */
   byteLength: number
   /** True when the file is binary and must not be opened as text. */
@@ -123,14 +129,22 @@ export type LineEnding = 'LF' | 'CRLF' | 'CR'
 export interface FileWriteOptions {
   encoding: TextEncoding
   eol: LineEnding
+  /** Last raw-byte revision observed by the caller; null means the path was absent. */
+  expectedRevision?: string | null
 }
 
 /** Result of a save operation. */
 export interface SaveResult {
-  /** True when the file was written. False when the user cancelled a dialog. */
+  /** True when the file was written; false for cancellation or a revision conflict. */
   saved: boolean
   /** Absolute path the content was written to (present when saved). */
   path?: string
+  /** Revision of the bytes written, present after a successful save. */
+  revision?: string
+  /** Why no write occurred: dialog cancellation, stale bytes, or unsafe hard-link replacement. */
+  reason?: 'cancelled' | 'conflict' | 'hardlink'
+  /** Latest disk snapshot when an optimistic save detects a conflict. */
+  conflict?: OpenedFile | null
 }
 
 /** Request to preview an HTML buffer in the system browser. */
@@ -504,12 +518,17 @@ export interface SessionFile {
   /** True when the user manually locked the language (skip auto-detect). */
   languageLocked: boolean
   /**
-   * The unsaved draft text. Present ONLY when the buffer had unsaved changes
-   * (or is an untitled buffer with content). Clean file-backed buffers omit
-   * this and are simply re-read from disk on restore, keeping session.json
-   * small in the common case.
+   * The unsaved text draft. Present only when text changed (or an untitled
+   * buffer has content). A metadata-only change uses `formatDirty` so restore
+   * can combine the latest disk text with the pending physical format.
    */
   draft?: string
+  /** Text fallback used only when a metadata-only file disappears before restore. */
+  recoveryContent?: string
+  /** Preserve a pending encoding/EOL choice even when the text itself is clean. */
+  formatDirty?: boolean
+  /** Raw-byte revision on which the pending text/format intent was based. */
+  baseRevision?: string | null
   encoding?: TextEncoding
   eol?: LineEnding
   /** 1-based bookmark lines restored with the session. */
@@ -776,6 +795,8 @@ export type MenuEvent =
   | 'goto-symbol'
   | 'go-to-line'
   | 'select-language'
+  | 'select-line-ending'
+  | 'select-encoding'
   | 'toggle-comment'
   | 'toggle-block-comment'
   | 'add-cursor-above'

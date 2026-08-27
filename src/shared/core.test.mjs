@@ -3,7 +3,7 @@ import { maxEditableBytes, isBinaryBuffer } from '../../out-test/shared/filePoli
 import { score, fuzzyFilter } from '../../out-test/renderer/src/fuzzy.js'
 import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
 import { incrementalChanges, revertIncrementalChange } from '../../out-test/renderer/src/incrementalDiff.js'
-import { createFromFile, createUntitled, nextUntitledName } from '../../out-test/renderer/src/documents.js'
+import { createFromFile, createFromSession, createUntitled, isCurrentDocumentSaveConflict, isDirty, nextUntitledName } from '../../out-test/renderer/src/documents.js'
 import { JsonNumber, parseLosslessJson, stringifyLosslessJson } from '../../out-test/shared/losslessJson.js'
 import { parseGitRemoteLines, parseGitTracking, sanitizeGitRemoteUrl } from '../../out-test/shared/git.js'
 import {
@@ -38,7 +38,114 @@ const changes = incrementalChanges('one\ntwo\nfour', 'one\nthree\nfour\nfive')
 assert.deepEqual(changes.map((change) => [change.kind, change.line, change.lineCount]), [['modified', 2, 1], ['added', 4, 1]])
 assert.equal(revertIncrementalChange('one\nthree\nfour\nfive', changes[0]), 'one\ntwo\nfour\nfive')
 assert.deepEqual(incrementalChanges('one\ntwo', 'one').map((change) => [change.kind, change.line]), [['deleted', 2]])
-const restoredFile = createFromFile('/tmp/example.ts', 'export {}')
+const restoredFile = createFromFile('/tmp/example.ts', 'export {}', 'utf16be', 'CRLF')
+assert.equal(restoredFile.savedEncoding, 'utf16be')
+assert.equal(restoredFile.savedEol, 'CRLF')
+assert.equal(restoredFile.diskRevision, null)
+assert.equal(isDirty(restoredFile), false)
+restoredFile.encoding = 'utf8'
+assert.equal(isDirty(restoredFile), true)
+restoredFile.encoding = restoredFile.savedEncoding
+restoredFile.eol = 'LF'
+assert.equal(isDirty(restoredFile), true)
+restoredFile.eol = restoredFile.savedEol
+assert.equal(isDirty(restoredFile), false)
+const untitled = createUntitled()
+assert.equal(untitled.savedEncoding, 'utf8')
+assert.equal(untitled.savedEol, 'LF')
+assert.equal(untitled.requiresSave, false)
+assert.equal(isDirty(untitled), false)
+const sessionDraft = createFromSession('disk text', {
+  path: '/tmp/draft.txt',
+  name: 'draft.txt',
+  language: 'Plain Text',
+  languageLocked: false,
+  draft: 'draft text',
+  encoding: 'utf16le',
+  eol: 'CRLF'
+}, { encoding: 'utf8bom', eol: 'CR' })
+assert.equal(sessionDraft.encoding, 'utf16le')
+assert.equal(sessionDraft.eol, 'CRLF')
+assert.equal(sessionDraft.savedEncoding, 'utf8bom')
+assert.equal(sessionDraft.savedEol, 'CR')
+assert.equal(isDirty(sessionDraft), true)
+const recoveredMetadataDraft = createFromSession('latest disk text', {
+  path: '/tmp/metadata-only.txt',
+  name: 'metadata-only.txt',
+  language: 'Plain Text',
+  languageLocked: false,
+  formatDirty: true,
+  encoding: 'utf16le',
+  eol: 'CRLF'
+}, { encoding: 'utf8', eol: 'LF' })
+assert.equal(recoveredMetadataDraft.content, 'latest disk text')
+assert.equal(recoveredMetadataDraft.content, recoveredMetadataDraft.savedContent)
+assert.equal(recoveredMetadataDraft.encoding, 'utf16le')
+assert.equal(recoveredMetadataDraft.eol, 'CRLF')
+assert.equal(recoveredMetadataDraft.savedEncoding, 'utf8')
+assert.equal(recoveredMetadataDraft.savedEol, 'LF')
+assert.equal(isDirty(recoveredMetadataDraft), true)
+const cleanSessionFile = createFromSession('disk text', {
+  path: '/tmp/clean.txt',
+  name: 'clean.txt',
+  language: 'Plain Text',
+  languageLocked: false,
+  encoding: 'utf16le',
+  eol: 'CRLF'
+}, { encoding: 'utf8bom', eol: 'CR' })
+assert.equal(cleanSessionFile.encoding, 'utf8bom')
+assert.equal(cleanSessionFile.eol, 'CR')
+assert.equal(cleanSessionFile.savedEncoding, 'utf8bom')
+assert.equal(cleanSessionFile.savedEol, 'CR')
+assert.equal(isDirty(cleanSessionFile), false)
+const textOnlyDraft = createFromSession('new disk text', {
+  path: '/tmp/text-only.txt',
+  name: 'text-only.txt',
+  language: 'Plain Text',
+  languageLocked: false,
+  draft: 'local draft',
+  formatDirty: false,
+  encoding: 'utf16le',
+  eol: 'CRLF'
+}, { encoding: 'utf8bom', eol: 'CR' })
+assert.equal(textOnlyDraft.content, 'local draft')
+assert.equal(textOnlyDraft.encoding, 'utf16le')
+assert.equal(textOnlyDraft.eol, 'CRLF')
+assert.equal(textOnlyDraft.savedEncoding, 'utf8bom')
+assert.equal(textOnlyDraft.savedEol, 'CR')
+assert.equal(isDirty(textOnlyDraft), true)
+const offlineConflict = createFromSession('external text', {
+  path: '/tmp/offline-conflict.txt',
+  name: 'offline-conflict.txt',
+  language: 'Plain Text',
+  languageLocked: false,
+  draft: 'local draft',
+  formatDirty: false,
+  baseRevision: 'sha256:' + 'a'.repeat(64),
+  encoding: 'utf8',
+  eol: 'LF'
+}, { encoding: 'utf8', eol: 'LF', revision: 'sha256:' + 'b'.repeat(64) })
+assert.equal(offlineConflict.content, 'local draft')
+assert.equal(offlineConflict.diskRevision, 'sha256:' + 'a'.repeat(64))
+assert.equal(offlineConflict.externalChange?.content, 'external text')
+assert.equal(offlineConflict.externalChange?.revision, 'sha256:' + 'b'.repeat(64))
+assert.equal(isDirty(offlineConflict), true)
+const recoveredEmptyDraft = createFromSession('', {
+  path: null,
+  name: 'deleted-empty.txt (recovered)',
+  language: 'Plain Text',
+  languageLocked: false,
+  draft: '',
+  formatDirty: false,
+  encoding: 'utf16le',
+  eol: 'CRLF'
+}, { encoding: 'utf16le', eol: 'CRLF', revision: null })
+assert.equal(recoveredEmptyDraft.requiresSave, true)
+assert.equal(isDirty(recoveredEmptyDraft), true)
+assert.equal(isCurrentDocumentSaveConflict(false, '/tmp/source.txt', '/tmp/source.txt', '/tmp/source.txt'), true)
+assert.equal(isCurrentDocumentSaveConflict(true, '/tmp/source.txt', '/tmp/source.txt', '/tmp/target.txt'), false)
+assert.equal(isCurrentDocumentSaveConflict(false, null, null, '/tmp/target.txt'), false)
+assert.equal(isCurrentDocumentSaveConflict(false, '/tmp/source.txt', '/tmp/moved.txt', '/tmp/source.txt'), false)
 assert.equal(createUntitled([restoredFile.name]).name, 'Untitled-1')
 assert.equal(nextUntitledName(['Untitled-1', 'notes.txt', 'Untitled-3']), 'Untitled-2')
 assert.equal(createUntitled(['Untitled-1', 'Untitled-2']).name, 'Untitled-3')

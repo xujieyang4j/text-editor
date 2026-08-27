@@ -39,6 +39,33 @@ export function detectLineEnding(text: string): LineEnding {
   return 'LF'
 }
 
+/** Keep editor/session text in one logical form; `eol` carries the disk format. */
+export function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n|\r/g, '\n')
+}
+
+/** Exact UTF-8 byte length of a string as encoded inside JSON, including quotes. */
+export function jsonStringUtf8ByteLength(value: string, stopAfter = Number.POSITIVE_INFINITY): number {
+  let bytes = 2
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code === 0x22 || code === 0x5c || code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) bytes += 2
+    else if (code < 0x20) bytes += 6
+    else if (code < 0x80) bytes += 1
+    else if (code < 0x800) bytes += 2
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length) {
+      const low = value.charCodeAt(index + 1)
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        bytes += 4
+        index += 1
+      } else bytes += 6
+    } else if (code >= 0xd800 && code <= 0xdfff) bytes += 6
+    else bytes += 3
+    if (bytes > stopAfter) return bytes
+  }
+  return bytes
+}
+
 /** Preserve a file's newline convention whenever editor text returns to disk. */
 export function applyLineEnding(text: string, eol: LineEnding): string {
   const lineBreak = eol === 'CRLF' ? '\r\n' : eol === 'CR' ? '\r' : '\n'
