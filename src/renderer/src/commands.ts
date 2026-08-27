@@ -110,6 +110,7 @@ export const COMMANDS: Command[] = [
   { id: 'split-editor', title: 'View: Toggle Split Editor', hint: 'Ctrl/Cmd+Alt+2' },
   { id: 'split-selected-tabs', title: 'View: Split Selected Tabs into Groups' },
   { id: 'toggle-minimap', title: 'View: Toggle Minimap' },
+  { id: 'toggle-whitespace', title: 'View: Toggle Whitespace Characters' },
   { id: 'toggle-outline', title: 'View: Toggle Outline' },
   { id: 'fold-current', title: 'View: Fold Current', hint: 'Ctrl+Shift+[ / macOS: Cmd+Alt+[' },
   { id: 'unfold-current', title: 'View: Unfold Current', hint: 'Ctrl+Shift+] / macOS: Cmd+Alt+]' },

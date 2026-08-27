@@ -35,6 +35,10 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **Syntax highlighting** for 100+ languages, auto-detected by extension; manual override via
   the status-bar language button or **Set Syntax…**
 - **Minimap** and **indentation guides**, **vertical rulers**, trailing-whitespace highlight
+- **Whitespace character markers** — choose *View → Toggle Whitespace Characters*, run the same
+  command from the Command Palette, or enable it in Settings to reveal spaces and tabs without
+  changing document text; this persistent option is off by default and is independent of
+  trailing-whitespace highlighting
 - **Line operations**: move/copy/delete line, duplicate, toggle comment (`Ctrl/Cmd+/`), plus
   *Sort Lines Ascending*, *Sort Lines Descending*, *Reverse Lines*, *Unique Lines*, and *Remove Blank
   Lines* from the Edit menu or Command Palette. For these block operations, every non-empty selection
@@ -64,7 +68,8 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **Hot exit / session restore** — reopens your tabs + folder on next launch and **preserves
   unsaved edits** (even untitled buffers) across an unexpected quit; **Reopen Closed Tab**
   (`Ctrl/Cmd+Shift+T`)
-- **Persistent settings** (JSON in userData): font size, tab size, theme, wrap, minimap, rulers
+- **Persistent settings** (JSON in userData): font size, tab size, theme, wrap, minimap, whitespace
+  character markers, rulers
 - **Font zoom** (`Ctrl/Cmd+=` / `-` / `0`), dark/light theme, word-wrap, collapsible sidebar
 - **Clickable encoding & line endings** in the status bar: choose `UTF-8`, `UTF-8 BOM`,
   `UTF-16 LE`, or `UTF-16 BE`, and `LF`, `CRLF`, or `CR`. A choice sets the target for

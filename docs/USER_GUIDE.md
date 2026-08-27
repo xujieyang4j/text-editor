@@ -396,14 +396,19 @@ you trust.
 | --- | --- | --- |
 | Minimap (right-edge overview) | *View: Toggle Minimap* | `showMinimap` |
 | Indentation guides | always on unless disabled | `showIndentGuides` |
+| Spaces and tab markers | *View → Toggle Whitespace Characters* or Command Palette: *View: Toggle Whitespace Characters* | `showWhitespace` |
 | Trailing-whitespace highlight | always on unless disabled | `highlightTrailingWhitespace` |
 | Vertical rulers | set columns in settings | `rulers` |
 | Word wrap | `Alt+Z` | `wordWrap` |
 | Dark / light theme | `Ctrl/Cmd+K` | `theme` |
 | Font zoom in / out / reset | `Ctrl/Cmd+=` / `-` / `0` | `fontSize` |
 
-Toggles you flip at runtime (theme, wrap, minimap, font size) are written straight back to the
-settings file, so they persist across restarts.
+*Toggle Whitespace Characters* controls an option that is off by default. Enable it from the View menu, the Command Palette,
+or its Settings checkbox to draw visual markers for spaces and tabs without changing document text.
+It is independent of trailing-whitespace highlighting, so either display aid can be enabled on its own.
+
+Toggles you flip at runtime (theme, wrap, minimap, whitespace markers, font size) are written straight
+back to the settings file, so they persist across restarts.
 
 Use **Preferences: Open Settings…** (`Ctrl/Cmd+,`) for a graphical editor of these preferences;
 changes apply immediately and are saved to the same settings file.
@@ -437,6 +442,7 @@ Settings are stored as JSON in the OS user-data directory and applied live:
   "showMinimap": true,                  // right-edge minimap
   "showOutline": false,                 // active-file structure outline in sidebar
   "showIndentGuides": true,             // indentation guide lines
+  "showWhitespace": false,               // show visual markers for spaces/tabs
   "highlightTrailingWhitespace": true,  // mark trailing spaces/tabs
   "rulers": [80, 120]                   // vertical rulers at these columns ([] = none)
 }
@@ -445,6 +451,10 @@ Settings are stored as JSON in the OS user-data directory and applied live:
 Unknown/missing keys fall back to defaults, so a partial file is fine. The app manages
 `session.json` for the legacy window and `session-<id>.json` for additional windows in the same
 folder.
+
+When importing Sublime Text settings, `draw_white_space` values `all` and `selection` map to
+`showWhitespace: true`; `none` maps to `false`. This mapping changes only `showWhitespace`;
+`highlightTrailingWhitespace` keeps its current value.
 
 <a id="en-session"></a>
 
@@ -858,6 +868,7 @@ UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 
 | --- | --- | --- |
 | Minimap（右侧缩略图） | *View: Toggle Minimap* | `showMinimap` |
 | 缩进参考线 | 默认开，可禁用 | `showIndentGuides` |
+| 空格和 Tab 标记 | *View → Toggle Whitespace Characters*，或命令面板：*View: Toggle Whitespace Characters* | `showWhitespace` |
 | 行尾空白高亮 | 默认开，可禁用 | `highlightTrailingWhitespace` |
 | 竖直标尺 | 在设置里指定列 | `rulers` |
 | 软换行 | `Alt+Z` | `wordWrap` |
@@ -867,7 +878,10 @@ UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 
 Git 面板会显示当前分支、已配置的上游以及本地缓存的领先/落后提交数。可展开的远端详情仅从
 本地 Git 配置读取，刷新面板不会访问网络；远端 URL 中的用户名、密码或令牌会在进入渲染界面前移除。
 
-运行时切换的项（主题、换行、Minimap、字号）会立即写回设置文件，重启后保留。
+*Toggle Whitespace Characters* 控制的选项默认关闭，可从“视图”菜单、命令面板或设置中的复选框启用；
+它只为空格和 Tab 绘制视觉标记，不会改动文档文本。此功能与行尾空白高亮互不影响，可以分别开关。
+
+运行时切换的项（主题、换行、Minimap、空白字符标记、字号）会立即写回设置文件，重启后保留。
 
 <a id="zh-settings"></a>
 
@@ -888,6 +902,7 @@ Git 面板会显示当前分支、已配置的上游以及本地缓存的领先/
   "wordWrap": false,                    // 长行软换行
   "showMinimap": true,                  // 右侧 Minimap
   "showIndentGuides": true,             // 缩进参考线
+  "showWhitespace": false,               // 显示空格和 Tab 的视觉标记
   "highlightTrailingWhitespace": true,  // 标记行尾空白
   "rulers": [80, 120]                   // 在这些列画竖直标尺([] = 不画)
 }
@@ -895,6 +910,10 @@ Git 面板会显示当前分支、已配置的上游以及本地缓存的领先/
 
 缺失/未知键回退到默认值，写一部分也没问题。旧窗口使用同目录的 `session.json`，多窗口使用
 `session-<id>.json` 保存打开的标签与文件夹，均由程序自动管理。
+
+导入 Sublime Text 设置时，`draw_white_space` 的 `all` / `selection` 均映射为
+`showWhitespace: true`，`none` 映射为 `false`。此映射只更改 `showWhitespace`，
+`highlightTrailingWhitespace` 保持当前值不变。
 
 <a id="zh-session"></a>
 

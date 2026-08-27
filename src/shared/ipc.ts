@@ -456,6 +456,8 @@ export interface Settings {
   wordWrap: boolean
   showMinimap: boolean
   showIndentGuides: boolean
+  /** Render ordinary spaces and tabs with visible markers. */
+  showWhitespace: boolean
   highlightTrailingWhitespace: boolean
   /** Column positions to draw vertical rulers at (empty = none). */
   rulers: number[]
@@ -487,6 +489,7 @@ export const DEFAULT_SETTINGS: Settings = {
   wordWrap: false,
   showMinimap: true,
   showIndentGuides: true,
+  showWhitespace: false,
   highlightTrailingWhitespace: true,
   rulers: [],
   maxFileSizeMB: 20,
@@ -781,6 +784,7 @@ export type MenuEvent =
   | 'toggle-word-wrap'
   | 'toggle-theme'
   | 'toggle-minimap'
+  | 'toggle-whitespace'
   | 'toggle-distraction-free'
   | 'cycle-auto-save'
   | 'toggle-spell-check'

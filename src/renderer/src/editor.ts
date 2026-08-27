@@ -6,6 +6,7 @@ import {
   highlightActiveLine,
   highlightActiveLineGutter,
   highlightSpecialChars,
+  highlightWhitespace,
   drawSelection,
   dropCursor,
   rectangularSelection,
@@ -113,6 +114,7 @@ const wrapConf = new Compartment()
 const tabConf = new Compartment()
 const minimapConf = new Compartment()
 const indentGuideConf = new Compartment()
+const whitespaceConf = new Compartment()
 const trailingWsConf = new Compartment()
 const rulerConf = new Compartment()
 const fontThemeConf = new Compartment()
@@ -301,6 +303,7 @@ export class Editor {
         tabConf.of([indentUnit.of(indent), EditorState.tabSize.of(s.tabSize)]),
         minimapConf.of(s.showMinimap ? minimapExtension() : []),
         indentGuideConf.of(s.showIndentGuides ? indentationMarkers() : []),
+        whitespaceConf.of(s.showWhitespace ? highlightWhitespace() : []),
         trailingWsConf.of(s.highlightTrailingWhitespace ? highlightTrailingWhitespace() : []),
         rulerConf.of(rulers(s.rulers)),
         fontThemeConf.of(fontTheme(s.fontSize)),
@@ -415,6 +418,7 @@ export class Editor {
         tabConf.reconfigure([indentUnit.of(indent), EditorState.tabSize.of(settings.tabSize)]),
         minimapConf.reconfigure(settings.showMinimap ? minimapExtension() : []),
         indentGuideConf.reconfigure(settings.showIndentGuides ? indentationMarkers() : []),
+        whitespaceConf.reconfigure(settings.showWhitespace ? highlightWhitespace() : []),
         trailingWsConf.reconfigure(
           settings.highlightTrailingWhitespace ? highlightTrailingWhitespace() : []
         ),

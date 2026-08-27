@@ -201,6 +201,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Focus Next Group', 'focus-next-group', 'CmdOrCtrl+Alt+]'),
         item('Focus Previous Group', 'focus-prev-group', 'CmdOrCtrl+Alt+['),
         item('Toggle Minimap', 'toggle-minimap'),
+        item('Toggle Whitespace Characters', 'toggle-whitespace'),
         item('Toggle Outline', 'toggle-outline'),
         item('Fold Current', 'fold-current'),
         item('Unfold Current', 'unfold-current'),

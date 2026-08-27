@@ -967,6 +967,13 @@ class App {
         this.settings.showMinimap = !this.settings.showMinimap
         this.applyUserSettings(this.settings)
         break
+      case 'toggle-whitespace':
+        this.settings.showWhitespace = !this.settings.showWhitespace
+        this.applyUserSettings(this.settings)
+        this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+          ? `空白字符显示：${this.settings.showWhitespace ? '开' : '关'}`
+          : `Whitespace characters: ${this.settings.showWhitespace ? 'on' : 'off'}`
+        break
       case 'toggle-distraction-free':
         this.settings.distractionFree = !this.settings.distractionFree
         this.applyUserSettings(this.settings)
@@ -1812,6 +1819,11 @@ class App {
     const activation = ++this.languageActivation
     this.withNavigationSelectionUpdate(() => {
       group.editor.setDocument(doc.content, doc.groupStates.get(groupIndex) ?? doc.editorState)
+      // Cached EditorStates retain their Compartment configuration. Reapply
+      // the current global preferences after restoring a tab so visual
+      // toggles cannot revert when switching to an inactive document.
+      group.editor.applySettings(this.settings)
+      group.editor.setSpellCheck(this.settings.spellCheck && (this.isMarkdownDoc(doc) || doc.language === 'Plain Text'))
       group.editor.restoreViewState(doc.viewStates.get(groupIndex))
     })
     const indentation = this.detectIndentation(doc.content)

@@ -880,6 +880,155 @@ function createWindow(sessionId = newSessionId()): void {
           return getComputedStyle(editor).fontSize === '17px'
         })()`, true)
         if (!settingsResult) throw new Error('Settings panel did not apply a font-size change')
+        await replaceEditorText('alpha beta\n\tgamma\n')
+        const firstWhitespaceTab = await win.webContents.executeJavaScript(`(() => {
+          const tab = document.querySelector('#tab-bar > .tab.active')
+          return {
+            id: tab?.getAttribute('data-doc-id') ?? '',
+            text: [...document.querySelectorAll('.cm-content .cm-line')]
+              .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')})
+          }
+        })()`, true)
+        const whitespaceSmokePath = path.join(app.getPath('userData'), 'whitespace-smoke.txt')
+        await fs.writeFile(whitespaceSmokePath, 'delta epsilon\n\tzeta\n', 'utf8')
+        authorizePathForRenderer(win.webContents.id, whitespaceSmokePath)
+        win.webContents.send(IPC.openPathRequested, whitespaceSmokePath)
+        const secondWhitespaceTab = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const tab = document.querySelector('#tab-bar > .tab.active')
+            const label = tab?.querySelector('.tab-label')?.textContent ?? ''
+            if (label === 'whitespace-smoke.txt') {
+              return {
+                ok: true,
+                id: tab?.getAttribute('data-doc-id') ?? '',
+                text: [...document.querySelectorAll('.cm-content .cm-line')]
+                  .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+                dirty: tab?.classList.contains('dirty') ?? false
+              }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, id: '', text: '', dirty: true }
+        })()`, true)
+        if (!firstWhitespaceTab.id || !secondWhitespaceTab.ok || !secondWhitespaceTab.id
+          || secondWhitespaceTab.text !== 'delta epsilon\n\tzeta\n' || secondWhitespaceTab.dirty) {
+          throw new Error(`Could not prepare clean inactive whitespace tab: ${JSON.stringify({ firstWhitespaceTab, secondWhitespaceTab })}`)
+        }
+        const firstWhitespaceTabActivated = await win.webContents.executeJavaScript(`(() => {
+          const tab = document.querySelector('#tab-bar > .tab[data-doc-id=${JSON.stringify(firstWhitespaceTab.id)}]')
+          if (!(tab instanceof HTMLElement)) return false
+          tab.click()
+          return true
+        })()`, true)
+        if (!firstWhitespaceTabActivated) throw new Error('Could not reactivate the first whitespace smoke tab')
+        await new Promise<void>((resolve) => setTimeout(resolve, 50))
+        const whitespaceDefault = await win.webContents.executeJavaScript(`(() => ({
+          spaces: document.querySelectorAll('.cm-content .cm-highlightSpace').length,
+          tabs: document.querySelectorAll('.cm-content .cm-highlightTab').length,
+          text: [...document.querySelectorAll('.cm-content .cm-line')]
+            .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+          dirty: document.querySelector('#tab-bar > .tab.active')?.classList.contains('dirty') ?? false
+        }))()`, true)
+        if (whitespaceDefault.spaces !== 0 || whitespaceDefault.tabs !== 0) {
+          throw new Error(`Whitespace markers were enabled by default: ${JSON.stringify(whitespaceDefault)}`)
+        }
+        const whitespaceTextBefore = whitespaceDefault.text
+        const whitespaceDirtyBefore = whitespaceDefault.dirty
+        win.webContents.send(IPC.menuEvent, 'toggle-whitespace' as MenuEvent)
+        const whitespaceEnabled = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const spaces = document.querySelectorAll('.cm-content .cm-highlightSpace').length
+            const tabs = document.querySelectorAll('.cm-content .cm-highlightTab').length
+            if (spaces > 0 && tabs > 0) {
+              const settings = await window.editor.readSettings()
+              if (settings.showWhitespace === true) return { ok: true, spaces, tabs, persisted: true }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, spaces: 0, tabs: 0, persisted: false }
+        })()`, true)
+        if (!whitespaceEnabled.ok || !whitespaceEnabled.persisted) {
+          throw new Error(`Whitespace markers did not enable and persist: ${JSON.stringify(whitespaceEnabled)}`)
+        }
+        const cachedWhitespaceTab = await win.webContents.executeJavaScript(`(async () => {
+          const tab = document.querySelector('#tab-bar > .tab[data-doc-id=${JSON.stringify(secondWhitespaceTab.id)}]')
+          if (!(tab instanceof HTMLElement)) return { ok: false, spaces: 0, tabs: 0, text: '', dirty: true }
+          tab.click()
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const spaces = document.querySelectorAll('.cm-content .cm-highlightSpace').length
+            const tabs = document.querySelectorAll('.cm-content .cm-highlightTab').length
+            if (spaces > 0 && tabs > 0) {
+              const active = document.querySelector('#tab-bar > .tab.active')
+              return {
+                ok: active?.getAttribute('data-doc-id') === ${JSON.stringify(secondWhitespaceTab.id)},
+                spaces,
+                tabs,
+                text: [...document.querySelectorAll('.cm-content .cm-line')]
+                  .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+                dirty: active?.classList.contains('dirty') ?? false
+              }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, spaces: 0, tabs: 0, text: '', dirty: true }
+        })()`, true)
+        if (!cachedWhitespaceTab.ok || cachedWhitespaceTab.text !== secondWhitespaceTab.text || cachedWhitespaceTab.dirty) {
+          throw new Error(`Cached clean tab did not inherit whitespace markers: ${JSON.stringify(cachedWhitespaceTab)}`)
+        }
+        const whitespaceCheckbox = await win.webContents.executeJavaScript(`(() => {
+          const input = document.querySelector('input[data-setting="showWhitespace"]')
+          if (!(input instanceof HTMLInputElement) || !input.checked) return false
+          input.click()
+          return !input.checked
+        })()`, true)
+        if (!whitespaceCheckbox) throw new Error('Settings panel did not toggle whitespace markers off')
+        const whitespaceDisabled = await win.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 3_000
+          while (Date.now() < deadline) {
+            const spaces = document.querySelectorAll('.cm-content .cm-highlightSpace').length
+            const tabs = document.querySelectorAll('.cm-content .cm-highlightTab').length
+            if (spaces === 0 && tabs === 0) {
+              const settings = await window.editor.readSettings()
+              return {
+                ok: true,
+                persisted: settings.showWhitespace === false,
+                text: [...document.querySelectorAll('.cm-content .cm-line')]
+                  .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+                dirty: document.querySelector('#tab-bar > .tab.active')?.classList.contains('dirty') ?? false
+              }
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 20))
+          }
+          return { ok: false, persisted: false, text: '', dirty: false }
+        })()`, true)
+        if (!whitespaceDisabled.ok || !whitespaceDisabled.persisted
+          || whitespaceDisabled.text !== secondWhitespaceTab.text || whitespaceDisabled.dirty) {
+          throw new Error(`Whitespace toggle changed editor state: ${JSON.stringify({ whitespaceDefault, whitespaceDisabled })}`)
+        }
+        const firstWhitespaceTabRestored = await win.webContents.executeJavaScript(`(async () => {
+          const tab = document.querySelector('#tab-bar > .tab[data-doc-id=${JSON.stringify(firstWhitespaceTab.id)}]')
+          if (!(tab instanceof HTMLElement)) return { ok: false, spaces: -1, tabs: -1, text: '', dirty: false }
+          tab.click()
+          await new Promise((resolve) => window.setTimeout(resolve, 50))
+          const active = document.querySelector('#tab-bar > .tab.active')
+          return {
+            ok: active?.getAttribute('data-doc-id') === ${JSON.stringify(firstWhitespaceTab.id)},
+            spaces: document.querySelectorAll('.cm-content .cm-highlightSpace').length,
+            tabs: document.querySelectorAll('.cm-content .cm-highlightTab').length,
+            text: [...document.querySelectorAll('.cm-content .cm-line')]
+              .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+            dirty: active?.classList.contains('dirty') ?? false
+          }
+        })()`, true)
+        if (!firstWhitespaceTabRestored.ok || firstWhitespaceTabRestored.spaces !== 0
+          || firstWhitespaceTabRestored.tabs !== 0 || firstWhitespaceTabRestored.text !== whitespaceTextBefore
+          || firstWhitespaceTabRestored.dirty !== whitespaceDirtyBefore) {
+          throw new Error(`Cached first tab restored stale whitespace settings: ${JSON.stringify(firstWhitespaceTabRestored)}`)
+        }
+        await replaceEditorText('beta\nalpha\ngamma\n')
         const settingsA11yResult = await win.webContents.executeJavaScript(`(() => {
           const panel = document.querySelector('.settings-panel')
           if (!(panel instanceof HTMLElement)) return false
