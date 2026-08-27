@@ -51,9 +51,10 @@ const copyLocation = (location: NavigationLocation): NavigationLocation => ({
 const frozenLocation = (location: NavigationLocation): NavigationLocation =>
   Object.freeze(copyLocation(location))
 
-/** Compare the semantic document position; path/group are resolver metadata. */
+/** Compare a semantic position; path is fallback resolver metadata. */
 export const sameNavigationLocation = (left: NavigationLocation, right: NavigationLocation): boolean =>
   left.docId === right.docId &&
+  left.groupId === right.groupId &&
   left.line === right.line &&
   left.column === right.column
 

@@ -2362,7 +2362,8 @@ class App {
     if (!this.withNavigationSelectionUpdate(jump)) return false
     const target = this.currentLocation()
     this.navigationHistory.recordSuccessfulJump(source, target)
-    return !!source && !!target && (source.docId !== target.docId || source.line !== target.line || source.column !== target.column)
+    return !!source && !!target && (source.docId !== target.docId || source.groupId !== target.groupId ||
+      source.line !== target.line || source.column !== target.column)
   }
 
   /** Resolve a history location, reopening its file only when the document closed. */
