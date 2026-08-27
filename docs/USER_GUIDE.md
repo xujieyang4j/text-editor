@@ -357,6 +357,11 @@ The **View: Toggle Outline** command adds a filtered outline of functions, class
 headings for the active document to the sidebar. It is local to the open buffer and does not start
 a language server.
 
+The Git panel shows the current branch, configured upstream, and locally cached ahead/behind counts.
+Its expandable remote details are read only from local Git configuration, so refreshing the panel does
+not contact the network. User names, passwords, and tokens embedded in remote URLs are removed before
+the values reach the renderer.
+
 <a id="en-settings"></a>
 
 ## 9. Settings Reference
@@ -757,6 +762,9 @@ npm run dist:linux   # Linux：AppImage + .deb
 | 软换行 | `Alt+Z` | `wordWrap` |
 | 明 / 暗主题 | `Ctrl/Cmd+K` | `theme` |
 | 字号放大 / 缩小 / 复位 | `Ctrl/Cmd+=` / `-` / `0` | `fontSize` |
+
+Git 面板会显示当前分支、已配置的上游以及本地缓存的领先/落后提交数。可展开的远端详情仅从
+本地 Git 配置读取，刷新面板不会访问网络；远端 URL 中的用户名、密码或令牌会在进入渲染界面前移除。
 
 运行时切换的项（主题、换行、Minimap、字号）会立即写回设置文件，重启后保留。
 

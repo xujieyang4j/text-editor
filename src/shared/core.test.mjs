@@ -5,6 +5,7 @@ import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
 import { incrementalChanges, revertIncrementalChange } from '../../out-test/renderer/src/incrementalDiff.js'
 import { createFromFile, createUntitled, nextUntitledName } from '../../out-test/renderer/src/documents.js'
 import { JsonNumber, parseLosslessJson, stringifyLosslessJson } from '../../out-test/shared/losslessJson.js'
+import { parseGitRemoteLines, parseGitTracking, sanitizeGitRemoteUrl } from '../../out-test/shared/git.js'
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { history } from '@codemirror/commands'
 import {
@@ -40,6 +41,26 @@ const lossless = parseLosslessJson('{"id":7651669476812652838,"small":42,"decima
 assert.ok(lossless.id instanceof JsonNumber)
 assert.equal(lossless.id.raw, '7651669476812652838')
 assert.equal(stringifyLosslessJson(lossless, 2), '{\n  "id": 7651669476812652838,\n  "small": 42,\n  "decimal": 1.2300e+10\n}')
+assert.equal(sanitizeGitRemoteUrl('https://alice:secret@example.com/org/repo.git'), 'https://example.com/org/repo.git')
+assert.equal(sanitizeGitRemoteUrl('git@example.com:org/repo.git'), 'example.com:org/repo.git')
+assert.equal(sanitizeGitRemoteUrl('ssh://git@example.com/org/repo.git'), 'ssh://example.com/org/repo.git')
+assert.equal(sanitizeGitRemoteUrl('https://example.com/repo.git?token=secret#private'), 'https://example.com/repo.git')
+assert.equal(sanitizeGitRemoteUrl('alice:secret@example.com:org/repo.git'), 'example.com:org/repo.git')
+assert.equal(sanitizeGitRemoteUrl('foo::https://alice:secret@example.com/org/repo.git'), 'foo::https://example.com/org/repo.git')
+assert.equal(sanitizeGitRemoteUrl('ext::https://alice:secret@example.com/org/repo.git'), 'ext::[redacted]')
+assert.equal(sanitizeGitRemoteUrl('ext::sh -c token=secret'), 'ext::[redacted]')
+assert.deepEqual(parseGitRemoteLines([
+  'remote.upstream.url https://token@example.com/org/主仓库.git',
+  'remote.origin.url git@example.com:org/repo.git',
+  'remote.origin.pushurl ssh://git:secret@example.com/org/repo.git'
+].join('\n')), [
+  { name: 'origin', fetchUrl: 'example.com:org/repo.git', pushUrl: 'ssh://example.com/org/repo.git' },
+  { name: 'upstream', fetchUrl: 'https://example.com/org/主仓库.git' }
+])
+assert.deepEqual(parseGitTracking('origin/main\n', '3\t2\n', 'origin', 'refs/heads/main'), {
+  upstream: 'origin/main', remote: 'origin', remoteBranch: 'main', ahead: 3, behind: 2
+})
+assert.deepEqual(parseGitTracking('', 'bad values'), {})
 
 const runStateCommand = (box, command) => command({
   state: box.state,

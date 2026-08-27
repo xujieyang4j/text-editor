@@ -280,6 +280,72 @@ body.distraction-free .layout-root {
   text-transform: uppercase;
 }
 
+.git-tracking-summary {
+  min-width: 0;
+  padding: 0 10px 6px;
+  color: var(--text-dim);
+  font: 11px/1.4 var(--font-mono);
+}
+
+.git-tracking-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-remotes {
+  min-width: 0;
+  margin-top: 3px;
+}
+
+.git-remotes > summary {
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+}
+
+.git-remotes > summary:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.git-remote-list {
+  max-height: 96px;
+  margin: 3px 0 0;
+  padding: 0 0 0 16px;
+  overflow: auto;
+}
+
+.git-remote-item {
+  min-width: 0;
+  margin-top: 3px;
+}
+
+.git-remote-name {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-remote-url {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+}
+
+.git-remote-url-kind {
+  flex: none;
+}
+
+.git-remote-url-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .git-change-list {
   max-height: 45%;
   margin: 0;

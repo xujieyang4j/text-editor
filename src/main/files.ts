@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'url'
 import { detectLineEnding, encodeText as encodePreservedText } from '../shared/text.js'
 import { isBinaryBuffer, maxEditableBytes } from '../shared/filePolicy.js'
 import { extractWorkspaceSymbols } from '../shared/symbolIndex.js'
+import { parseGitRemoteLines, parseGitTracking } from '../shared/git.js'
 import {
   IPC,
   DEFAULT_SETTINGS,
@@ -1312,17 +1313,41 @@ async function installMarketplacePlugin(request: MarketplaceInstallRequest): Pro
 
 async function gitStatus(root: string): Promise<GitStatus> {
   try {
-    const [{ stdout: branch }, { stdout: porcelain }] = await Promise.all([
-      execFileAsync('git', ['-C', root, 'branch', '--show-current']),
-      execFileAsync('git', ['-C', root, 'status', '--porcelain=v1', '-z'])
+    const [{ stdout: branch }, { stdout: porcelain }, remoteResult] = await Promise.all([
+      execFileAsync('git', ['-C', root, 'branch', '--show-current'], { timeout: 10_000, maxBuffer: 64 * 1024 }),
+      execFileAsync('git', ['-C', root, 'status', '--porcelain=v1', '-z'], { timeout: 10_000, maxBuffer: 8 * 1024 * 1024 }),
+      execFileAsync('git', ['-C', root, 'config', '--get-regexp', '^remote[.].*[.](url|pushurl)$'], { timeout: 10_000, maxBuffer: 512 * 1024 }).catch(() => ({ stdout: '', stderr: '' }))
     ])
     const entries = porcelain.split('\0').filter(Boolean).flatMap((entry) => {
       if (entry.length < 4) return []
       return [{ indexStatus: entry[0], worktreeStatus: entry[1], path: entry.slice(3) }]
     })
-    return { available: true, branch: branch.trim() || '(detached)', entries }
-  } catch {
-    return { available: false, entries: [] }
+    const branchName = branch.trim()
+    let tracking = parseGitTracking('', '')
+    if (branchName) {
+      const [{ stdout: mergeRef }, { stdout: remoteName }, { stdout: upstreamName }] = await Promise.all([
+        execFileAsync('git', ['-C', root, 'config', '--get', `branch.${branchName}.merge`], { timeout: 10_000, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: '', stderr: '' })),
+        execFileAsync('git', ['-C', root, 'config', '--get', `branch.${branchName}.remote`], { timeout: 10_000, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: '', stderr: '' })),
+        execFileAsync('git', ['-C', root, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { timeout: 10_000, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: '', stderr: '' }))
+      ])
+      const upstream = upstreamName.trim()
+      const counts = upstream
+        ? await execFileAsync('git', ['-C', root, 'rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], { timeout: 10_000, maxBuffer: 64 * 1024 }).catch(() => ({ stdout: '', stderr: '' }))
+        : { stdout: '', stderr: '' }
+      tracking = parseGitTracking(upstream, counts.stdout, remoteName.trim(), mergeRef.trim())
+    }
+    return {
+      available: true,
+      branch: branchName || '(detached)',
+      entries,
+      tracking,
+      remotes: parseGitRemoteLines(remoteResult.stdout)
+    }
+  } catch (error) {
+    const gitError = error as { code?: unknown; stderr?: unknown; message?: unknown }
+    const detail = `${typeof gitError.stderr === 'string' ? gitError.stderr : ''} ${typeof gitError.message === 'string' ? gitError.message : ''}`
+    if (gitError.code === 128 && /not a git repository|不是一个 git 仓库|非 git 仓库/i.test(detail)) return { available: false, entries: [] }
+    throw error
   }
 }
 
@@ -2495,8 +2520,8 @@ export function registerFileHandlers(): void {
 
   ipcMain.handle(IPC.gitAction, async (event, request: GitActionRequest): Promise<GitStatus> => {
     assertTrustedSender(event)
+    if (!request || typeof request !== 'object' || typeof request.root !== 'string' || !['stage', 'unstage', 'discard', 'stage-hunk', 'discard-hunk', 'commit', 'checkout-branch', 'create-branch'].includes(request.action)) throw new Error('Invalid Git action.')
     assertGrantedRoot(event, request.root)
-    if (!request || !['stage', 'unstage', 'discard', 'stage-hunk', 'discard-hunk', 'commit', 'checkout-branch', 'create-branch'].includes(request.action)) throw new Error('Invalid Git action.')
     return gitAction(request)
   })
 

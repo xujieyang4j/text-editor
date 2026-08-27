@@ -265,10 +265,30 @@ export interface GitStatusEntry {
   worktreeStatus: string
 }
 
+export interface GitRemote {
+  name: string
+  /** Credential-free display value; never contains URL userinfo. */
+  fetchUrl?: string
+  /** Credential-free push URL when it differs from the fetch URL. */
+  pushUrl?: string
+}
+
+export interface GitTrackingStatus {
+  upstream?: string
+  remote?: string
+  remoteBranch?: string
+  /** Present only when Git successfully compared HEAD with its upstream. */
+  ahead?: number
+  /** Present only when Git successfully compared HEAD with its upstream. */
+  behind?: number
+}
+
 export interface GitStatus {
   available: boolean
   branch?: string
   entries: GitStatusEntry[]
+  tracking?: GitTrackingStatus
+  remotes?: GitRemote[]
 }
 
 export interface GitDiff {

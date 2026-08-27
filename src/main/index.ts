@@ -309,6 +309,15 @@ function createWindow(sessionId = newSessionId()): void {
             && active instanceof HTMLElement && !sidebar.contains(active)
         })()`, true)
         if (!sidebarFocusResult) throw new Error('Sidebar hid without moving focus out of its inert subtree')
+        const gitTrackingResult = await win.webContents.executeJavaScript(`(async () => {
+          const status = await window.editor.gitStatus(${JSON.stringify(smokeRoot)})
+          const credentialPattern = new RegExp('https?:\\/\\/[^/]*@', 'i')
+          return status.available
+            && Array.isArray(status.remotes)
+            && status.tracking !== undefined
+            && status.remotes.every((remote) => !credentialPattern.test(remote.fetchUrl ?? '') && !credentialPattern.test(remote.pushUrl ?? ''))
+        })()`, true)
+        if (!gitTrackingResult) throw new Error('Git tracking status was unavailable or exposed URL credentials')
         const copiedPath = await win.webContents.executeJavaScript(`(async () => {
           try {
             await window.editor.copyPath(${JSON.stringify(path.join(process.cwd(), 'package.json'))})

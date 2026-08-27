@@ -21,6 +21,8 @@ export class GitPanel {
   private readonly diff: HTMLPreElement
   private readonly hunkPicker: HTMLSelectElement
   private readonly heading: HTMLDivElement
+  private readonly trackingSummary: HTMLDivElement
+  private readonly trackingStatus: HTMLDivElement
   private readonly actionButtons = new Map<string, HTMLButtonElement>()
   private selectedHunk: GitHunk | null = null
   private activePath: string | null = null
@@ -28,6 +30,7 @@ export class GitPanel {
   private previouslyFocused: HTMLElement | null = null
   private selected = new Set<string>()
   private locale: UiLocale = 'zh-CN'
+  private status: GitStatus | null = null
 
   constructor(private readonly callbacks: GitPanelCallbacks) {
     this.root = document.createElement('div')
@@ -41,6 +44,15 @@ export class GitPanel {
     this.heading.setAttribute('aria-level', '2')
     this.root.setAttribute('aria-labelledby', this.heading.id)
     this.heading.textContent = translate(this.locale, 'gitChanges')
+    this.trackingSummary = document.createElement('div')
+    this.trackingSummary.className = 'git-tracking-summary'
+    this.trackingSummary.hidden = true
+    this.trackingStatus = document.createElement('div')
+    this.trackingStatus.className = 'git-tracking-status'
+    this.trackingStatus.setAttribute('role', 'status')
+    this.trackingStatus.setAttribute('aria-live', 'polite')
+    this.trackingStatus.setAttribute('aria-atomic', 'true')
+    this.trackingSummary.appendChild(this.trackingStatus)
     this.list = document.createElement('ul')
     this.list.className = 'git-change-list'
     this.list.setAttribute('role', 'listbox')
@@ -87,7 +99,7 @@ export class GitPanel {
       event.stopPropagation()
       this.toggle(false)
     })
-    this.root.append(this.heading, actions, this.list, this.hunkPicker, this.diff)
+    this.root.append(this.heading, this.trackingSummary, actions, this.list, this.hunkPicker, this.diff)
   }
 
   get element(): HTMLElement { return this.root }
@@ -109,7 +121,7 @@ export class GitPanel {
 
   setLocale(locale: UiLocale): void {
     this.locale = locale
-    this.heading.textContent = translate(locale, 'gitChanges')
+    this.renderRepositorySummary()
     this.list.setAttribute('aria-label', locale === 'zh-CN' ? 'Git 更改文件' : 'Git changed files')
     this.diff.setAttribute('aria-label', locale === 'zh-CN' ? 'Git 差异预览' : 'Git diff preview')
     this.hunkPicker.setAttribute('aria-label', locale === 'zh-CN' ? '选择差异区块' : 'Select diff hunk')
@@ -123,6 +135,7 @@ export class GitPanel {
   }
 
   setStatus(status: GitStatus): void {
+    this.status = status
     this.list.replaceChildren()
     this.selected.clear()
     this.diff.textContent = ''
@@ -130,11 +143,8 @@ export class GitPanel {
     this.selectedHunk = null
     this.hunkPicker.replaceChildren()
     this.hunkPicker.disabled = true
-    if (!status.available) {
-      this.heading.textContent = this.locale === 'zh-CN' ? 'Git 更改 — 非 Git 仓库' : 'Git Changes — no repository'
-      return
-    }
-    this.heading.textContent = `${translate(this.locale, 'gitChanges')} — ${status.branch ?? ''}`
+    this.renderRepositorySummary()
+    if (!status.available) return
     status.entries.forEach((entry, index) => {
       const item = document.createElement('li')
       item.className = 'git-change-item'
@@ -163,6 +173,92 @@ export class GitPanel {
       item.addEventListener('dblclick', () => { void this.showDiff(entry.path) })
       this.list.appendChild(item)
     })
+  }
+
+  private renderRepositorySummary(): void {
+    const status = this.status
+    if (!status) {
+      this.heading.textContent = translate(this.locale, 'gitChanges')
+      this.trackingStatus.textContent = ''
+      this.trackingStatus.removeAttribute('aria-label')
+      this.trackingStatus.removeAttribute('title')
+      this.trackingSummary.replaceChildren(this.trackingStatus)
+      this.trackingSummary.hidden = true
+      return
+    }
+    if (!status.available) {
+      this.heading.textContent = this.locale === 'zh-CN' ? 'Git 更改 — 非 Git 仓库' : 'Git Changes — no repository'
+      this.trackingStatus.textContent = ''
+      this.trackingStatus.removeAttribute('aria-label')
+      this.trackingStatus.removeAttribute('title')
+      this.trackingSummary.replaceChildren(this.trackingStatus)
+      this.trackingSummary.hidden = true
+      return
+    }
+
+    this.heading.textContent = `${translate(this.locale, 'gitChanges')} — ${status.branch ?? ''}`
+    const upstream = status.tracking?.upstream?.trim() || ''
+    const ahead = this.trackingCount(status.tracking?.ahead)
+    const behind = this.trackingCount(status.tracking?.behind)
+    const comparable = ahead !== null && behind !== null
+    const visualStatus = !upstream
+      ? (this.locale === 'zh-CN' ? '上游：未设置' : 'Upstream: not set')
+      : comparable
+        ? (this.locale === 'zh-CN' ? `上游：${upstream} · ↑${ahead} ↓${behind}` : `Upstream: ${upstream} · ↑${ahead} ↓${behind}`)
+        : (this.locale === 'zh-CN' ? `上游：${upstream} · 比较状态未知` : `Upstream: ${upstream} · comparison unavailable`)
+    const accessibleStatus = !upstream
+      ? (this.locale === 'zh-CN' ? '未设置上游' : 'No upstream configured')
+      : comparable
+        ? (this.locale === 'zh-CN' ? `上游 ${upstream}，领先 ${ahead}，落后 ${behind}` : `Upstream ${upstream}, ${ahead} ahead, ${behind} behind`)
+        : (this.locale === 'zh-CN' ? `上游 ${upstream}，比较状态未知` : `Upstream ${upstream}, comparison unavailable`)
+    const remotesWereOpen = this.trackingSummary.querySelector<HTMLDetailsElement>('.git-remotes')?.open ?? false
+    this.trackingStatus.textContent = visualStatus
+    this.trackingStatus.setAttribute('aria-label', accessibleStatus)
+    this.trackingStatus.title = visualStatus
+    this.trackingSummary.replaceChildren(this.trackingStatus)
+
+    const remotes = status.remotes ?? []
+    if (remotes.length > 0) {
+      const details = document.createElement('details')
+      details.className = 'git-remotes'
+      details.open = remotesWereOpen
+      const summary = document.createElement('summary')
+      summary.textContent = this.locale === 'zh-CN' ? `远程仓库（${remotes.length}）` : `Remotes (${remotes.length})`
+      const list = document.createElement('ul')
+      list.className = 'git-remote-list'
+      for (const remote of remotes) {
+        const item = document.createElement('li')
+        item.className = 'git-remote-item'
+        const name = document.createElement('strong')
+        name.className = 'git-remote-name'
+        name.textContent = remote.name
+        item.appendChild(name)
+        if (remote.fetchUrl) item.appendChild(this.createRemoteUrl(this.locale === 'zh-CN' ? '拉取' : 'Fetch', remote.fetchUrl))
+        if (remote.pushUrl) item.appendChild(this.createRemoteUrl(this.locale === 'zh-CN' ? '推送' : 'Push', remote.pushUrl))
+        list.appendChild(item)
+      }
+      details.append(summary, list)
+      this.trackingSummary.appendChild(details)
+    }
+    this.trackingSummary.hidden = false
+  }
+
+  private createRemoteUrl(label: string, url: string): HTMLElement {
+    const row = document.createElement('div')
+    row.className = 'git-remote-url'
+    const kind = document.createElement('span')
+    kind.className = 'git-remote-url-kind'
+    kind.textContent = `${label}:`
+    const value = document.createElement('span')
+    value.className = 'git-remote-url-value'
+    value.textContent = url
+    value.title = url
+    row.append(kind, value)
+    return row
+  }
+
+  private trackingCount(value: number | undefined): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : null
   }
 
   private async showDiff(relativePath: string): Promise<void> {
