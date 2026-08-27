@@ -173,6 +173,9 @@ class App {
   private statusEol = document.getElementById('status-eol')!
   private statusEncoding = document.getElementById('status-encoding')!
   private sidebar = document.getElementById('sidebar')!
+  private a11yStatus = document.getElementById('a11y-status')!
+  private a11yAlert = document.getElementById('a11y-alert')!
+  private a11yAnnouncementToken = 0
   private primaryHost = document.getElementById('editor-host')!
   private primaryEditorArea = document.getElementById('editor-area')!
   private layoutRoot = document.getElementById('layout-root')!
@@ -236,7 +239,7 @@ class App {
         void this.reloadWorkspaceTree()
         this.renderTabs()
       },
-      onResults: (query, matches) => this.showFindResults(query, matches),
+      onResults: (query, matches, focusResults) => this.showFindResults(query, matches, focusResults),
       onReplaceComplete: (token, files, replacements) => {
         this.replaceUndoToken = token ?? null
         this.statusSelection.textContent = token
@@ -357,7 +360,7 @@ class App {
     this.preview = new MarkdownPreview(this.primaryEditorArea)
     this.jsonView = new JsonView({
       onReplace: (next) => this.editor.replaceContent(next),
-      notify: (message) => this.statusSelection.textContent = message
+      notify: (message) => this.notify(message)
     })
     this.primaryEditorArea.appendChild(this.jsonView.root)
     this.buildPanel = new BuildPanel(
@@ -795,7 +798,7 @@ class App {
         break
       case 'toggle-outline':
         this.settings.showOutline = !this.settings.showOutline
-        if (this.settings.showOutline && !this.settings.distractionFree) this.sidebar.classList.remove('hidden')
+        if (this.settings.showOutline && !this.settings.distractionFree) this.setSidebarVisible(true)
         this.applyUserSettings(this.settings)
         break
       case 'fold-current':
@@ -1770,6 +1773,7 @@ class App {
     if (this.jsonView.visible) this.jsonView.hide()
     else this.jsonView.show(this.editor.getContent())
     this.jsonViewBtn.classList.toggle('active', this.jsonView.visible)
+    this.jsonViewBtn.setAttribute('aria-pressed', String(this.jsonView.visible))
   }
 
   /** Match Sublime's practical indentation detection without overriding user defaults on sparse files. */
@@ -1946,7 +1950,9 @@ class App {
       else this.preview.hide()
     }
     this.previewBtn.classList.toggle('active', this.preview.isVisible && md)
+    this.previewBtn.setAttribute('aria-pressed', String(this.preview.isVisible && md))
     this.jsonViewBtn.classList.toggle('active', this.jsonView.visible && json)
+    this.jsonViewBtn.setAttribute('aria-pressed', String(this.jsonView.visible && json))
     if (doc?.externalChange) this.showExternalConflict(doc)
     else this.hideExternalConflict()
   }
@@ -2004,7 +2010,7 @@ class App {
     if (!this.isMarkdownDoc(doc)) {
       // Only meaningful for markdown; give a hint rather than showing blank.
       if (!this.preview.isVisible) {
-        window.alert(
+        this.showError(
           'Markdown preview is only available for Markdown files.\n' +
             'Save the file with a .md extension, or set the syntax to Markdown ' +
             '(click the language in the status bar).'
@@ -2014,6 +2020,7 @@ class App {
     }
     const visible = this.preview.toggle(doc.content)
     this.previewBtn.classList.toggle('active', visible)
+    this.previewBtn.setAttribute('aria-pressed', String(visible))
   }
 
   /**
@@ -2148,10 +2155,10 @@ class App {
     this.persistSettings()
   }
 
-  private showFindResults(query: string, matches: WorkspaceMatch[]): void {
+  private showFindResults(query: string, matches: WorkspaceMatch[], focus = true): void {
     this.focusGroup(0)
     this.findResults.setResults(query, matches)
-    this.findResults.show()
+    this.findResults.show(focus)
     this.host.classList.add('hidden')
   }
 
@@ -2312,7 +2319,7 @@ class App {
     await this.loadProject(root)
     this.workspaceName.textContent = baseName(root).toUpperCase()
     await this.renderProjectRoots()
-    if (!this.settings.distractionFree) this.sidebar.classList.remove('hidden')
+    if (!this.settings.distractionFree) this.setSidebarVisible(true)
     void window.editor.watchWorkspace(root)
     void window.editor.addRecentProject(root)
     this.projectSymbols = []
@@ -2422,7 +2429,7 @@ class App {
         await this.renderProjectRoots()
       } else {
         this.workspaceName.textContent = this.t('noFolder')
-        this.sidebar.classList.add('hidden')
+        this.setSidebarVisible(false)
       }
       this.scheduleSessionSave()
       this.statusSelection.textContent = this.settings.locale === 'zh-CN'
@@ -2578,7 +2585,7 @@ class App {
       await this.loadProject(folder.root)
       this.workspaceName.textContent = baseName(folder.root).toUpperCase()
       await this.renderProjectRoots()
-      if (!this.settings.distractionFree) this.sidebar.classList.remove('hidden')
+      if (!this.settings.distractionFree) this.setSidebarVisible(true)
       void window.editor.watchWorkspace(folder.root)
       void window.editor.addRecentProject(folder.root)
       this.projectSymbols = []
@@ -3238,16 +3245,29 @@ class App {
 
   /** Show or hide the sidebar. */
   private toggleSidebar(): void {
-    this.sidebar.classList.toggle('hidden')
+    this.setSidebarVisible(this.sidebar.classList.contains('hidden'))
+  }
+
+  private setSidebarVisible(visible: boolean): void {
+    if (!visible && this.sidebar.contains(document.activeElement)) {
+      const activeHost = this.groups[this.activeGroup]?.host
+      const activeEditor = this.groups[this.activeGroup]?.editor
+      if (this.findResults.isVisible) this.findResults.focus()
+      else if (activeEditor && activeHost && !activeHost.classList.contains('hidden')) activeEditor.focus()
+      else this.statusLanguage.focus()
+    }
+    this.sidebar.classList.toggle('hidden', !visible)
+    this.sidebar.setAttribute('aria-hidden', String(!visible))
+    this.sidebar.inert = !visible
   }
 
   private applyDistractionFreeMode(enabled: boolean): void {
     document.body.classList.toggle('distraction-free', enabled)
     if (enabled) {
       this.sidebarVisibleBeforeDistractionFree = !this.sidebar.classList.contains('hidden')
-      this.sidebar.classList.add('hidden')
+      this.setSidebarVisible(false)
     } else if (this.sidebarVisibleBeforeDistractionFree) {
-      this.sidebar.classList.remove('hidden')
+      this.setSidebarVisible(true)
     }
     for (const group of this.groups) group.tabBar.classList.toggle('hidden', enabled)
   }
@@ -3870,6 +3890,9 @@ class App {
     this.t = makeTranslator(locale)
     document.documentElement.lang = locale
     document.title = this.t('appTitle')
+    this.sidebar.setAttribute('aria-label', locale === 'zh-CN' ? '工作区' : 'Workspace')
+    document.getElementById('main')?.setAttribute('aria-label', locale === 'zh-CN' ? '编辑器' : 'Editor')
+    document.getElementById('status-bar')?.setAttribute('aria-label', locale === 'zh-CN' ? '文档状态' : 'Document status')
     this.tree?.setLocale(locale)
     if (!this.folder) this.workspaceName.textContent = this.t('noFolder')
     this.statusLanguage.textContent = this.active?.language === 'Plain Text' || !this.active
@@ -4306,6 +4329,9 @@ class App {
   private updateStatus(): void {
     const doc = this.active
     this.statusLanguage.textContent = !doc || doc.language === 'Plain Text' ? this.t('plainText') : doc.language
+    this.statusLanguage.setAttribute('aria-label', this.settings.locale === 'zh-CN'
+      ? `选择语法，当前为${this.statusLanguage.textContent}`
+      : `Select syntax, currently ${this.statusLanguage.textContent}`)
     this.statusEol.textContent = doc?.eol ?? 'LF'
     this.statusEncoding.textContent = doc?.encoding === 'utf8bom' ? 'UTF-8 BOM' : doc?.encoding.toUpperCase() ?? 'UTF-8'
     this.updatePositionStatus(this.editor.view.state)
@@ -4331,7 +4357,23 @@ class App {
   private showError(message: string, error?: unknown): void {
     console.error(message, error)
     const detail = error instanceof Error && error.message ? `\n\n${error.message}` : ''
+    this.announce(`${message}${detail}`, true)
     window.alert(`${message}${detail}`)
+  }
+
+  /** Put an infrequent result in an independent screen-reader live region. */
+  private announce(message: string, assertive = false): void {
+    const token = ++this.a11yAnnouncementToken
+    const region = assertive ? this.a11yAlert : this.a11yStatus
+    region.textContent = ''
+    window.setTimeout(() => {
+      if (token === this.a11yAnnouncementToken) region.textContent = message
+    }, 0)
+  }
+
+  private notify(message: string): void {
+    this.statusSelection.textContent = message
+    this.announce(message)
   }
 }
 

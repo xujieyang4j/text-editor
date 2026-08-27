@@ -7,6 +7,7 @@
   --text-dim: #8a8a8a;
   --accent: #0e639c;
   --accent-text: #ffffff;
+  --focus-ring: #f0f6fc;
   --dirty: #e5c07b;
   --tab-active-bg: #1e1e1e;
   --tab-inactive-bg: #2d2d2d;
@@ -23,6 +24,8 @@
   --text: #24292f;
   --text-dim: #57606a;
   --accent: #0969da;
+  --accent-text: #ffffff;
+  --focus-ring: #0550ae;
   --dirty: #9a6700;
   --tab-active-bg: #ffffff;
   --tab-inactive-bg: #eaeef2;
@@ -36,6 +39,8 @@
   --text: #93a1a1;
   --text-dim: #839496;
   --accent: #268bd2;
+  --accent-text: #002b36;
+  --focus-ring: #b58900;
   --dirty: #b58900;
   --tab-active-bg: #002b36;
   --tab-inactive-bg: #073642;
@@ -49,6 +54,8 @@
   --text: #f8f8f2;
   --text-dim: #b0b3c5;
   --accent: #bd93f9;
+  --accent-text: #1d1e26;
+  --focus-ring: #ffb86c;
   --dirty: #f1fa8c;
   --tab-active-bg: #282a36;
   --tab-inactive-bg: #343746;
@@ -56,6 +63,24 @@
 
 * {
   box-sizing: border-box;
+}
+
+.visually-hidden {
+  position: fixed !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+:where(button, input, select, textarea, a[href], [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--accent);
 }
 
 html,
@@ -130,6 +155,7 @@ body.distraction-free .layout-root {
 }
 
 #sidebar.hidden {
+  visibility: hidden;
   width: 0;
   min-width: 0;
   border-right: none;
@@ -848,7 +874,7 @@ body.distraction-free .layout-root {
 
 .markdown-body a {
   color: #4ea1ff;
-  text-decoration: none;
+  text-decoration: underline;
 }
 
 .markdown-body a:hover {
@@ -922,6 +948,14 @@ body.distraction-free .layout-root {
 .status-item {
   padding: 0 8px;
   white-space: nowrap;
+}
+
+.status-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
 }
 
 .status-item.clickable {
@@ -1359,4 +1393,36 @@ body.distraction-free .layout-root {
 .terminal-panel .panel-button:disabled {
   cursor: default;
   opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .editor-fab:hover { transform: none; }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --bg: Canvas;
+    --bg-elevated: Canvas;
+    --bg-bar: Canvas;
+    --border: CanvasText;
+    --text: CanvasText;
+    --text-dim: CanvasText;
+    --accent: Highlight;
+    --accent-text: HighlightText;
+    --focus-ring: Highlight;
+    --dirty: MarkText;
+  }
+
+  .tab.active, .palette-item.active, .outline-item.active .outline-symbol,
+  .find-results-match.active, .workspace-search-result:focus, .build-problem:focus,
+  .git-change-item.selected {
+    border: 1px solid Highlight;
+  }
 }

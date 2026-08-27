@@ -45,6 +45,8 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **Font zoom** (`Ctrl/Cmd+=` / `-` / `0`), dark/light theme, word-wrap, collapsible sidebar
 - **Status bar**: line/column, selection length, language, encoding, line-ending
 - **Native application menu** with standard keyboard accelerators on every platform
+- **Accessibility foundation** — visible keyboard focus, semantic dialogs and result regions,
+  screen-reader status announcements, focus restoration, reduced-motion and forced-color support
 - **Secure architecture**: `contextIsolation` on, `nodeIntegration` off; the renderer reaches
   the filesystem only through a typed `contextBridge` API
 

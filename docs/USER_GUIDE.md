@@ -91,7 +91,9 @@ npm run dist:linux   # Linux: AppImage + .deb
 - **Tab bar** — one tab per open document. A `●` marks unsaved changes; `×` closes the tab; pinned tabs receive an accent marker.
 - **Editor** — the CodeMirror text area, with an optional minimap on the right.
 - **Status bar** — cursor position, selection length, and a **clickable language** field
-  (click it to change the syntax).
+  (click it or focus it with Tab and press Enter/Space to change the syntax).
+- **Keyboard and assistive technology** — interactive panels expose named regions and keyboard-operable
+  results, restore focus when closed, and honour reduced-motion and forced-color system settings.
 
 <a id="en-files"></a>
 
@@ -551,7 +553,10 @@ npm run dist:linux   # Linux：AppImage + .deb
 - **侧边栏** —— 工作区文件树，默认收起，按 `Ctrl/Cmd+B` 显隐。
 - **标签栏** —— 每个打开的文档一个标签；`●` 表示未保存，`×` 关闭；固定标签带强调色。
 - **编辑区** —— CodeMirror 文本区，右侧可选 Minimap。
-- **状态栏** —— 光标位置、选中长度，以及**可点击的语言字段**（点它可改语法）。
+- **状态栏** —— 光标位置、选中长度，以及**可操作的语言按钮**（点击，或用 Tab 聚焦后按
+  Enter/空格可修改语法）。
+- **键盘与辅助技术** —— 面板和结果区域具有明确语义，结果可用键盘操作；关闭面板后恢复焦点，
+  并遵循系统的减少动效和强制色设置。
 
 <a id="zh-files"></a>
 

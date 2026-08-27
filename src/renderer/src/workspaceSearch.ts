@@ -11,7 +11,7 @@ export interface WorkspaceSearchCallbacks {
   openMatch: (match: WorkspaceMatch) => void
   notify: (message: string, error?: unknown) => void
   afterReplace: () => void
-  onResults: (query: string, matches: WorkspaceMatch[]) => void
+  onResults: (query: string, matches: WorkspaceMatch[], focusResults?: boolean) => void
   onReplaceComplete: (undoToken: string | undefined, files: number, replacements: number) => void
   onHistory: (search: string, replacement?: string) => void
 }
@@ -35,6 +35,7 @@ export class WorkspaceSearchPanel {
   private readonly searchHistory: HTMLDataListElement
   private readonly replaceHistory: HTMLDataListElement
   private readonly title: HTMLElement
+  private readonly close: HTMLButtonElement
   private readonly findButton: HTMLButtonElement
   private readonly replaceButton: HTMLButtonElement
   private readonly caseLabel: HTMLLabelElement
@@ -44,21 +45,30 @@ export class WorkspaceSearchPanel {
   private replaceVisible = false
   private searchToken = 0
   private previewReady = false
+  private previouslyFocused: HTMLElement | null = null
 
   constructor(private readonly callbacks: WorkspaceSearchCallbacks) {
     this.root = document.createElement('div')
     this.root.className = 'workspace-search hidden'
+    this.root.setAttribute('role', 'dialog')
+    this.root.setAttribute('aria-modal', 'false')
+    this.root.setAttribute('aria-hidden', 'true')
 
     const header = document.createElement('div')
     header.className = 'workspace-search-header'
     this.title = document.createElement('strong')
+    this.title.id = 'lumen-workspace-search-title'
+    this.title.setAttribute('role', 'heading')
+    this.title.setAttribute('aria-level', '2')
     this.title.textContent = translate(this.locale, 'findInFiles')
-    const close = document.createElement('button')
-    close.className = 'panel-button'
-    close.textContent = '×'
-    close.title = 'Close'
-    close.addEventListener('click', () => this.hide())
-    header.append(this.title, close)
+    this.root.setAttribute('aria-labelledby', this.title.id)
+    this.close = document.createElement('button')
+    this.close.type = 'button'
+    this.close.className = 'panel-button'
+    this.close.textContent = '×'
+    this.setCloseLabel()
+    this.close.addEventListener('click', () => this.hide())
+    header.append(this.title, this.close)
 
     this.query = this.input('Find')
     this.replacement = this.input('Replace')
@@ -89,6 +99,7 @@ export class WorkspaceSearchPanel {
 
     this.summary = document.createElement('div')
     this.summary.className = 'workspace-search-summary'
+    this.summary.setAttribute('role', 'status')
     this.results = document.createElement('ul')
     this.results.className = 'workspace-search-results'
 
@@ -100,12 +111,13 @@ export class WorkspaceSearchPanel {
       if (event.key === 'Enter') {
         event.preventDefault()
         void this.search()
-      } else if (event.key === 'Escape') {
-        this.hide()
       }
     })
     this.root.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') this.hide()
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      this.hide()
     })
   }
 
@@ -118,7 +130,12 @@ export class WorkspaceSearchPanel {
     this.previewReady = false
     this.setHistory(this.searchHistory, this.callbacks.getSearchHistory())
     this.setHistory(this.replaceHistory, this.callbacks.getReplaceHistory())
+    if (this.root.classList.contains('hidden')) {
+      const active = document.activeElement
+      this.previouslyFocused = active instanceof HTMLElement && !this.root.contains(active) ? active : null
+    }
     this.root.classList.remove('hidden')
+    this.root.setAttribute('aria-hidden', 'false')
     this.root.classList.toggle('replace-mode', withReplace)
     this.replacement.hidden = !withReplace
     this.query.focus()
@@ -126,12 +143,18 @@ export class WorkspaceSearchPanel {
   }
 
   hide(): void {
+    const shouldRestoreFocus = this.root.contains(document.activeElement)
+    const previouslyFocused = this.previouslyFocused
+    this.previouslyFocused = null
     this.root.classList.add('hidden')
+    this.root.setAttribute('aria-hidden', 'true')
+    if (shouldRestoreFocus) this.restoreFocus(previouslyFocused)
   }
 
   setLocale(locale: UiLocale): void {
     this.locale = locale
     this.title.textContent = translate(locale, 'findInFiles')
+    this.setCloseLabel()
     this.query.placeholder = translate(locale, 'findPlaceholder')
     this.replacement.placeholder = translate(locale, 'replacePlaceholder')
     this.include.placeholder = translate(locale, 'includePlaceholder')
@@ -161,10 +184,27 @@ export class WorkspaceSearchPanel {
 
   private button(label: string, onClick: () => void): HTMLButtonElement {
     const button = document.createElement('button')
+    button.type = 'button'
     button.className = 'panel-button'
     button.textContent = label
     button.addEventListener('click', onClick)
     return button
+  }
+
+  private setCloseLabel(): void {
+    this.close.title = this.locale === 'zh-CN' ? '关闭文件搜索' : 'Close file search'
+    this.close.setAttribute('aria-label', this.close.title)
+  }
+
+  private restoreFocus(preferred: HTMLElement | null): void {
+    const candidates = [
+      preferred,
+      ...document.querySelectorAll<HTMLElement>('.cm-content, [contenteditable="true"], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')
+    ]
+    const target = candidates.find((candidate): candidate is HTMLElement =>
+      candidate instanceof HTMLElement && candidate.isConnected && !this.root.contains(candidate) &&
+      !candidate.matches(':disabled') && !candidate.closest('.hidden, [hidden], [aria-hidden="true"], [inert]'))
+    target?.focus()
   }
 
   private setHistory(list: HTMLDataListElement, values: string[]): void {
@@ -223,6 +263,8 @@ export class WorkspaceSearchPanel {
     for (const match of matches) {
       const item = document.createElement('li')
       item.className = 'workspace-search-result'
+      item.tabIndex = 0
+      item.setAttribute('role', 'button')
       const location = document.createElement('div')
       location.className = 'workspace-search-location'
       location.textContent = `${baseName(match.path)}:${match.line}:${match.column}`
@@ -230,9 +272,16 @@ export class WorkspaceSearchPanel {
       const source = document.createElement('code')
       source.textContent = match.lineText
       item.append(location, source)
-      item.addEventListener('click', () => {
+      const openMatch = (): void => {
         this.callbacks.openMatch(match)
         this.hide()
+      }
+      item.addEventListener('click', openMatch)
+      item.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        event.stopPropagation()
+        openMatch()
       })
       this.results.appendChild(item)
     }
@@ -254,7 +303,7 @@ export class WorkspaceSearchPanel {
         const preview = await window.editor.previewWorkspaceReplace(request)
         this.summary.textContent = `Preview: ${preview.replacements} replacement${preview.replacements === 1 ? '' : 's'} in ${preview.files} file${preview.files === 1 ? '' : 's'}. Click Replace All again to apply.`
         this.renderResults(preview.matches)
-        this.callbacks.onResults(`Replace Preview: ${search.query}`, preview.matches)
+        this.callbacks.onResults(`Replace Preview: ${search.query}`, preview.matches, false)
         this.previewReady = true
         return
       }

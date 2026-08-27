@@ -15,6 +15,7 @@ export interface GitPanelCallbacks {
 
 /** Read-only Git changes sidebar with per-file diff preview. */
 export class GitPanel {
+  private static nextPanelId = 0
   private readonly root: HTMLDivElement
   private readonly list: HTMLUListElement
   private readonly diff: HTMLPreElement
@@ -24,21 +25,35 @@ export class GitPanel {
   private selectedHunk: GitHunk | null = null
   private activePath: string | null = null
   private visible = false
+  private previouslyFocused: HTMLElement | null = null
   private selected = new Set<string>()
   private locale: UiLocale = 'zh-CN'
 
   constructor(private readonly callbacks: GitPanelCallbacks) {
     this.root = document.createElement('div')
     this.root.className = 'git-panel hidden'
+    this.root.setAttribute('role', 'region')
+    this.root.setAttribute('aria-hidden', 'true')
     this.heading = document.createElement('div')
     this.heading.className = 'git-panel-heading'
+    this.heading.id = `git-panel-title-${++GitPanel.nextPanelId}`
+    this.heading.setAttribute('role', 'heading')
+    this.heading.setAttribute('aria-level', '2')
+    this.root.setAttribute('aria-labelledby', this.heading.id)
     this.heading.textContent = translate(this.locale, 'gitChanges')
     this.list = document.createElement('ul')
     this.list.className = 'git-change-list'
+    this.list.setAttribute('role', 'listbox')
+    this.list.setAttribute('aria-label', 'Git 更改文件')
+    this.list.setAttribute('aria-multiselectable', 'true')
+    this.list.addEventListener('keydown', (event) => this.navigateList(event))
     this.diff = document.createElement('pre')
     this.diff.className = 'git-diff-preview'
+    this.diff.tabIndex = 0
+    this.diff.setAttribute('aria-label', 'Git 差异预览')
     this.hunkPicker = document.createElement('select')
     this.hunkPicker.className = 'git-hunk-picker'
+    this.hunkPicker.setAttribute('aria-label', '选择差异区块')
     this.hunkPicker.disabled = true
     this.hunkPicker.addEventListener('change', () => {
       const index = Number(this.hunkPicker.value)
@@ -49,6 +64,7 @@ export class GitPanel {
     actions.className = 'git-actions'
     const add = (key: string, label: string, action: () => void): void => {
       const button = document.createElement('button')
+      button.type = 'button'
       button.className = 'panel-button'
       button.textContent = label
       button.addEventListener('click', action)
@@ -65,18 +81,38 @@ export class GitPanel {
     add('commit', translate(this.locale, 'commit'), this.callbacks.onCommit)
     add('switch', 'Switch', () => this.callbacks.onBranch(false))
     add('branch', 'New Branch', () => this.callbacks.onBranch(true))
+    this.root.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      this.toggle(false)
+    })
     this.root.append(this.heading, actions, this.list, this.hunkPicker, this.diff)
   }
 
   get element(): HTMLElement { return this.root }
   toggle(show = !this.visible): void {
+    if (show === this.visible) return
+    const focusWasWithinPanel = this.root.contains(document.activeElement)
+    if (show) {
+      this.previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    }
     this.visible = show
     this.root.classList.toggle('hidden', !show)
+    this.root.setAttribute('aria-hidden', String(!show))
+    if (!show) {
+      const focusTarget = this.previouslyFocused
+      this.previouslyFocused = null
+      if (focusWasWithinPanel) this.restoreFocus(focusTarget)
+    }
   }
 
   setLocale(locale: UiLocale): void {
     this.locale = locale
     this.heading.textContent = translate(locale, 'gitChanges')
+    this.list.setAttribute('aria-label', locale === 'zh-CN' ? 'Git 更改文件' : 'Git changed files')
+    this.diff.setAttribute('aria-label', locale === 'zh-CN' ? 'Git 差异预览' : 'Git diff preview')
+    this.hunkPicker.setAttribute('aria-label', locale === 'zh-CN' ? '选择差异区块' : 'Select diff hunk')
     const labels: Record<string, string> = {
       stage: translate(locale, 'stage'), unstage: translate(locale, 'unstage'), discard: translate(locale, 'discard'),
       stageHunk: `${translate(locale, 'stage')} Hunk`, discardHunk: `${translate(locale, 'discard')} Hunk`,
@@ -99,21 +135,34 @@ export class GitPanel {
       return
     }
     this.heading.textContent = `${translate(this.locale, 'gitChanges')} — ${status.branch ?? ''}`
-    for (const entry of status.entries) {
+    status.entries.forEach((entry, index) => {
       const item = document.createElement('li')
       item.className = 'git-change-item'
+      item.tabIndex = index === 0 ? 0 : -1
+      item.setAttribute('role', 'option')
+      item.setAttribute('aria-selected', 'false')
       item.textContent = `${entry.indexStatus}${entry.worktreeStatus}  ${entry.path}`
-      item.addEventListener('click', (event) => {
+      const activate = (withModifier: boolean): void => {
         this.activePath = entry.path
-        if (event.ctrlKey || event.metaKey) {
+        if (withModifier) {
           if (this.selected.has(entry.path)) this.selected.delete(entry.path)
           else this.selected.add(entry.path)
           item.classList.toggle('selected', this.selected.has(entry.path))
+          item.setAttribute('aria-selected', String(this.selected.has(entry.path)))
         } else this.callbacks.onOpenFile(entry.path)
+      }
+      item.addEventListener('click', (event) => {
+        activate(event.ctrlKey || event.metaKey)
+      })
+      item.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        event.stopPropagation()
+        activate(event.key === ' ' || event.ctrlKey || event.metaKey)
       })
       item.addEventListener('dblclick', () => { void this.showDiff(entry.path) })
       this.list.appendChild(item)
-    }
+    })
   }
 
   private async showDiff(relativePath: string): Promise<void> {
@@ -161,6 +210,33 @@ export class GitPanel {
     } catch (error) {
       this.diff.textContent = error instanceof Error ? error.message : 'Could not load Git blame.'
     }
+  }
+
+  private navigateList(event: KeyboardEvent): void {
+    const items = Array.from(this.list.querySelectorAll<HTMLElement>('[role="option"]'))
+    const current = items.indexOf(document.activeElement as HTMLElement)
+    if (current < 0 || items.length === 0) return
+    let next = current
+    if (event.key === 'ArrowDown') next = Math.min(items.length - 1, current + 1)
+    else if (event.key === 'ArrowUp') next = Math.max(0, current - 1)
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = items.length - 1
+    else return
+    event.preventDefault()
+    event.stopPropagation()
+    items.forEach((item, index) => { item.tabIndex = index === next ? 0 : -1 })
+    items[next].focus()
+  }
+
+  private restoreFocus(preferred: HTMLElement | null): void {
+    const candidates = [
+      preferred,
+      ...document.querySelectorAll<HTMLElement>('.cm-content, [contenteditable="true"], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')
+    ]
+    const target = candidates.find((candidate): candidate is HTMLElement =>
+      candidate instanceof HTMLElement && candidate.isConnected && !this.root.contains(candidate) &&
+      !candidate.matches(':disabled') && !candidate.closest('.hidden, [hidden], [aria-hidden="true"], [inert]'))
+    target?.focus()
   }
 
   private hunks: GitHunk[] = []

@@ -13,9 +13,11 @@ export interface OutlinePanelCallbacks {
 export class OutlinePanel {
   private static readonly maxSourceChars = 2 * 1024 * 1024
   private static readonly maxSymbols = 5_000
+  private static nextPanelId = 0
 
   readonly element: HTMLDivElement
   private readonly heading: HTMLDivElement
+  private readonly title: HTMLElement
   private readonly summary: HTMLSpanElement
   private readonly filter: HTMLInputElement
   private readonly list: HTMLUListElement
@@ -27,15 +29,25 @@ export class OutlinePanel {
   private symbols: Symbol[] = []
   private sourceWasTruncated = false
   private updateTimer: number | null = null
+  private previouslyFocused: HTMLElement | null = null
 
   constructor(private readonly callbacks: OutlinePanelCallbacks) {
     this.element = document.createElement('div')
     this.element.className = 'outline-panel hidden'
+    this.element.setAttribute('role', 'region')
+    this.element.setAttribute('aria-hidden', 'true')
     this.heading = document.createElement('div')
     this.heading.className = 'outline-panel-heading'
-    const title = document.createElement('strong')
+    this.title = document.createElement('strong')
+    this.title.id = `outline-panel-title-${++OutlinePanel.nextPanelId}`
+    this.title.setAttribute('role', 'heading')
+    this.title.setAttribute('aria-level', '2')
+    this.element.setAttribute('aria-labelledby', this.title.id)
     this.summary = document.createElement('span')
-    this.heading.append(title, this.summary)
+    this.summary.setAttribute('role', 'status')
+    this.summary.setAttribute('aria-live', 'polite')
+    this.summary.setAttribute('aria-atomic', 'true')
+    this.heading.append(this.title, this.summary)
     this.filter = document.createElement('input')
     this.filter.className = 'outline-filter'
     this.filter.type = 'search'
@@ -43,6 +55,7 @@ export class OutlinePanel {
     this.filter.addEventListener('input', () => this.renderList())
     this.list = document.createElement('ul')
     this.list.className = 'outline-list'
+    this.list.setAttribute('aria-labelledby', this.title.id)
     this.element.append(this.heading, this.filter, this.list)
     this.setLocale(this.locale)
   }
@@ -51,16 +64,28 @@ export class OutlinePanel {
 
   toggle(show = !this.visible): void {
     const changed = this.visible !== show
+    if (!changed) return
+    const focusWasWithinPanel = this.element.contains(document.activeElement)
+    if (show) {
+      this.previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    }
     this.visible = show
     this.element.classList.toggle('hidden', !show)
-    if (show && changed) this.refreshNow()
+    this.element.setAttribute('aria-hidden', String(!show))
+    if (show) {
+      this.refreshNow()
+    } else {
+      const focusTarget = this.previouslyFocused
+      this.previouslyFocused = null
+      if (focusWasWithinPanel) this.restoreFocus(focusTarget)
+    }
   }
 
   setLocale(locale: UiLocale): void {
     this.locale = locale
-    const title = this.heading.querySelector('strong')
-    if (title) title.textContent = locale === 'zh-CN' ? '大纲' : 'Outline'
+    this.title.textContent = locale === 'zh-CN' ? '大纲' : 'Outline'
     this.filter.placeholder = locale === 'zh-CN' ? '筛选符号…' : 'Filter symbols…'
+    this.filter.setAttribute('aria-label', locale === 'zh-CN' ? '筛选大纲符号' : 'Filter outline symbols')
     this.renderList()
   }
 
@@ -127,6 +152,7 @@ export class OutlinePanel {
       const button = document.createElement('button')
       button.type = 'button'
       button.className = 'outline-symbol'
+      if (symbol === active) button.setAttribute('aria-current', 'location')
       const markdownHeading = /^(#+)\s+/.exec(symbol.label)
       if (markdownHeading) button.style.paddingLeft = `${8 + Math.min(5, markdownHeading[1].length - 1) * 12}px`
       button.textContent = symbol.label
@@ -144,5 +170,16 @@ export class OutlinePanel {
       active = symbol
     }
     return active
+  }
+
+  private restoreFocus(preferred: HTMLElement | null): void {
+    const candidates = [
+      preferred,
+      ...document.querySelectorAll<HTMLElement>('.cm-content, [contenteditable="true"], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')
+    ]
+    const target = candidates.find((candidate): candidate is HTMLElement =>
+      candidate instanceof HTMLElement && candidate.isConnected && !this.element.contains(candidate) &&
+      !candidate.matches(':disabled') && !candidate.closest('.hidden, [hidden], [aria-hidden="true"], [inert]'))
+    target?.focus()
   }
 }

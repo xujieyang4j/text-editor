@@ -25,6 +25,7 @@ export class SettingsPanel {
   private readonly checkboxes = new Map<CheckKey, HTMLInputElement>()
   private readonly labels = new Map<string, HTMLElement>()
   private visible = false
+  private previouslyFocused: HTMLElement | null = null
   private settings: Settings
 
   constructor(settings: Settings, private readonly callbacks: SettingsPanelCallbacks) {
@@ -33,10 +34,13 @@ export class SettingsPanel {
     this.root.className = 'settings-panel hidden'
     this.root.setAttribute('role', 'dialog')
     this.root.setAttribute('aria-modal', 'false')
+    this.root.setAttribute('aria-hidden', 'true')
 
     const header = document.createElement('header')
     header.className = 'settings-panel-header'
     this.title = document.createElement('h2')
+    this.title.id = 'lumen-settings-title'
+    this.root.setAttribute('aria-labelledby', this.title.id)
     this.close = document.createElement('button')
     this.close.type = 'button'
     this.close.className = 'panel-button'
@@ -86,6 +90,12 @@ export class SettingsPanel {
       this.check('distractionFree')
     )
     this.root.append(header, body)
+    this.root.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      this.toggle(false)
+    })
     document.body.appendChild(this.root)
     this.setLocale(settings.locale)
     this.setSettings(settings)
@@ -94,9 +104,25 @@ export class SettingsPanel {
   get isVisible(): boolean { return this.visible }
 
   toggle(show = !this.visible): void {
+    if (show === this.visible) {
+      if (show) this.fontSize.focus()
+      return
+    }
+    const focusWasWithinPanel = this.root.contains(document.activeElement)
+    if (show) {
+      const active = document.activeElement
+      this.previouslyFocused = active instanceof HTMLElement && !this.root.contains(active) ? active : null
+    }
     this.visible = show
     this.root.classList.toggle('hidden', !show)
-    if (show) this.fontSize.focus()
+    this.root.setAttribute('aria-hidden', String(!show))
+    if (show) {
+      this.fontSize.focus()
+    } else {
+      const focusTarget = this.previouslyFocused
+      this.previouslyFocused = null
+      if (focusWasWithinPanel && focusTarget?.isConnected) focusTarget.focus()
+    }
   }
 
   setSettings(settings: Settings): void {

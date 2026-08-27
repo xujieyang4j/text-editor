@@ -152,17 +152,48 @@ function createWindow(sessionId = newSessionId()): void {
           )
           const terminalPanel = document.querySelector('.terminal-panel')
           const outlinePanel = document.querySelector('.outline-panel')
+          const languageButton = document.querySelector('#status-language')
+          const a11yStatus = document.querySelector('#a11y-status')
+          const a11yAlert = document.querySelector('#a11y-alert')
           return {
             editorMounted: true,
             terminalPanelMounted: terminalPanel instanceof HTMLElement && terminalPanel.classList.contains('hidden'),
             terminalStartAvailableInitially: terminalCommand instanceof HTMLButtonElement && !terminalCommand.disabled,
-            outlinePanelMounted: outlinePanel instanceof HTMLElement && outlinePanel.classList.contains('hidden')
+            outlinePanelMounted: outlinePanel instanceof HTMLElement && outlinePanel.classList.contains('hidden'),
+            accessibilityMounted: languageButton instanceof HTMLButtonElement
+              && a11yStatus?.getAttribute('role') === 'status'
+              && a11yAlert?.getAttribute('role') === 'alert'
           }
         })()`, true)
         if (!initialUi.editorMounted) throw new Error('CodeMirror did not mount')
         if (!initialUi.terminalPanelMounted || !initialUi.terminalStartAvailableInitially || !initialUi.outlinePanelMounted) {
           throw new Error(`Terminal or outline panel did not mount with its expected initial state: ${JSON.stringify(initialUi)}`)
         }
+        if (!initialUi.accessibilityMounted) throw new Error('Accessibility status regions or language button did not mount')
+        const accessibilityPrepared = await win.webContents.executeJavaScript(`(() => {
+          const languageButton = document.querySelector('#status-language')
+          if (!(languageButton instanceof HTMLButtonElement)) return false
+          languageButton.focus()
+          return document.activeElement === languageButton
+        })()`, true)
+        if (!accessibilityPrepared) throw new Error('Could not prepare command palette accessibility test')
+        win.webContents.send(IPC.menuEvent, 'command-palette' as MenuEvent)
+        await new Promise<void>((resolve) => setTimeout(resolve, 50))
+        const accessibilityResult = await win.webContents.executeJavaScript(`(() => {
+          const languageButton = document.querySelector('#status-language')
+          const dialog = document.querySelector('.palette-overlay')
+          const combo = dialog?.querySelector('[role="combobox"]')
+          const activeId = combo?.getAttribute('aria-activedescendant')
+          const active = activeId ? document.getElementById(activeId) : null
+          if (!(dialog instanceof HTMLElement) || dialog.getAttribute('aria-modal') !== 'true' ||
+            !(combo instanceof HTMLInputElement) || !active || active.getAttribute('aria-selected') !== 'true') return false
+          combo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          return languageButton instanceof HTMLButtonElement
+            && dialog.classList.contains('hidden')
+            && document.activeElement === languageButton
+        })()`, true)
+        if (!accessibilityResult) throw new Error('Command palette accessibility lifecycle failed')
+        await win.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true)
         await win.webContents.insertText('smoke')
         const editorAcceptedInput = await win.webContents.executeJavaScript(`document.querySelector('.cm-content')?.textContent?.includes('smoke') === true`, true)
         if (!editorAcceptedInput) throw new Error('CodeMirror did not receive smoke input')
@@ -250,6 +281,34 @@ function createWindow(sessionId = newSessionId()): void {
           return getComputedStyle(editor).fontSize === '17px'
         })()`, true)
         if (!settingsResult) throw new Error('Settings panel did not apply a font-size change')
+        const settingsA11yResult = await win.webContents.executeJavaScript(`(() => {
+          const panel = document.querySelector('.settings-panel')
+          if (!(panel instanceof HTMLElement)) return false
+          const label = panel.getAttribute('aria-labelledby')
+          const title = label ? document.getElementById(label) : null
+          panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          return !!title?.textContent && panel.classList.contains('hidden') && panel.getAttribute('aria-hidden') === 'true'
+        })()`, true)
+        if (!settingsA11yResult) throw new Error('Settings panel accessibility lifecycle failed')
+        const sidebarA11yResult = await win.webContents.executeJavaScript(`(() => {
+          const sidebar = document.querySelector('#sidebar')
+          if (!(sidebar instanceof HTMLElement) || sidebar.classList.contains('hidden') || sidebar.inert) return false
+          const focusable = document.createElement('button')
+          focusable.textContent = 'smoke-focus'
+          sidebar.appendChild(focusable)
+          focusable.focus()
+          return document.activeElement === focusable
+        })()`, true)
+        if (!sidebarA11yResult) throw new Error('Could not prepare sidebar focus test')
+        win.webContents.send(IPC.menuEvent, 'toggle-sidebar' as MenuEvent)
+        await new Promise<void>((resolve) => setTimeout(resolve, 30))
+        const sidebarFocusResult = await win.webContents.executeJavaScript(`(() => {
+          const sidebar = document.querySelector('#sidebar')
+          const active = document.activeElement
+          return sidebar instanceof HTMLElement && sidebar.inert && sidebar.getAttribute('aria-hidden') === 'true'
+            && active instanceof HTMLElement && !sidebar.contains(active)
+        })()`, true)
+        if (!sidebarFocusResult) throw new Error('Sidebar hid without moving focus out of its inert subtree')
         const copiedPath = await win.webContents.executeJavaScript(`(async () => {
           try {
             await window.editor.copyPath(${JSON.stringify(path.join(process.cwd(), 'package.json'))})

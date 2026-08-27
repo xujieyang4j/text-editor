@@ -1,5 +1,7 @@
 import { fuzzyFilter, type FuzzyResult } from './fuzzy.js'
 
+let nextPaletteId = 0
+
 /** A selectable row in the palette. */
 export interface PaletteItem {
   /** Primary text, fuzzy-matched and highlighted. */
@@ -41,10 +43,16 @@ export class Palette {
   private rendered: PaletteItem[] = []
   private activeIndex = 0
   private queryToken = 0
+  private previouslyFocused: Element | null = null
 
   constructor() {
+    const paletteId = ++nextPaletteId
+
     this.root = document.createElement('div')
     this.root.className = 'palette-overlay hidden'
+    this.root.setAttribute('role', 'dialog')
+    this.root.setAttribute('aria-modal', 'true')
+    this.root.setAttribute('aria-hidden', 'true')
 
     const box = document.createElement('div')
     box.className = 'palette-box'
@@ -53,9 +61,16 @@ export class Palette {
     this.input.className = 'palette-input'
     this.input.type = 'text'
     this.input.spellcheck = false
+    this.input.setAttribute('role', 'combobox')
+    this.input.setAttribute('aria-autocomplete', 'list')
+    this.input.setAttribute('aria-haspopup', 'listbox')
+    this.input.setAttribute('aria-expanded', 'false')
 
     this.list = document.createElement('ul')
     this.list.className = 'palette-list'
+    this.list.id = `palette-listbox-${paletteId}`
+    this.list.setAttribute('role', 'listbox')
+    this.input.setAttribute('aria-controls', this.list.id)
 
     box.append(this.input, this.list)
     this.root.appendChild(box)
@@ -63,7 +78,12 @@ export class Palette {
 
     // Clicking the dimmed backdrop closes the palette.
     this.root.addEventListener('mousedown', (e) => {
-      if (e.target === this.root) this.close()
+      if (e.target === this.root) {
+        // Avoid the backdrop's default mousedown action stealing the focus
+        // that close() restores to the element which opened the palette.
+        e.preventDefault()
+        this.close()
+      }
     })
     this.input.addEventListener('input', () => this.refresh())
     this.input.addEventListener('keydown', (e) => this.onKeyDown(e))
@@ -76,10 +96,19 @@ export class Palette {
 
   /** Open the palette with the given configuration. */
   open(opts: PaletteOptions): void {
+    if (!this.isOpen) this.previouslyFocused = document.activeElement
     this.opts = opts
     this.activeIndex = 0
     this.input.placeholder = opts.placeholder
+    this.input.setAttribute('aria-label', opts.placeholder)
+    this.input.setAttribute('aria-expanded', 'true')
     this.input.value = opts.initialQuery ?? ''
+    this.rendered = []
+    this.list.replaceChildren()
+    this.list.removeAttribute('aria-busy')
+    this.input.removeAttribute('aria-activedescendant')
+    this.root.setAttribute('aria-label', opts.placeholder)
+    this.root.setAttribute('aria-hidden', 'false')
     this.root.classList.remove('hidden')
     this.refresh()
     this.input.focus()
@@ -89,31 +118,55 @@ export class Palette {
   }
 
   /** Hide the palette and clear transient state. */
-  close(): void {
+  close(restoreFocus = true): void {
+    const wasOpen = this.isOpen
+    const focusTarget = this.previouslyFocused
+    this.previouslyFocused = null
+    ++this.queryToken
     this.root.classList.add('hidden')
+    this.root.setAttribute('aria-hidden', 'true')
+    this.input.setAttribute('aria-expanded', 'false')
+    this.input.removeAttribute('aria-activedescendant')
     this.list.replaceChildren()
+    this.list.removeAttribute('aria-busy')
     this.opts?.onHighlight?.(null)
     this.opts = null
+    this.rendered = []
+    this.activeIndex = 0
+
+    if (restoreFocus && wasOpen && focusTarget instanceof HTMLElement && focusTarget.isConnected) {
+      focusTarget.focus()
+    }
   }
 
   /** Recompute the filtered rows for the current query. */
   private async refresh(): Promise<void> {
-    if (!this.opts) return
+    const opts = this.opts
+    if (!opts) return
     const raw = this.input.value
-    const query = this.opts.stripPrefix
-      ? raw.startsWith(this.opts.stripPrefix)
-        ? raw.slice(this.opts.stripPrefix.length)
+    const query = opts.stripPrefix
+      ? raw.startsWith(opts.stripPrefix)
+        ? raw.slice(opts.stripPrefix.length)
         : raw
       : raw
 
     const token = ++this.queryToken
 
     let items: PaletteItem[]
-    if (this.opts.onQuery) {
-      items = await this.opts.onQuery(query)
-      if (token !== this.queryToken) return // a newer keystroke superseded us
+    if (opts.onQuery) {
+      this.list.setAttribute('aria-busy', 'true')
+      try {
+        items = await opts.onQuery(query)
+      } catch {
+        items = []
+      }
+      if (token !== this.queryToken || this.opts !== opts) {
+        if (this.opts === opts) this.list.removeAttribute('aria-busy')
+        return
+      }
+      this.list.removeAttribute('aria-busy')
     } else {
-      const source = this.opts.items ?? []
+      const source = opts.items ?? []
       items =
         query.length === 0
           ? source
@@ -138,6 +191,9 @@ export class Palette {
     this.rendered.forEach((item, idx) => {
       const li = document.createElement('li')
       li.className = 'palette-item' + (idx === this.activeIndex ? ' active' : '')
+      li.id = `${this.list.id}-option-${idx}`
+      li.setAttribute('role', 'option')
+      li.setAttribute('aria-selected', String(idx === this.activeIndex))
 
       const main = document.createElement('div')
       main.className = 'palette-item-main'
@@ -171,6 +227,7 @@ export class Palette {
       })
       this.list.appendChild(li)
     })
+    this.syncActiveDescendant()
   }
 
   /** Build a label node with matched characters wrapped in <b>. */
@@ -196,8 +253,23 @@ export class Palette {
   /** Update only the `.active` class without a full re-render. */
   private syncActive(): void {
     const children = Array.from(this.list.children)
-    children.forEach((el, i) => el.classList.toggle('active', i === this.activeIndex))
+    children.forEach((el, i) => {
+      const active = i === this.activeIndex
+      el.classList.toggle('active', active)
+      el.setAttribute('aria-selected', String(active))
+    })
     children[this.activeIndex]?.scrollIntoView({ block: 'nearest' })
+    this.syncActiveDescendant()
+  }
+
+  /** Point the combobox at the currently active option, if one exists. */
+  private syncActiveDescendant(): void {
+    const active = this.list.children[this.activeIndex]
+    if (active instanceof HTMLElement) {
+      this.input.setAttribute('aria-activedescendant', active.id)
+    } else {
+      this.input.removeAttribute('aria-activedescendant')
+    }
   }
 
   /** Fire the highlight callback for the active row (live preview). */
@@ -209,16 +281,26 @@ export class Palette {
   private onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
+      e.stopPropagation()
       this.move(1)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
+      e.stopPropagation()
       this.move(-1)
     } else if (e.key === 'Enter') {
       e.preventDefault()
+      e.stopPropagation()
       this.accept(this.activeIndex)
     } else if (e.key === 'Escape') {
       e.preventDefault()
+      e.stopPropagation()
       this.close()
+    } else if (e.key === 'Tab') {
+      // The combobox is currently the palette's only focusable control. Keep
+      // both Tab and Shift+Tab from escaping the modal dialog.
+      e.preventDefault()
+      e.stopPropagation()
+      this.input.focus()
     }
   }
 
@@ -234,7 +316,11 @@ export class Palette {
   private accept(idx: number): void {
     const item = this.rendered[idx]
     const accept = this.opts?.onAccept
-    this.close()
-    if (item && accept) accept(item)
+    if (!item || !accept) return
+    const focusTarget = this.previouslyFocused
+    this.close(false)
+    accept(item)
+    if ((document.activeElement === document.body || this.root.contains(document.activeElement)) &&
+      focusTarget instanceof HTMLElement && focusTarget.isConnected) focusTarget.focus()
   }
 }
