@@ -163,11 +163,23 @@ stays in place. The command is also available through *Goto: Goto Matching Brack
 | Action | Shortcut |
 | --- | --- |
 | Add next occurrence of selection to cursors | `Ctrl/Cmd+D` |
+| Undo the last selection change | `Ctrl/Cmd+U` |
+| Redo the last selection change | Windows/Linux: `Alt+U`; macOS: `Cmd+Shift+U` |
+| Skip current occurrence | Selection menu / Command Palette |
+| Remove last cursor | Selection menu / Command Palette |
 | Add cursor above / below | `Ctrl/Cmd+Alt+↑` / `Ctrl/Cmd+Alt+↓` |
 | Select all occurrences of selection | `Alt+F3` |
+| Add cursors to line starts | Selection menu / Command Palette |
+| Add cursors to line ends | `Shift+Alt+I` |
 | Add a cursor at click point | `Alt`+Click |
 | Column (rectangular) selection | `Alt`+Drag |
 | Collapse back to a single cursor | `Esc` |
+
+*Undo/Redo Selection* traverses available cursor and selection history without falling through to text undo. When adding
+occurrences, *Skip Current Occurrence* replaces the last selected occurrence with the next available
+match, while *Remove Last Cursor* removes the last cursor or selection. *Add Cursors to Line
+Starts/Ends* places one cursor at the corresponding boundary of each covered physical line. All of
+these commands are available from the Selection menu and Command Palette.
 
 **Expand / shrink selection.** Use `Shift+Alt+→` to grow the current selection and
 `Shift+Alt+←` to walk back through the exact expansion path. In a recognised language, Lumen
@@ -415,8 +427,10 @@ settings as `session.json` (see [Settings Reference](#en-settings)).
 | Find next | `F3` | `F3` |
 | Toggle Markdown preview | `Ctrl+Shift+V` | `Cmd+Shift+V` |
 | Add next occurrence | `Ctrl+D` | `Cmd+D` |
+| Undo / redo selection | `Ctrl+U` / `Alt+U` | `Cmd+U` / `Cmd+Shift+U` |
 | Add cursor above / below | `Ctrl+Alt+↑/↓` | `Cmd+Alt+↑/↓` |
 | Select all occurrences | `Alt+F3` | `Alt+F3` |
+| Add cursors to line ends | `Shift+Alt+I` | `Shift+Alt+I` |
 | Expand / shrink selection | `Shift+Alt+→/←` | `Shift+Alt+→/←` |
 | Toggle comment | `Ctrl+/` | `Cmd+/` |
 | Move / Copy line | `Alt+↑↓` / `Shift+Alt+↑↓` | `Alt+↑↓` / `Shift+Alt+↑↓` |
@@ -595,11 +609,22 @@ npm run dist:linux   # Linux：AppImage + .deb
 | 操作 | 快捷键 |
 | --- | --- |
 | 把选区的下一个匹配加入光标 | `Ctrl/Cmd+D` |
+| 撤销上次选区更改 | `Ctrl/Cmd+U` |
+| 重做上次选区更改 | Windows/Linux：`Alt+U`；macOS：`Cmd+Shift+U` |
+| 跳过当前匹配项 | “选择”菜单 / 命令面板 |
+| 移除最后一个光标 | “选择”菜单 / 命令面板 |
 | 在上方 / 下方加光标 | `Ctrl/Cmd+Alt+↑` / `Ctrl/Cmd+Alt+↓` |
 | 选中选区的所有匹配 | `Alt+F3` |
+| 在各行行首添加光标 | “选择”菜单 / 命令面板 |
+| 在各行行尾添加光标 | `Shift+Alt+I` |
 | 在点击处加光标 | `Alt`+单击 |
 | 列（矩形）选择 | `Alt`+拖拽 |
 | 收回为单光标 | `Esc` |
+
+*Undo/Redo Selection* 只回退或恢复可用的光标与选区历史，不会继续回退正文编辑。逐个添加匹配时，
+*Skip Current Occurrence* 会用下一个尚未选择的匹配替换最后一个匹配选区，*Remove Last Cursor*
+则移除最后一处光标或选区。*Add Cursors to Line Starts/Ends* 会在当前选区覆盖的每个物理行
+对应边界各放置一个光标。这些命令也都可从“选择”菜单或命令面板执行。
 
 **逐级扩展 / 缩小选区。** `Shift+Alt+→` 会逐级扩大当前选区，`Shift+Alt+←` 会沿本次路径逐级缩小。
 对于已识别语言，会优先选择外层语法结构，例如标识符、表达式、参数列表或代码块；纯文本、未完成代码或
@@ -796,8 +821,10 @@ Sublime 的 “hot exit”）。
 | 查找下一个 | `F3` | `F3` |
 | 切换 Markdown 预览 | `Ctrl+Shift+V` | `Cmd+Shift+V` |
 | 加入下一个匹配 | `Ctrl+D` | `Cmd+D` |
+| 撤销 / 重做选区 | `Ctrl+U` / `Alt+U` | `Cmd+U` / `Cmd+Shift+U` |
 | 上方 / 下方加光标 | `Ctrl+Alt+↑/↓` | `Cmd+Alt+↑/↓` |
 | 选中所有匹配 | `Ctrl+Shift+L` | `Cmd+Shift+L` |
+| 在各行行尾添加光标 | `Shift+Alt+I` | `Shift+Alt+I` |
 | 切换注释 | `Ctrl+/` | `Cmd+/` |
 | 移动 / 复制行 | `Alt+↑↓` / `Shift+Alt+↑↓` | `Alt+↑↓` / `Shift+Alt+↑↓` |
 | 复制 / 删除行 | `Ctrl+Shift+D` / `Ctrl+Shift+K` | `Cmd+Shift+D` / `Cmd+Shift+K` |

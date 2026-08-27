@@ -206,6 +206,28 @@ function createWindow(sessionId = newSessionId()): void {
         if (!tabCloseResult.preservedAdjacentContent || !tabCloseResult.freshUntitled) {
           throw new Error(`Tab close lifecycle failed: ${JSON.stringify(tabCloseResult)}`)
         }
+        const selectionResult = await win.webContents.executeJavaScript(`(async () => {
+          const content = document.querySelector('.cm-content')
+          if (!(content instanceof HTMLElement)) return false
+          content.focus()
+          document.execCommand('insertText', false, ${JSON.stringify('alpha\nbeta\ngamma')})
+          document.execCommand('selectAll')
+          await new Promise((resolve) => window.setTimeout(resolve, 20))
+          return true
+        })()`, true)
+        if (!selectionResult) throw new Error('Could not prepare multi-cursor smoke test')
+        win.webContents.send(IPC.menuEvent, 'add-cursors-line-ends' as MenuEvent)
+        await new Promise<void>((resolve) => setTimeout(resolve, 50))
+        await win.webContents.insertText('!')
+        const editorTextScript = `[...document.querySelectorAll('.cm-content .cm-line')].map((line) => line.textContent ?? '').join(${JSON.stringify('\n')})`
+        const multiCursorText = await win.webContents.executeJavaScript(editorTextScript, true)
+        if (multiCursorText !== 'alpha!\nbeta!\ngamma!') throw new Error(`Line-end cursors failed: ${JSON.stringify(multiCursorText)}`)
+        win.webContents.send(IPC.menuEvent, 'undo-selection' as MenuEvent)
+        await new Promise<void>((resolve) => setTimeout(resolve, 50))
+        const textAfterSelectionUndo = await win.webContents.executeJavaScript(editorTextScript, true)
+        if (textAfterSelectionUndo !== multiCursorText) {
+          throw new Error(`Selection undo changed document text: ${JSON.stringify(textAfterSelectionUndo)}`)
+        }
         // The default profile has outline hidden; this explicit event verifies
         // its menu path without altering normal user settings (smoke userData
         // is isolated above).

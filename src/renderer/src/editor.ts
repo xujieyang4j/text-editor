@@ -66,8 +66,7 @@ import {
   gotoLine,
   getSearchQuery,
   setSearchQuery,
-  SearchQuery,
-  selectNextOccurrence
+  SearchQuery
 } from '@codemirror/search'
 import {
   autocompletion,
@@ -83,6 +82,13 @@ import { setDiagnostics, lintGutter, type Diagnostic } from '@codemirror/lint'
 import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { rulers } from './extensions/rulers.js'
 import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
+import {
+  redoSelectionOnly,
+  removeMainSelection,
+  selectNextOccurrenceAsMain,
+  skipCurrentOccurrenceSelection,
+  undoSelectionOnly
+} from './selectionCommands.js'
 import type { IncrementalChange } from './incrementalDiff.js'
 import type { Settings, ColorScheme, SessionViewState } from '../../shared/ipc.js'
 
@@ -209,6 +215,9 @@ function baseExtensions(
     keymap.of([
       ...closeBracketsKeymap,
       ...defaultKeymap,
+      { key: 'Mod-d', run: selectNextOccurrenceAsMain, preventDefault: true },
+      { key: 'Mod-u', run: (view) => { undoSelectionOnly(view); return true }, preventDefault: true },
+      { key: 'Alt-u', mac: 'Mod-Shift-u', run: (view) => { redoSelectionOnly(view); return true }, preventDefault: true },
       ...searchKeymap,
       ...historyKeymap,
       ...foldKeymap,
@@ -528,8 +537,42 @@ export class Editor {
   addCursorBelow(): void {
     addCursorBelow(this.view)
   }
+  undoSelectionChange(): boolean {
+    return undoSelectionOnly(this.view)
+  }
+  redoSelectionChange(): boolean {
+    return redoSelectionOnly(this.view)
+  }
   selectNextOccurrence(): void {
-    selectNextOccurrence(this.view)
+    selectNextOccurrenceAsMain(this.view)
+  }
+
+  /** Replace the last occurrence selection with the next unselected match. */
+  skipCurrentOccurrence(): boolean {
+    const { state } = this.view
+    if (state.selection.ranges.some((range) => range.empty)) return selectNextOccurrenceAsMain(this.view)
+    const nextSelection = skipCurrentOccurrenceSelection(state)
+    if (!nextSelection) return false
+    this.view.dispatch({
+      selection: nextSelection,
+      effects: EditorView.scrollIntoView(nextSelection.main.to),
+      userEvent: 'select.skip-occurrence'
+    })
+    this.view.focus()
+    return true
+  }
+
+  /** Remove the active range (normally the most recently added cursor). */
+  removeLastCursor(): boolean {
+    const selection = removeMainSelection(this.view.state.selection)
+    if (!selection) return false
+    this.view.dispatch({
+      selection,
+      scrollIntoView: true,
+      userEvent: 'select.remove-cursor'
+    })
+    this.view.focus()
+    return true
   }
   selectAllOccurrences(): void {
     const state = this.view.state
@@ -957,6 +1000,52 @@ export class Editor {
       selection: EditorSelection.create(ranges, mainIndex),
       userEvent: 'select.split-lines'
     })
+    return true
+  }
+
+  /** Place one cursor at the start of every physical line covered by the selections. */
+  addCursorsToLineStarts(): boolean {
+    return this.addCursorsToLineBoundaries('start')
+  }
+
+  /** Place one cursor at the end of every physical line covered by the selections. */
+  addCursorsToLineEnds(): boolean {
+    return this.addCursorsToLineBoundaries('end')
+  }
+
+  private addCursorsToLineBoundaries(boundary: 'start' | 'end'): boolean {
+    const { state } = this.view
+    const positions = new Set<number>()
+    let mainPosition: number | null = null
+
+    state.selection.ranges.forEach((range, index) => {
+      const firstLine = state.doc.lineAt(range.from)
+      const endAtExcludedLineStart = !range.empty && range.to === state.doc.lineAt(range.to).from
+      const lastLine = state.doc.lineAt(endAtExcludedLineStart ? range.to - 1 : range.to)
+      for (let lineNumber = firstLine.number; lineNumber <= lastLine.number; lineNumber += 1) {
+        const line = state.doc.line(lineNumber)
+        positions.add(boundary === 'start' ? line.from : line.to)
+      }
+
+      if (index === state.selection.mainIndex) {
+        const headAtExcludedLineStart = !range.empty && range.head === range.to &&
+          range.head === state.doc.lineAt(range.head).from
+        const activeLine = state.doc.lineAt(headAtExcludedLineStart ? range.head - 1 : range.head)
+        mainPosition = boundary === 'start' ? activeLine.from : activeLine.to
+      }
+    })
+
+    const ordered = [...positions].sort((a, b) => a - b)
+    const ranges = ordered.map((position) => EditorSelection.cursor(position))
+    const mainIndex = mainPosition === null ? 0 : Math.max(0, ordered.indexOf(mainPosition))
+    const selection = EditorSelection.create(ranges, mainIndex)
+    if (selection.eq(state.selection)) return false
+    this.view.dispatch({
+      selection,
+      scrollIntoView: true,
+      userEvent: boundary === 'start' ? 'select.line-starts' : 'select.line-ends'
+    })
+    this.view.focus()
     return true
   }
 

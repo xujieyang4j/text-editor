@@ -126,11 +126,18 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
       submenu: [
         // These map to CM6 defaults already bound in-editor; listed for
         // discoverability. selectAll is provided by the Edit role above.
+        item('Undo Selection', 'undo-selection', 'CmdOrCtrl+U'),
+        item('Redo Selection', 'redo-selection', isMac ? 'Cmd+Shift+U' : 'Alt+U'),
+        { type: 'separator' },
         item('Duplicate Line/Selection', 'duplicate-selection', 'CmdOrCtrl+Shift+D'),
         item('Sort Lines', 'sort-lines'),
         item('Split Selection into Lines', 'split-selection-lines')
         , item('Add Next Occurrence', 'select-next-occurrence', 'CmdOrCtrl+D')
+        , item('Skip Current Occurrence', 'skip-current-occurrence')
+        , item('Remove Last Cursor', 'remove-last-cursor')
         , item('Select All Occurrences', 'select-all-occurrences', 'Alt+F3')
+        , item('Add Cursors to Line Starts', 'add-cursors-line-starts')
+        , item('Add Cursors to Line Ends', 'add-cursors-line-ends', 'Shift+Alt+I')
         , item('Select Line', 'select-line')
         , item('Select to Matching Bracket', 'select-matching-bracket')
         , item('Select Enclosing Syntax', 'select-parent-syntax', 'CmdOrCtrl+I')

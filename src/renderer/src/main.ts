@@ -908,11 +908,53 @@ class App {
       case 'add-cursor-below':
         this.editor.addCursorBelow()
         break
+      case 'undo-selection':
+        if (!this.editor.undoSelectionChange()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '没有可撤销的选区更改'
+            : 'No selection change to undo'
+        }
+        break
+      case 'redo-selection':
+        if (!this.editor.redoSelectionChange()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '没有可重做的选区更改'
+            : 'No selection change to redo'
+        }
+        break
       case 'select-next-occurrence':
         this.editor.selectNextOccurrence()
         break
+      case 'skip-current-occurrence':
+        if (!this.editor.skipCurrentOccurrence()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '没有更多可选择的匹配项'
+            : 'No further occurrence to select'
+        }
+        break
+      case 'remove-last-cursor':
+        if (!this.editor.removeLastCursor()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '没有可移除的额外光标'
+            : 'No extra cursor to remove'
+        }
+        break
       case 'select-all-occurrences':
         this.editor.selectAllOccurrences()
+        break
+      case 'add-cursors-line-starts':
+        if (!this.editor.addCursorsToLineStarts()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '无法在行首添加光标'
+            : 'Could not add cursors to line starts'
+        }
+        break
+      case 'add-cursors-line-ends':
+        if (!this.editor.addCursorsToLineEnds()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '无法在行尾添加光标'
+            : 'Could not add cursors to line ends'
+        }
         break
       case 'select-line':
         this.editor.selectCurrentLine()

@@ -26,7 +26,11 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
 - **Line operations**: move/copy/delete line, duplicate, toggle comment (`Ctrl/Cmd+/`), sort lines
 - **File tree sidebar** — starts collapsed (`Ctrl/Cmd+B` to show), opens a folder as a
   workspace, and lazily expands directories
-- **Find & replace**, **undo/redo**, **multi-cursor**, rectangular selection, bracket matching
+- **Find & replace**, **text undo/redo**, **multi-cursor**, rectangular selection, bracket matching
+- **Selection & multi-cursor control** — undo selection (`Ctrl/Cmd+U`), redo selection
+  (Windows/Linux `Alt+U`; macOS `Cmd+Shift+U`), and add cursors to line ends (`Shift+Alt+I`);
+  skip the current occurrence, remove the last cursor, or add cursors to line starts from the
+  Selection menu or Command Palette
 - **Find / Replace in Files** with regex, case/word filters and include/exclude globs
 - **Split editing**, per-tab undo/selection preservation, bookmarks, macros and reusable snippets
 - **Workspace tools**: file create/rename/trash/reveal, external-change refresh, project build output
