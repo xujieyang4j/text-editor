@@ -93,6 +93,7 @@ export const COMMANDS: Command[] = [
   { id: 'sort-lines-descending', title: 'Edit: Sort Lines Descending' },
   { id: 'reverse-lines', title: 'Edit: Reverse Lines' },
   { id: 'unique-lines', title: 'Edit: Unique Lines' },
+  { id: 'remove-blank-lines', title: 'Edit: Remove Blank Lines' },
   { id: 'toggle-bookmark', title: 'Navigate: Toggle Bookmark', hint: 'Ctrl/Cmd+F2' },
   { id: 'next-bookmark', title: 'Navigate: Next Bookmark', hint: 'F2' },
   { id: 'prev-bookmark', title: 'Navigate: Previous Bookmark', hint: 'Shift+F2' },

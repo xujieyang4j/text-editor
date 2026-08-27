@@ -833,6 +833,7 @@ export type MenuEvent =
   | 'sort-lines-descending'
   | 'reverse-lines'
   | 'unique-lines'
+  | 'remove-blank-lines'
   | 'font-zoom-in'
   | 'font-zoom-out'
   | 'font-zoom-reset'

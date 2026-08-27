@@ -36,10 +36,13 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   the status-bar language button or **Set Syntax…**
 - **Minimap** and **indentation guides**, **vertical rulers**, trailing-whitespace highlight
 - **Line operations**: move/copy/delete line, duplicate, toggle comment (`Ctrl/Cmd+/`), plus
-  *Sort Lines Ascending*, *Sort Lines Descending*, *Reverse Lines*, and *Unique Lines*. Every non-empty
-  selection expands to complete lines and disjoint blocks are processed independently; with no selection
-  they process the whole file, preserving its final-newline state. *Unique Lines* matches complete lines
-  exactly and stably keeps the first occurrence
+  *Sort Lines Ascending*, *Sort Lines Descending*, *Reverse Lines*, *Unique Lines*, and *Remove Blank
+  Lines* from the Edit menu or Command Palette. For these block operations, every non-empty selection
+  expands to complete physical lines and disjoint blocks are processed independently; if every selection
+  is empty, they process the whole file. Selections and cursors remain mapped through the edit, and the
+  remaining content keeps its final-newline state. *Unique Lines* matches complete lines exactly and
+  stably keeps the first occurrence. *Remove Blank Lines* deletes physical lines that are empty or contain
+  only spaces or tabs; if it removes every line, the document becomes empty
 - **File tree sidebar** — starts collapsed (`Ctrl/Cmd+B` to show), opens a folder as a
   workspace, and lazily expands directories
 - **Find & replace**, **text undo/redo**, **multi-cursor**, rectangular selection, bracket matching

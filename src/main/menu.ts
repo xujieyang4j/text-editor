@@ -107,6 +107,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Sort Lines Descending', 'sort-lines-descending'),
         item('Reverse Lines', 'reverse-lines'),
         item('Unique Lines', 'unique-lines'),
+        item('Remove Blank Lines', 'remove-blank-lines'),
         item('Upper Case', 'to-upper-case'),
         item('Lower Case', 'to-lower-case'),
         item('Title Case', 'to-title-case'),

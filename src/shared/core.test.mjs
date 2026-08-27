@@ -6,6 +6,7 @@ import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
 import { incrementalChanges, revertIncrementalChange } from '../../out-test/renderer/src/incrementalDiff.js'
 import {
   reverseLines,
+  removeBlankLines,
   lineTransformEdits,
   planLineTransform,
   sortLinesAscending,
@@ -67,6 +68,10 @@ assert.equal(uniqueLines('\n\n'), '\n')
 assert.equal(reverseLines('first\n\nlast\n'), 'last\n\nfirst\n')
 assert.equal(transformLines('one\ntwo\nthree', 'reverse'), 'three\ntwo\none')
 assert.equal(transformLines('x\ny\nx', 'unique'), 'x\ny')
+assert.equal(removeBlankLines('alpha\n\n \n\t\nbeta\n'), 'alpha\nbeta\n')
+assert.equal(removeBlankLines('alpha\n \nbeta'), 'alpha\nbeta')
+assert.equal(removeBlankLines(' \n\t\n'), '')
+assert.equal(removeBlankLines(' \nkeep\n'), ' \nkeep\n')
 
 // A final LF is document structure, not an extra sortable/deduplicated line.
 assert.equal(sortLinesAscending('beta\nalpha\n'), 'alpha\nbeta\n')
@@ -74,7 +79,7 @@ assert.equal(sortLinesAscending('beta\nalpha'), 'alpha\nbeta')
 assert.equal(sortLinesDescending('alpha\nbeta\n'), 'beta\nalpha\n')
 assert.equal(sortLinesDescending('alpha\nbeta'), 'beta\nalpha')
 
-for (const mode of ['sort-ascending', 'sort-descending', 'reverse', 'unique']) {
+for (const mode of ['sort-ascending', 'sort-descending', 'reverse', 'unique', 'remove-blank']) {
   assert.equal(transformLines('', mode), '')
   assert.equal(wouldTransformLines('', mode), false)
   assert.equal(transformLines('only line', mode), 'only line')
@@ -232,6 +237,43 @@ assert.deepEqual(mixedNoOpAndChangedPlan.ranges, [
   { anchor: 0, head: 4 },
   { anchor: 13, head: 9 }
 ])
+
+const removeBlankSelectionPlan = planLineTransform('a\n \nkeep\nb\n\t\nend\n', [
+  { anchor: 2, head: 3 },
+  { anchor: 6, head: 6 },
+  { anchor: 12, head: 11 }
+], 'remove-blank')
+assert.deepEqual(removeBlankSelectionPlan.changes, [
+  { from: 2, to: 4, insert: '' },
+  { from: 11, to: 13, insert: '' }
+])
+assert.deepEqual(removeBlankSelectionPlan.ranges, [
+  { anchor: 2, head: 2 },
+  { anchor: 4, head: 4 },
+  { anchor: 9, head: 9 }
+])
+
+const removeBlankCursorPlan = planLineTransform('a\n \nb', [
+  { anchor: 2, head: 2 },
+  { anchor: 4, head: 4 }
+], 'remove-blank')
+assert.deepEqual(removeBlankCursorPlan.changes, [{ from: 2, to: 4, insert: '' }])
+assert.deepEqual(removeBlankCursorPlan.ranges, [
+  { anchor: 2, head: 2 },
+  { anchor: 2, head: 2 }
+])
+assert.deepEqual(planLineTransform('a\n ', [{ anchor: 2, head: 3 }], 'remove-blank'), {
+  changes: [{ from: 1, to: 3, insert: '' }],
+  ranges: [{ anchor: 1, head: 1 }]
+})
+assert.deepEqual(planLineTransform('a\n ', [{ anchor: 3, head: 2 }], 'remove-blank'), {
+  changes: [{ from: 1, to: 3, insert: '' }],
+  ranges: [{ anchor: 1, head: 1 }]
+})
+assert.deepEqual(planLineTransform('a\n \n ', [
+  { anchor: 2, head: 3 },
+  { anchor: 4, head: 5 }
+], 'remove-blank').changes, [{ from: 1, to: 5, insert: '' }])
 
 const navigationLocation = (docId, path, line = 1, column = 1, groupId = 0) => ({ docId, path, groupId, line, column })
 const navA = navigationLocation('doc-a', '/workspace/a.ts', 1, 1)

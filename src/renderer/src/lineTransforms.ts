@@ -1,4 +1,4 @@
-export type LineTransformMode = 'sort-ascending' | 'sort-descending' | 'reverse' | 'unique'
+export type LineTransformMode = 'sort-ascending' | 'sort-descending' | 'reverse' | 'unique' | 'remove-blank'
 
 export interface TextSelectionRange {
   readonly anchor: number
@@ -66,6 +66,9 @@ function transformLineDocument(text: string, mode: LineTransformMode): Transform
       }
       break
     }
+    case 'remove-blank':
+      output = records.filter((record) => !/^[\t ]*$/.test(record.line))
+      break
   }
 
   const sourceToOutput = new Array<number>(records.length)
@@ -78,10 +81,18 @@ function transformLineDocument(text: string, mode: LineTransformMode): Transform
     records.forEach((record) => {
       sourceToOutput[record.sourceIndex] = firstOutputByLine.get(record.line) ?? 0
     })
+  } else if (mode === 'remove-blank') {
+    let retainedBefore = 0
+    records.forEach((record) => {
+      sourceToOutput[record.sourceIndex] = retainedBefore
+      if (!/^[\t ]*$/.test(record.line)) retainedBefore += 1
+    })
   }
 
   return {
-    text: joinLineDocument({ ...document, lines: output.map(({ line }) => line) }),
+    text: mode === 'remove-blank' && output.length === 0
+      ? ''
+      : joinLineDocument({ ...document, lines: output.map(({ line }) => line) }),
     sourceToOutput
   }
 }
@@ -120,6 +131,11 @@ export function reverseLines(text: string): string {
 /** Remove exact duplicate lines while retaining the first occurrence. */
 export function uniqueLines(text: string): string {
   return transformLines(text, 'unique')
+}
+
+/** Remove empty lines and lines containing only spaces or tabs. */
+export function removeBlankLines(text: string): string {
+  return transformLines(text, 'remove-blank')
 }
 
 export function transformLines(text: string, mode: LineTransformMode): string {
@@ -245,6 +261,8 @@ export function planLineTransform(
     }
   }
 
+  if (mode === 'remove-blank') return planRemoveBlankLines(text, ranges, merged)
+
   let delta = 0
   const plannedBlocks: PlannedBlock[] = []
   for (const { from, to, rangeIndexes } of merged) {
@@ -292,6 +310,85 @@ export function planLineTransform(
     changes: changes.map(({ from, to, insert }) => ({ from, to, insert })),
     ranges: mappedRanges
   }
+}
+
+function planRemoveBlankLines(
+  text: string,
+  ranges: readonly TextSelectionRange[],
+  targets: readonly { from: number; to: number; rangeIndexes: readonly number[] }[]
+): LineTransformPlan {
+  const removals: LineTransformEdit[] = []
+  for (const target of targets) {
+    let lineStart = target.from
+    while (lineStart < target.to) {
+      const nextBreak = text.indexOf('\n', lineStart)
+      const lineEnd = nextBreak < 0 || nextBreak >= target.to ? target.to : nextBreak
+      if (/^[\t ]*$/.test(text.slice(lineStart, lineEnd))) {
+        removals.push({
+          from: lineStart,
+          to: lineEnd < target.to && text[lineEnd] === '\n' ? lineEnd + 1 : lineEnd,
+          insert: ''
+        })
+      }
+      if (lineEnd >= target.to) break
+      lineStart = lineEnd + 1
+    }
+  }
+
+  const changes: LineTransformEdit[] = []
+  for (const removal of removals.sort((left, right) => left.from - right.from || left.to - right.to)) {
+    if (removal.from === removal.to) continue
+    const previous = changes[changes.length - 1]
+    if (previous && removal.from <= previous.to) {
+      changes[changes.length - 1] = { from: previous.from, to: Math.max(previous.to, removal.to), insert: '' }
+    } else {
+      changes.push(removal)
+    }
+  }
+
+  // A final physical line without its own line break is separated by the
+  // preceding LF. Remove that separator with a deleted terminal blank run so
+  // the command does not leave a new final empty line behind.
+  const terminal = changes[changes.length - 1]
+  if (terminal && terminal.to === text.length && !text.endsWith('\n')
+    && terminal.from > 0 && text[terminal.from - 1] === '\n') {
+    changes[changes.length - 1] = { ...terminal, from: terminal.from - 1 }
+    const previous = changes[changes.length - 2]
+    if (previous && previous.to >= terminal.from - 1) {
+      changes.splice(changes.length - 2, 2, { from: previous.from, to: terminal.to, insert: '' })
+    }
+  }
+
+  if (changes.length === 0) {
+    return { changes: [], ranges: ranges.map(({ anchor, head }) => ({ anchor, head })) }
+  }
+
+  const mapPosition = (position: number): number => {
+    const clamped = Math.max(0, Math.min(text.length, position))
+    let delta = 0
+    for (const change of changes) {
+      if (clamped < change.from) break
+      if (clamped <= change.to) return change.from + delta
+      delta -= change.to - change.from
+    }
+    return clamped + delta
+  }
+
+  const targetByRange = new Map<number, { from: number; to: number }>()
+  targets.forEach((target) => {
+    const mapped = { from: mapPosition(target.from), to: mapPosition(target.to) }
+    target.rangeIndexes.forEach((rangeIndex) => targetByRange.set(rangeIndex, mapped))
+  })
+  const mappedRanges = ranges.map(({ anchor, head }, index) => {
+    const target = targetByRange.get(index)
+    if (anchor !== head && target) {
+      return anchor <= head
+        ? { anchor: target.from, head: target.to }
+        : { anchor: target.to, head: target.from }
+    }
+    return { anchor: mapPosition(anchor), head: mapPosition(head) }
+  })
+  return { changes, ranges: mappedRanges }
 }
 
 export function lineTransformEdits(

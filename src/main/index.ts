@@ -745,6 +745,14 @@ function createWindow(sessionId = newSessionId()): void {
         await replaceEditorText('beta\nalpha\nbeta\ngamma\n')
         win.webContents.send(IPC.menuEvent, 'unique-lines' as MenuEvent)
         await waitForEditorText('beta\nalpha\ngamma\n', 'unique-lines')
+
+        // With only a caret, removing blank lines applies to the whole document.
+        // Preserve the trailing line break while dropping empty and whitespace-only lines.
+        await replaceEditorText('alpha\n\n   \n\t\nbeta\n')
+        const removeBlankLinesCommand = 'remove-blank-lines' as MenuEvent
+        win.webContents.send(IPC.menuEvent, removeBlankLinesCommand)
+        await waitForEditorText('alpha\nbeta\n', removeBlankLinesCommand)
+        await replaceEditorText('beta\nalpha\ngamma\n')
         const navigationDocument = await win.webContents.executeJavaScript(`(() => {
           const tab = document.querySelector('#tab-bar > .tab.active')
           return {

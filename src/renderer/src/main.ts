@@ -1137,6 +1137,9 @@ class App {
       case 'unique-lines':
         this.editor.uniqueLines()
         break
+      case 'remove-blank-lines':
+        this.editor.removeBlankLines()
+        break
       case 'font-zoom-in':
         this.settings.fontSize = Math.min(40, this.settings.fontSize + 1)
         this.applyUserSettings(this.settings)

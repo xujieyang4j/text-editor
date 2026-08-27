@@ -277,14 +277,17 @@ current line to the next line. It leaves the document untouched and shows a stat
 there is no following line or no line break to join. The resulting line blocks keep a cursor and the
 whole action is undoable in one step.
 
-**Sort, reverse, and unique lines.** Run *Edit: Sort Lines Ascending*, *Sort Lines Descending*,
-*Reverse Lines*, or *Unique Lines* from the Edit menu or Command Palette. Every non-empty selection
-expands to the complete physical lines it touches. Disjoint line blocks are transformed independently,
-overlapping blocks are handled once, and selection direction and cursor positions remain mapped through
-the edit (positions inside a duplicate removed by *Unique Lines* follow its retained first occurrence).
-If every selection is empty, the command applies to the whole document. Sorting compares complete line contents, reversing
-only changes line order, and *Unique Lines* uses exact line matching while stably retaining the first
-occurrence. All four operations preserve whether the document has a final newline.
+**Sort, reverse, unique, and remove blank lines.** Run *Edit: Sort Lines Ascending*, *Sort Lines
+Descending*, *Reverse Lines*, *Unique Lines*, or *Remove Blank Lines* from the Edit menu or Command
+Palette. Every non-empty selection expands to the complete physical lines it touches. Disjoint line blocks
+are transformed independently, overlapping blocks are handled once, and selection direction and cursor
+positions remain mapped through the edit (positions inside a duplicate removed by *Unique Lines* follow
+its retained first occurrence). If every selection is empty, the command applies to the whole document.
+Sorting compares complete line contents, reversing only changes line order, and *Unique Lines* uses exact
+line matching while stably retaining the first occurrence. *Remove Blank Lines* deletes physical lines
+whose content has zero length or consists only of spaces and tabs. All five operations preserve the
+remaining content's final-newline state; if *Remove Blank Lines* removes every line, the result is an empty
+document.
 
 **Reindent selection.** *Edit: Reindent Selection* (`Ctrl/Cmd+Alt+\`) uses the active language's
 local syntax indentation service to recalculate the leading whitespace of selected lines. Unlike
@@ -307,6 +310,7 @@ status message.
 | Sort lines descending | Edit menu or Command Palette → *Edit: Sort Lines Descending* |
 | Reverse lines | Edit menu or Command Palette → *Edit: Reverse Lines* |
 | Unique lines | Edit menu or Command Palette → *Edit: Unique Lines* |
+| Remove blank lines | Edit menu or Command Palette → *Edit: Remove Blank Lines* |
 | Select line | `Alt+L` |
 | Select enclosing syntax | `Ctrl/Cmd+I` |
 
@@ -760,12 +764,13 @@ UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 
 多个独立选区分别处理，重叠范围只合并一次。没有选区时，合并光标所在行与下一行。最后一行等没有可合并
 换行的位置会保持文本不变并显示状态提示。每个合并后的行块保留一个光标，整个操作可一次撤销。
 
-**排序、反转与删除重复行。** 从“编辑”菜单或命令面板执行 *Edit: Sort Lines Ascending*、
-*Sort Lines Descending*、*Reverse Lines* 或 *Unique Lines*。每个非空选区都会扩展到其触及的完整物理行；
-不相邻的行块分别处理，重叠行块只处理一次，选区方向和光标位置会随编辑正确映射（位于被 *Unique Lines*
-删除的重复行内的位置会跟随保留下来的首次出现行）。所有选区均为空时处理整个文档。
-排序按完整行内容比较，反转只改变行的先后顺序；*Unique Lines* 按整行内容精确匹配，并按原顺序稳定保留
-第一次出现。四项操作都会保留文档原有的末尾换行状态。
+**排序、反转、删除重复行与删除空白行。** 从“编辑”菜单或命令面板执行 *Edit: Sort Lines Ascending*、
+*Sort Lines Descending*、*Reverse Lines*、*Unique Lines* 或 *Remove Blank Lines*。每个非空选区都会扩展到
+其触及的完整物理行；不相邻的行块分别处理，重叠行块只处理一次，选区方向和光标位置会随编辑正确映射
+（位于被 *Unique Lines* 删除的重复行内的位置会跟随保留下来的首次出现行）。所有选区均为空时处理整个
+文档。排序按完整行内容比较，反转只改变行的先后顺序；*Unique Lines* 按整行内容精确匹配，并按原顺序
+稳定保留第一次出现。*Remove Blank Lines* 删除内容长度为零或仅由空格和 Tab 组成的物理行。五项操作都会
+保留剩余内容原有的末尾换行状态；若 *Remove Blank Lines* 删除所有行，结果为空文档。
 
 **自动重新缩进选区。** *Edit: Reindent Selection*（`Ctrl/Cmd+Alt+\`）利用当前语言的本地语法缩进
 服务重新计算选中行前导空白。它区别于手工增加/减少一级缩进，适合粘贴错位代码或修改括号、Python 块、
@@ -786,6 +791,7 @@ UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 
 | 降序排列行 | “编辑”菜单或命令面板 |
 | 反转行顺序 | “编辑”菜单或命令面板 |
 | 删除重复行 | “编辑”菜单或命令面板 |
+| 删除空白行 | “编辑”菜单或命令面板 |
 | 选中整行 | `Alt+L` |
 | 选中所在语法块 | `Ctrl/Cmd+I` |
 

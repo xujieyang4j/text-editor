@@ -760,6 +760,7 @@ export class Editor {
   sortLinesDescending(): boolean { return this.transformLines('sort-descending') }
   reverseLines(): boolean { return this.transformLines('reverse') }
   uniqueLines(): boolean { return this.transformLines('unique') }
+  removeBlankLines(): boolean { return this.transformLines('remove-blank') }
 
   // ---- Search / navigation ----
 
