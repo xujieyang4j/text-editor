@@ -265,10 +265,12 @@ They delete a selection directly, or otherwise delete one editor-recognised word
 cursor. This makes repeated cleanup of identifiers, parameters, prose, and nearby punctuation fast
 and consistent across multiple cursors.
 
-**Case conversion with multiple selections.** *Edit: Upper Case*, *Lower Case*, and *Title Case*
-apply independently to every non-empty selection, which makes multi-cursor cleanup predictable.
-When there is no selection, they keep the established behaviour of converting the entire document.
-After a selection-based conversion, each converted selection remains selected and the edit is undoable.
+**Case conversion with multiple selections.** *Edit: Upper Case*, *Lower Case*, *Title Case*, and
+*Swap Case* apply independently to every non-empty selection. *Swap Case* is available from
+*Edit → Swap Case* or as *Edit: Swap Case* in the Command Palette. It processes Unicode characters
+one by one: lowercase becomes uppercase, uppercase and titlecase become lowercase, and characters
+without case remain unchanged. Each converted selection keeps its range and direction; when there is no selection,
+the command converts the entire document. The whole operation is undoable in one step.
 
 **Join lines.** *Edit: Join Lines* removes the line break and surrounding whitespace between lines.
 For a selection, it joins all lines the selection covers; multiple independent selections are handled
@@ -766,9 +768,10 @@ UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 
 删除选区；没有选区时，每个光标会删除一个编辑器识别的词组边界，适合连续清理标识符、参数、普通文字
 和相邻标点，并支持多光标。
 
-**多选区大小写转换。** *Edit: Upper Case*、*Lower Case*、*Title Case* 会分别作用于每个非空选区，
-使多光标清理更可预期；没有选区时，仍保持转换整个文档的行为。基于选区转换后，每个转换过的范围仍会
-保持选中，并可撤销。
+**多选区大小写转换。** *Edit: Upper Case*、*Lower Case*、*Title Case* 和 *Swap Case* 会分别作用于
+每个非空选区。*Swap Case* 可从“编辑 → Swap Case”或命令面板中的 *Edit: Swap Case* 执行；它逐个处理
+Unicode 字符，将小写转为大写、大写和标题式字符转为小写，无大小写的字符保持不变。转换后的每个选区保持原有方向和
+范围；没有选区时转换整个文档，整个操作可一次撤销。
 
 **合并行。** *Edit: Join Lines* 会移除行间换行和两侧多余空白。存在选区时，它合并选区覆盖的所有行；
 多个独立选区分别处理，重叠范围只合并一次。没有选区时，合并光标所在行与下一行。最后一行等没有可合并

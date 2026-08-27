@@ -4,6 +4,7 @@ import { maxEditableBytes, isBinaryBuffer } from '../../out-test/shared/filePoli
 import { score, fuzzyFilter } from '../../out-test/renderer/src/fuzzy.js'
 import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
 import { incrementalChanges, revertIncrementalChange } from '../../out-test/renderer/src/incrementalDiff.js'
+import { caseTransformSpec, transformCaseText } from '../../out-test/renderer/src/caseTransforms.js'
 import {
   reverseLines,
   removeBlankLines,
@@ -50,6 +51,72 @@ const changes = incrementalChanges('one\ntwo\nfour', 'one\nthree\nfour\nfive')
 assert.deepEqual(changes.map((change) => [change.kind, change.line, change.lineCount]), [['modified', 2, 1], ['added', 4, 1]])
 assert.equal(revertIncrementalChange('one\nthree\nfour\nfive', changes[0]), 'one\ntwo\nfour\nfive')
 assert.deepEqual(incrementalChanges('one\ntwo', 'one').map((change) => [change.kind, change.line]), [['deleted', 2]])
+
+assert.equal(transformCaseText('aBc 123!', 'swap'), 'AbC 123!')
+assert.equal(transformCaseText('Straße', 'swap'), 'sTRASSE')
+assert.equal(transformCaseText('İIıi', 'swap'), 'i̇iII')
+assert.equal(transformCaseText('ǅ中🙂', 'swap'), 'ǆ中🙂')
+assert.equal(transformCaseText('Straße', 'upper'), 'STRASSE')
+assert.equal(transformCaseText('İ', 'lower'), 'i̇')
+
+const applyCaseTransform = (state, kind) => {
+  const spec = caseTransformSpec(state, kind)
+  return spec ? state.update({ ...spec, userEvent: 'input.case' }).state : state
+}
+const reverseCaseState = EditorState.create({
+  doc: 'xStraße!',
+  selection: EditorSelection.range(7, 1),
+  extensions: EditorState.allowMultipleSelections.of(true)
+})
+const reverseCaseResult = applyCaseTransform(reverseCaseState, 'swap')
+assert.equal(reverseCaseResult.doc.toString(), 'xsTRASSE!')
+assert.deepEqual(reverseCaseResult.selection.main.toJSON(), { anchor: 8, head: 1 })
+
+for (const [source, ranges, expectedText, expectedRanges] of [
+  ['1ß', [[0, 1], [1, 2]], '1SS', [[0, 1], [1, 3]]],
+  ['ßx', [[0, 1], [1, 2]], 'SSX', [[0, 2], [2, 3]]]
+]) {
+  const state = EditorState.create({
+    doc: source,
+    selection: EditorSelection.create(
+      ranges.map(([anchor, head]) => EditorSelection.range(anchor, head)),
+      1
+    ),
+    extensions: EditorState.allowMultipleSelections.of(true)
+  })
+  const result = applyCaseTransform(state, 'swap')
+  assert.equal(result.doc.toString(), expectedText)
+  assert.deepEqual(result.selection.ranges.map(({ anchor, head }) => [anchor, head]), expectedRanges)
+  assert.equal(result.selection.mainIndex, 1)
+}
+
+const multiCaseState = EditorState.create({
+  doc: 'ab xx CD',
+  selection: EditorSelection.create([
+    EditorSelection.range(0, 2),
+    EditorSelection.cursor(4),
+    EditorSelection.range(8, 6)
+  ], 2),
+  extensions: EditorState.allowMultipleSelections.of(true)
+})
+const multiCaseResult = applyCaseTransform(multiCaseState, 'swap')
+assert.equal(multiCaseResult.doc.toString(), 'AB xx cd')
+assert.deepEqual(multiCaseResult.selection.ranges.map(({ anchor, head }) => ({ anchor, head })), [
+  { anchor: 0, head: 2 },
+  { anchor: 4, head: 4 },
+  { anchor: 8, head: 6 }
+])
+assert.equal(multiCaseResult.selection.mainIndex, 2)
+
+const wholeCaseState = EditorState.create({
+  doc: 'aBß',
+  selection: EditorSelection.create([EditorSelection.cursor(1), EditorSelection.cursor(2)], 1),
+  extensions: EditorState.allowMultipleSelections.of(true)
+})
+const wholeCaseResult = applyCaseTransform(wholeCaseState, 'swap')
+assert.equal(wholeCaseResult.doc.toString(), 'AbSS')
+assert.deepEqual(wholeCaseResult.selection.main.toJSON(), { anchor: 0, head: 4 })
+assert.equal(caseTransformSpec(EditorState.create({ doc: '123🙂' }), 'swap'), null)
 
 assert.equal(sortLinesAscending('delta\nalpha\ncharlie\nbravo'), 'alpha\nbravo\ncharlie\ndelta')
 assert.equal(sortLinesDescending('alpha\ndelta\nbravo\ncharlie'), 'delta\ncharlie\nbravo\nalpha')

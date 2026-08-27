@@ -85,6 +85,7 @@ import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { rulers } from './extensions/rulers.js'
 import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
 import { planLineTransform, type LineTransformMode } from './lineTransforms.js'
+import { caseTransformSpec, type CaseTransformKind } from './caseTransforms.js'
 import {
   redoSelectionOnly,
   removeMainSelection,
@@ -935,33 +936,15 @@ export class Editor {
     this.replaceContent(converted)
   }
 
-  changeCase(kind: 'upper' | 'lower' | 'title'): void {
+  changeCase(kind: CaseTransformKind): boolean {
     const { state } = this.view
-    const targets = state.selection.ranges.filter((range) => !range.empty)
-    // No selection follows the established editor behaviour: transform the full document.
-    const ranges = targets.length > 0 ? targets : [EditorSelection.range(0, state.doc.length)]
-    const changes = ranges
-      .map((range) => ({ from: range.from, to: range.to, insert: this.transformCase(state.sliceDoc(range.from, range.to), kind) }))
-      .filter((change) => state.sliceDoc(change.from, change.to) !== change.insert)
-      .sort((a, b) => a.from - b.from)
-    if (changes.length === 0) return
-    const changeSet = state.changes(changes)
-    const selections = targets.length > 0
-      ? state.selection.ranges.map((range) => range.empty
-        ? EditorSelection.cursor(changeSet.mapPos(range.head, 1))
-        : EditorSelection.range(changeSet.mapPos(range.from, -1), changeSet.mapPos(range.to, 1)))
-      : [EditorSelection.range(0, changeSet.newLength)]
+    const spec = caseTransformSpec(state, kind)
+    if (!spec) return false
     this.view.dispatch({
-      changes: changeSet,
-      selection: EditorSelection.create(selections, state.selection.mainIndex),
+      ...spec,
       userEvent: 'input.case'
     })
-  }
-
-  private transformCase(source: string, kind: 'upper' | 'lower' | 'title'): string {
-    if (kind === 'upper') return source.toUpperCase()
-    if (kind === 'lower') return source.toLowerCase()
-    return source.toLowerCase().replace(/\b\p{L}/gu, (char) => char.toUpperCase())
+    return true
   }
 
   /**

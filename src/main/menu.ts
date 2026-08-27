@@ -111,6 +111,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Upper Case', 'to-upper-case'),
         item('Lower Case', 'to-lower-case'),
         item('Title Case', 'to-title-case'),
+        item('Swap Case', 'swap-case'),
         item('Join Lines', 'join-lines'),
         item('Revert Current Change', 'revert-current-change'),
         item('Trim Trailing Whitespace', 'trim-trailing-whitespace'),

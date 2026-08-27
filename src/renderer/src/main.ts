@@ -855,6 +855,9 @@ class App {
       case 'to-title-case':
         this.editor.changeCase('title')
         break
+      case 'swap-case':
+        this.editor.changeCase('swap')
+        break
       case 'join-lines':
         if (!this.editor.joinLines()) {
           this.statusSelection.textContent = this.settings.locale === 'zh-CN'

@@ -634,7 +634,10 @@ function createWindow(sessionId = newSessionId()): void {
             throw new Error(`Could not set smoke editor text: ${JSON.stringify({ expected: text, result })}`)
           }
         }
-        const waitForEditorText = async (expected: string, command: MenuEvent): Promise<void> => {
+        const waitForEditorText = async (
+          expected: string,
+          command: MenuEvent | 'undo' | 'redo'
+        ): Promise<void> => {
           const result = await win.webContents.executeJavaScript(`(async () => {
             const deadline = Date.now() + 3_000
             let text = ''
@@ -745,6 +748,54 @@ function createWindow(sessionId = newSessionId()): void {
         await replaceEditorText('beta\nalpha\nbeta\ngamma\n')
         win.webContents.send(IPC.menuEvent, 'unique-lines' as MenuEvent)
         await waitForEditorText('beta\nalpha\ngamma\n', 'unique-lines')
+
+        // Exercise case conversion through the native-menu IPC path. The
+        // German sharp s expands, while the titlecase digraph becomes lowercase.
+        // Keep this edit outside the preceding input history group so one undo
+        // proves that the case conversion was dispatched as one transaction.
+        const swapCaseOriginal = 'Straße ǅ'
+        const swapCaseExpected = 'sTRASSE ǆ'
+        await replaceEditorText(swapCaseOriginal)
+        await new Promise<void>((resolve) => setTimeout(resolve, 600))
+        const swapCaseSelectionPrepared = await win.webContents.executeJavaScript(`(async () => {
+          const content = document.querySelector('.cm-content')
+          if (!(content instanceof HTMLElement)) return false
+          content.focus()
+          document.execCommand('selectAll')
+          await new Promise((resolve) => window.setTimeout(resolve, 30))
+          const selection = window.getSelection()
+          return !!selection && !selection.isCollapsed && selection.toString() === ${JSON.stringify(swapCaseOriginal)}
+        })()`, true)
+        if (!swapCaseSelectionPrepared) throw new Error('Could not select the Swap Case smoke text')
+        const swapCaseCommand = 'swap-case' as MenuEvent
+        win.webContents.send(IPC.menuEvent, swapCaseCommand)
+        await waitForEditorText(swapCaseExpected, swapCaseCommand)
+
+        const focusEditorForHistory = async (action: 'undo' | 'redo'): Promise<void> => {
+          const focused = await win.webContents.executeJavaScript(`(() => {
+            const content = document.querySelector('.cm-content')
+            if (!(content instanceof HTMLElement)) return false
+            content.focus()
+            return document.activeElement === content
+          })()`, true)
+          if (!focused) throw new Error(`Could not focus the editor for Swap Case ${action}`)
+          await new Promise<void>((resolve) => setTimeout(resolve, 20))
+        }
+        await focusEditorForHistory('undo')
+        const undoModifier = process.platform === 'darwin' ? 'meta' as const : 'control' as const
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Z', modifiers: [undoModifier] })
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Z', modifiers: [undoModifier] })
+        await waitForEditorText(swapCaseOriginal, 'undo')
+
+        await focusEditorForHistory('redo')
+        if (process.platform === 'darwin') {
+          win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Z', modifiers: ['meta', 'shift'] })
+          win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Z', modifiers: ['meta', 'shift'] })
+        } else {
+          win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Y', modifiers: ['control'] })
+          win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Y', modifiers: ['control'] })
+        }
+        await waitForEditorText(swapCaseExpected, 'redo')
 
         // With only a caret, removing blank lines applies to the whole document.
         // Preserve the trailing line break while dropping empty and whitespace-only lines.

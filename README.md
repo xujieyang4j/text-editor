@@ -49,7 +49,11 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   only spaces or tabs; if it removes every line, the document becomes empty
 - **File tree sidebar** — starts collapsed (`Ctrl/Cmd+B` to show), opens a folder as a
   workspace, and lazily expands directories
-- **Find & replace**, **text undo/redo**, **multi-cursor**, rectangular selection, bracket matching
+- **Find & replace**, **text undo/redo**, **multi-cursor**, rectangular selection, bracket matching,
+  and multi-selection case conversion. *Edit → Swap Case* (Command Palette: *Edit: Swap Case*)
+  toggles each Unicode character that has case (titlecase becomes lowercase), leaves uncased characters unchanged, processes every
+  non-empty selection independently while preserving its range and direction, or processes the whole
+  document when there is no selection. The operation is undoable in one step
 - **Selection & multi-cursor control** — undo selection (`Ctrl/Cmd+U`), redo selection
   (Windows/Linux `Alt+U`; macOS `Cmd+Shift+U`), and add cursors to line ends (`Shift+Alt+I`);
   skip the current occurrence, remove the last cursor, or add cursors to line starts from the

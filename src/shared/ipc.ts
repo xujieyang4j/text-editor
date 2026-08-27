@@ -913,6 +913,7 @@ export type MenuEvent =
   | 'to-upper-case'
   | 'to-lower-case'
   | 'to-title-case'
+  | 'swap-case'
   | 'join-lines'
   | 'split-selection-lines'
   | 'indent-selection'
