@@ -803,6 +803,26 @@ function createWindow(sessionId = newSessionId()): void {
         const removeBlankLinesCommand = 'remove-blank-lines' as MenuEvent
         win.webContents.send(IPC.menuEvent, removeBlankLinesCommand)
         await waitForEditorText('alpha\nbeta\n', removeBlankLinesCommand)
+
+        const ensureSingleFinalNewlineCommand = 'ensure-single-final-newline' as MenuEvent
+        await replaceEditorText('alpha\n\n\n')
+        win.webContents.send(IPC.menuEvent, ensureSingleFinalNewlineCommand)
+        await waitForEditorText('alpha\n', ensureSingleFinalNewlineCommand)
+        win.webContents.send(IPC.menuEvent, ensureSingleFinalNewlineCommand)
+        await new Promise<void>((resolve) => setTimeout(resolve, 50))
+        await waitForEditorText('alpha\n', ensureSingleFinalNewlineCommand)
+
+        // Keep the command outside the preceding input history group so one
+        // undo proves that adding the final newline is a single transaction.
+        await replaceEditorText('omega')
+        await new Promise<void>((resolve) => setTimeout(resolve, 600))
+        win.webContents.send(IPC.menuEvent, ensureSingleFinalNewlineCommand)
+        await waitForEditorText('omega\n', ensureSingleFinalNewlineCommand)
+        await focusEditorForHistory('undo')
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Z', modifiers: [undoModifier] })
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Z', modifiers: [undoModifier] })
+        await waitForEditorText('omega', 'undo')
+
         await replaceEditorText('beta\nalpha\ngamma\n')
         const navigationDocument = await win.webContents.executeJavaScript(`(() => {
           const tab = document.querySelector('#tab-bar > .tab.active')

@@ -5,6 +5,7 @@ import { score, fuzzyFilter } from '../../out-test/renderer/src/fuzzy.js'
 import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
 import { incrementalChanges, revertIncrementalChange } from '../../out-test/renderer/src/incrementalDiff.js'
 import { caseTransformSpec, transformCaseText } from '../../out-test/renderer/src/caseTransforms.js'
+import { planSingleFinalNewline } from '../../out-test/renderer/src/finalNewline.js'
 import {
   reverseLines,
   removeBlankLines,
@@ -117,6 +118,38 @@ const wholeCaseResult = applyCaseTransform(wholeCaseState, 'swap')
 assert.equal(wholeCaseResult.doc.toString(), 'AbSS')
 assert.deepEqual(wholeCaseResult.selection.main.toJSON(), { anchor: 0, head: 4 })
 assert.equal(caseTransformSpec(EditorState.create({ doc: '123🙂' }), 'swap'), null)
+
+assert.equal(planSingleFinalNewline('', [{ anchor: 0, head: 0 }]), null)
+assert.equal(planSingleFinalNewline('abc\n', [{ anchor: 2, head: 2 }]), null)
+assert.deepEqual(planSingleFinalNewline('abc', [
+  { anchor: 0, head: 0 },
+  { anchor: 3, head: 3 }
+]), {
+  changes: [{ from: 3, to: 3, insert: '\n' }],
+  ranges: [{ anchor: 0, head: 0 }, { anchor: 3, head: 3 }]
+})
+assert.deepEqual(planSingleFinalNewline('abc\n\n\n', [
+  { anchor: 3, head: 6 },
+  { anchor: 6, head: 3 },
+  { anchor: 5, head: 5 }
+]), {
+  changes: [{ from: 4, to: 6, insert: '' }],
+  ranges: [{ anchor: 3, head: 4 }, { anchor: 4, head: 3 }, { anchor: 4, head: 4 }]
+})
+assert.deepEqual(planSingleFinalNewline('abc\n \t', [{ anchor: 6, head: 6 }]), {
+  changes: [{ from: 6, to: 6, insert: '\n' }],
+  ranges: [{ anchor: 6, head: 6 }]
+})
+assert.equal(planSingleFinalNewline('abc\n \t\n', [{ anchor: 7, head: 7 }]), null)
+assert.deepEqual(planSingleFinalNewline('abc\n \t\n\n', [{ anchor: 8, head: 3 }]), {
+  changes: [{ from: 7, to: 8, insert: '' }],
+  ranges: [{ anchor: 7, head: 3 }]
+})
+assert.equal(planSingleFinalNewline('\n', [{ anchor: 1, head: 1 }]), null)
+assert.deepEqual(planSingleFinalNewline('\n\n', [{ anchor: 2, head: 2 }]), {
+  changes: [{ from: 1, to: 2, insert: '' }],
+  ranges: [{ anchor: 1, head: 1 }]
+})
 
 assert.equal(sortLinesAscending('delta\nalpha\ncharlie\nbravo'), 'alpha\nbravo\ncharlie\ndelta')
 assert.equal(sortLinesDescending('alpha\ndelta\nbravo\ncharlie'), 'delta\ncharlie\nbravo\nalpha')

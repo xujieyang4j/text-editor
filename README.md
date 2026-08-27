@@ -47,6 +47,13 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   remaining content keeps its final-newline state. *Unique Lines* matches complete lines exactly and
   stably keeps the first occurrence. *Remove Blank Lines* deletes physical lines that are empty or contain
   only spaces or tabs; if it removes every line, the document becomes empty
+- **Single final newline** — choose *Edit → Ensure Single Final Newline* or run *Edit: Ensure Single
+  Final Newline* from the Command Palette. A non-empty document with no final logical `LF` gets one,
+  while multiple consecutive final `LF`s are collapsed to one; a document that already has exactly one
+  is unchanged, and an empty document stays empty. The command touches only line breaks at the end of
+  the document, never spaces or tabs in the final content line. The logical `LF` is written as the
+  currently selected `LF`, `CRLF`, or `CR` style on save. Selections and cursors remain mapped through
+  the edit, which is undoable in one step
 - **File tree sidebar** — starts collapsed (`Ctrl/Cmd+B` to show), opens a folder as a
   workspace, and lazily expands directories
 - **Find & replace**, **text undo/redo**, **multi-cursor**, rectangular selection, bracket matching,

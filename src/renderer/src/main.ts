@@ -831,6 +831,9 @@ class App {
       case 'trim-trailing-whitespace':
         this.editor.trimTrailingWhitespace()
         break
+      case 'ensure-single-final-newline':
+        this.editor.ensureSingleFinalNewline()
+        break
       case 'convert-indent-spaces':
         this.editor.convertIndentation(false)
         break

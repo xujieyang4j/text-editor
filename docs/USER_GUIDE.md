@@ -291,6 +291,14 @@ whose content has zero length or consists only of spaces and tabs. All five oper
 remaining content's final-newline state; if *Remove Blank Lines* removes every line, the result is an empty
 document.
 
+**Ensure a single final newline.** Choose *Edit → Ensure Single Final Newline* or run *Edit: Ensure
+Single Final Newline* from the Command Palette. In a non-empty document, the command appends one
+logical `LF` when none is present and collapses multiple consecutive final `LF`s to one. A document
+that already ends in exactly one `LF` is unchanged, and an empty document stays empty. It changes only
+line breaks at the end of the document, without removing spaces or tabs from the final content line.
+The logical `LF` is written using the currently selected `LF`, `CRLF`, or `CR` style when the document
+is saved. Selections and cursors remain mapped through any edit, and the change is undoable in one step.
+
 **Reindent selection.** *Edit: Reindent Selection* (`Ctrl/Cmd+Alt+\`) uses the active language's
 local syntax indentation service to recalculate the leading whitespace of selected lines. Unlike
 manual indent/outdent, it is useful after pasting a malformed block or changing braces, Python
@@ -313,6 +321,7 @@ status message.
 | Reverse lines | Edit menu or Command Palette → *Edit: Reverse Lines* |
 | Unique lines | Edit menu or Command Palette → *Edit: Unique Lines* |
 | Remove blank lines | Edit menu or Command Palette → *Edit: Remove Blank Lines* |
+| Ensure single final newline | Edit menu or Command Palette → *Edit: Ensure Single Final Newline* |
 | Select line | `Alt+L` |
 | Select enclosing syntax | `Ctrl/Cmd+I` |
 
@@ -785,6 +794,12 @@ Unicode 字符，将小写转为大写、大写和标题式字符转为小写，
 稳定保留第一次出现。*Remove Blank Lines* 删除内容长度为零或仅由空格和 Tab 组成的物理行。五项操作都会
 保留剩余内容原有的末尾换行状态；若 *Remove Blank Lines* 删除所有行，结果为空文档。
 
+**确保单个末尾换行。** 从 *Edit → Ensure Single Final Newline* 或命令面板中的 *Edit: Ensure Single
+Final Newline* 执行。非空文档末尾没有逻辑 `LF` 时添加一个，有多个连续末尾 `LF` 时收敛为一个；已有
+恰好一个 `LF` 时不变，空文档保持为空。该命令只处理文档末尾的换行符，不会删除末行内容中的空格或
+Tab。内部的逻辑 `LF` 会在保存时按当前选择写为 `LF`、`CRLF` 或 `CR`。选区和光标会随编辑映射，整个
+改动可一次撤销。
+
 **自动重新缩进选区。** *Edit: Reindent Selection*（`Ctrl/Cmd+Alt+\`）利用当前语言的本地语法缩进
 服务重新计算选中行前导空白。它区别于手工增加/减少一级缩进，适合粘贴错位代码或修改括号、Python 块、
 列表、分支后恢复结构。它不会启动 LSP、终端或外部格式化器；语言没有可用缩进信息时，文本保持不变并
@@ -805,6 +820,7 @@ Unicode 字符，将小写转为大写、大写和标题式字符转为小写，
 | 反转行顺序 | “编辑”菜单或命令面板 |
 | 删除重复行 | “编辑”菜单或命令面板 |
 | 删除空白行 | “编辑”菜单或命令面板 |
+| 确保单个末尾换行 | “编辑”菜单或命令面板：*Edit: Ensure Single Final Newline* |
 | 选中整行 | `Alt+L` |
 | 选中所在语法块 | `Ctrl/Cmd+I` |
 

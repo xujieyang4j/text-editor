@@ -115,6 +115,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Join Lines', 'join-lines'),
         item('Revert Current Change', 'revert-current-change'),
         item('Trim Trailing Whitespace', 'trim-trailing-whitespace'),
+        item('Ensure Single Final Newline', 'ensure-single-final-newline'),
         item('Indent Selection', 'indent-selection', 'CmdOrCtrl+]'),
         item('Outdent Selection', 'outdent-selection', 'CmdOrCtrl+['),
         item('Reindent Selection', 'reindent-selection', 'CmdOrCtrl+Alt+\\'),

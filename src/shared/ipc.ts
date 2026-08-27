@@ -905,6 +905,7 @@ export type MenuEvent =
   | 'select-build-system'
   | 'import-sublime-build'
   | 'trim-trailing-whitespace'
+  | 'ensure-single-final-newline'
   | 'convert-indent-spaces'
   | 'convert-indent-tabs'
   | 'convert-eol-lf'

@@ -133,6 +133,7 @@ export const COMMANDS: Command[] = [
   { id: 'import-sublime-build', title: 'Tools: Import Sublime Build System…' },
   { id: 'format-document', title: 'Tools: Format Document' },
   { id: 'trim-trailing-whitespace', title: 'Edit: Trim Trailing Whitespace' },
+  { id: 'ensure-single-final-newline', title: 'Edit: Ensure Single Final Newline' },
   { id: 'convert-indent-spaces', title: 'Edit: Convert Indentation to Spaces' },
   { id: 'convert-indent-tabs', title: 'Edit: Convert Indentation to Tabs' },
   { id: 'convert-eol-lf', title: 'Edit: Convert Line Endings to LF' },

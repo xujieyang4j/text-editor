@@ -86,6 +86,7 @@ import { rulers } from './extensions/rulers.js'
 import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
 import { planLineTransform, type LineTransformMode } from './lineTransforms.js'
 import { caseTransformSpec, type CaseTransformKind } from './caseTransforms.js'
+import { planSingleFinalNewline } from './finalNewline.js'
 import {
   redoSelectionOnly,
   removeMainSelection,
@@ -766,6 +767,32 @@ export class Editor {
   reverseLines(): boolean { return this.transformLines('reverse') }
   uniqueLines(): boolean { return this.transformLines('unique') }
   removeBlankLines(): boolean { return this.transformLines('remove-blank') }
+
+  ensureSingleFinalNewline(): boolean {
+    const { state } = this.view
+    const plan = planSingleFinalNewline(state.doc.toString(), state.selection.ranges)
+    if (!plan) return false
+    const ranges = plan.ranges.map((range, index) => {
+      const original = state.selection.ranges[index]
+      const bidiLevel = original.bidiLevel ?? undefined
+      if (range.anchor === range.head) {
+        return EditorSelection.cursor(range.head, original.assoc, bidiLevel, original.goalColumn)
+      }
+      if (original.undirectional) {
+        return EditorSelection.undirectionalRange(
+          Math.min(range.anchor, range.head),
+          Math.max(range.anchor, range.head)
+        )
+      }
+      return EditorSelection.range(range.anchor, range.head, original.goalColumn, bidiLevel, original.assoc)
+    })
+    this.view.dispatch({
+      changes: plan.changes,
+      selection: EditorSelection.create(ranges, state.selection.mainIndex),
+      userEvent: 'input.ensure-final-newline'
+    })
+    return true
+  }
 
   // ---- Search / navigation ----
 
