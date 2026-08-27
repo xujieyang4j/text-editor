@@ -50,15 +50,27 @@ export interface Doc {
   }>
 }
 
-let counter = 0
+let documentCounter = 0
+
+/** Pick the first available display name without coupling it to document IDs. */
+export function nextUntitledName(existingNames: readonly string[] = []): string {
+  const usedNumbers = new Set<number>()
+  for (const name of existingNames) {
+    const match = /^Untitled-(\d+)$/.exec(name)
+    if (match) usedNumbers.add(Number(match[1]))
+  }
+  let number = 1
+  while (usedNumbers.has(number)) number += 1
+  return `Untitled-${number}`
+}
 
 /** Create a new untitled document. */
-export function createUntitled(): Doc {
-  counter += 1
+export function createUntitled(existingNames: readonly string[] = []): Doc {
+  documentCounter += 1
   return {
-    id: `doc-${counter}`,
+    id: `doc-${documentCounter}`,
     path: null,
-    name: `Untitled-${counter}`,
+    name: nextUntitledName(existingNames),
     pinned: false,
     content: '',
     savedContent: '',
@@ -79,9 +91,9 @@ export function createFromFile(
   encoding: import('../../shared/ipc.js').TextEncoding = 'utf8',
   eol: import('../../shared/ipc.js').LineEnding = 'LF'
 ): Doc {
-  counter += 1
+  documentCounter += 1
   return {
-    id: `doc-${counter}`,
+    id: `doc-${documentCounter}`,
     path,
     name: baseName(path),
     pinned: false,
@@ -122,10 +134,10 @@ export function createFromSession(
     views?: import('../../shared/ipc.js').SessionViewState[]
   }
 ): Doc {
-  counter += 1
+  documentCounter += 1
   const hasDraft = sf.draft !== undefined
   return {
-    id: `doc-${counter}`,
+    id: `doc-${documentCounter}`,
     path: sf.path,
     name: sf.name,
     pinned: sf.pinned === true,

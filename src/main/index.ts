@@ -138,32 +138,34 @@ function createWindow(sessionId = newSessionId()): void {
       try {
         const smokeRoot = process.cwd()
         authorizeWorkspaceForRenderer(win.webContents.id, smokeRoot)
-        const result = await win.webContents.executeJavaScript(`(async () => {
+        const initialUi = await win.webContents.executeJavaScript(`(async () => {
           const deadline = Date.now() + 3_000
           let editor = document.querySelector('.cm-content')
           while (!(editor instanceof HTMLElement) && Date.now() < deadline) {
             await new Promise((resolve) => window.setTimeout(resolve, 25))
             editor = document.querySelector('.cm-content')
           }
-          if (!(editor instanceof HTMLElement)) return { editorAcceptedInput: false, terminalPanelMounted: false, terminalStartDisabledInitially: false, outlinePanelMounted: false }
+          if (!(editor instanceof HTMLElement)) return { editorMounted: false, terminalPanelMounted: false, terminalStartDisabledInitially: false, outlinePanelMounted: false }
           editor.focus()
-          document.execCommand('insertText', false, 'smoke')
           const terminalCommand = [...document.querySelectorAll('button')].find((button) =>
             /^(启动|Start)$/.test(button.textContent?.trim() ?? '')
           )
           const terminalPanel = document.querySelector('.terminal-panel')
           const outlinePanel = document.querySelector('.outline-panel')
           return {
-            editorAcceptedInput: editor.textContent?.includes('smoke') === true,
+            editorMounted: true,
             terminalPanelMounted: terminalPanel instanceof HTMLElement && terminalPanel.classList.contains('hidden'),
             terminalStartAvailableInitially: terminalCommand instanceof HTMLButtonElement && !terminalCommand.disabled,
             outlinePanelMounted: outlinePanel instanceof HTMLElement && outlinePanel.classList.contains('hidden')
           }
         })()`, true)
-        if (!result.editorAcceptedInput) throw new Error('CodeMirror did not receive smoke input')
-        if (!result.terminalPanelMounted || !result.terminalStartAvailableInitially || !result.outlinePanelMounted) {
-          throw new Error(`Terminal or outline panel did not mount with its expected initial state: ${JSON.stringify(result)}`)
+        if (!initialUi.editorMounted) throw new Error('CodeMirror did not mount')
+        if (!initialUi.terminalPanelMounted || !initialUi.terminalStartAvailableInitially || !initialUi.outlinePanelMounted) {
+          throw new Error(`Terminal or outline panel did not mount with its expected initial state: ${JSON.stringify(initialUi)}`)
         }
+        await win.webContents.insertText('smoke')
+        const editorAcceptedInput = await win.webContents.executeJavaScript(`document.querySelector('.cm-content')?.textContent?.includes('smoke') === true`, true)
+        if (!editorAcceptedInput) throw new Error('CodeMirror did not receive smoke input')
         win.webContents.send(IPC.menuEvent, 'new-file' as MenuEvent)
         await new Promise<void>((resolve) => setTimeout(resolve, 80))
         const tabDragResult = await win.webContents.executeJavaScript(`(() => {
@@ -180,6 +182,30 @@ function createWindow(sessionId = newSessionId()): void {
           return after[0] === before[1] && after[1] === before[0]
         })()`, true)
         if (!tabDragResult) throw new Error('Tab drag-and-drop did not reorder the tab bar')
+        const tabCloseResult = await win.webContents.executeJavaScript(`(async () => {
+          const activeClose = document.querySelector('#tab-bar > .tab.active .tab-close')
+          if (!(activeClose instanceof HTMLButtonElement)) return { preservedAdjacentContent: false, freshUntitled: false }
+          activeClose.click()
+          await new Promise((resolve) => window.setTimeout(resolve, 80))
+          const adjacentContent = document.querySelector('.cm-content')?.textContent ?? ''
+          const adjacentLabel = document.querySelector('#tab-bar > .tab.active .tab-label')?.textContent ?? ''
+          const preservedAdjacentContent = adjacentContent.includes('smoke')
+          const remainingClose = document.querySelector('#tab-bar > .tab.active .tab-close')
+          if (!(remainingClose instanceof HTMLButtonElement)) return { preservedAdjacentContent, freshUntitled: false }
+          const originalConfirm = window.confirm
+          window.confirm = () => true
+          remainingClose.click()
+          window.confirm = originalConfirm
+          await new Promise((resolve) => window.setTimeout(resolve, 80))
+          const tabs = [...document.querySelectorAll('#tab-bar > .tab')]
+          const freshUntitled = tabs.length === 1
+            && tabs[0].querySelector('.tab-label')?.textContent === 'Untitled-1'
+            && document.querySelector('.cm-content')?.textContent === ''
+          return { preservedAdjacentContent, adjacentContent, adjacentLabel, freshUntitled }
+        })()`, true)
+        if (!tabCloseResult.preservedAdjacentContent || !tabCloseResult.freshUntitled) {
+          throw new Error(`Tab close lifecycle failed: ${JSON.stringify(tabCloseResult)}`)
+        }
         // The default profile has outline hidden; this explicit event verifies
         // its menu path without altering normal user settings (smoke userData
         // is isolated above).

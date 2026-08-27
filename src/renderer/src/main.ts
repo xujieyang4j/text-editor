@@ -78,6 +78,8 @@ interface EditorGroup {
   editor: Editor
   docIds: string[]
   activeId: string | null
+  /** Document whose state is currently mounted in this group's editor. */
+  renderedDocId: string | null
 }
 
 /**
@@ -345,7 +347,8 @@ class App {
       editorArea: this.primaryEditorArea,
       editor: this.primaryEditor,
       docIds: [],
-      activeId: null
+      activeId: null,
+      renderedDocId: null
     }]
     this.primaryGroupRoot.classList.add('active')
     this.primaryGroupRoot.addEventListener('mousedown', () => this.focusGroup(0))
@@ -405,32 +408,37 @@ class App {
       for (const root of sessionFolders) await this.addFolderPath(root, this.folders.length === 0)
     }
 
-    for (const sf of session.openFiles) {
+    // Layout indexes refer to the original session array. Keep that mapping
+    // even when an unreadable, binary or oversized entry has to be skipped.
+    const restoredBySessionIndex: Array<Doc | undefined> = new Array(session.openFiles.length)
+    for (const [sessionIndex, sf] of session.openFiles.entries()) {
       try {
         // For file-backed buffers, re-read the current on-disk text so a clean
         // buffer reflects external edits; the draft (if any) is layered on top.
         // Untitled buffers have no path, so disk content is empty.
         const opened = sf.path ? await window.editor.openPath(sf.path) : null
         if (opened?.isBinary || opened?.isTooLarge) continue
-        this.docs.push(createFromSession(opened?.content ?? '', {
+        const restored = createFromSession(opened?.content ?? '', {
           ...sf,
           encoding: opened?.encoding ?? sf.encoding,
           eol: opened?.eol ?? sf.eol
-        }))
+        })
+        this.docs.push(restored)
+        restoredBySessionIndex[sessionIndex] = restored
       } catch {
         // File was moved/deleted since last run. If we still hold the user's
         // unsaved draft, keep it as an untitled-style buffer rather than lose
         // their work; otherwise skip.
         if (sf.draft !== undefined) {
-          this.docs.push(
-            createFromSession('', {
-              ...sf,
-              path: null,
-              name: `${sf.name} (recovered)`,
-              encoding: sf.encoding ?? 'utf8',
-              eol: sf.eol ?? 'LF'
-            })
-          )
+          const restored = createFromSession('', {
+            ...sf,
+            path: null,
+            name: `${sf.name} (recovered)`,
+            encoding: sf.encoding ?? 'utf8',
+            eol: sf.eol ?? 'LF'
+          })
+          this.docs.push(restored)
+          restoredBySessionIndex[sessionIndex] = restored
         }
       }
     }
@@ -444,18 +452,19 @@ class App {
         const group = this.groups[groupIndex]
         if (!group) continue
         group.docIds = savedGroup.docIndexes
-          .map((index) => this.docs[index]?.id)
+          .map((index) => restoredBySessionIndex[index]?.id)
           .filter((id): id is string => !!id)
         if (group.docIds.length === 0) group.docIds = [this.docs[0].id]
-        group.activeId = group.docIds[Math.max(0, Math.min(savedGroup.activeIndex, group.docIds.length - 1))]
+        const savedActiveId = restoredBySessionIndex[savedGroup.docIndexes[savedGroup.activeIndex]]?.id
+        group.activeId = savedActiveId && group.docIds.includes(savedActiveId) ? savedActiveId : group.docIds[0]
       }
       this.activeGroup = Math.max(0, Math.min(layout.activeGroup, this.groups.length - 1))
       await this.activate(this.groups[this.activeGroup].activeId ?? this.docs[0].id, this.activeGroup)
     } else {
       const first = this.groups[0]
       first.docIds = this.docs.map((doc) => doc.id)
-      const idx = session.activeIndex >= 0 && session.activeIndex < this.docs.length ? session.activeIndex : 0
-      await this.activate(this.docs[idx].id, 0)
+      const active = restoredBySessionIndex[session.activeIndex] ?? this.docs[0]
+      await this.activate(active.id, 0)
     }
     this.organizePinnedTabs()
     this.renderTabs()
@@ -517,7 +526,7 @@ class App {
     }
     switch (event) {
       case 'new-file':
-        this.addDoc(createUntitled())
+        this.addDoc(createUntitled(this.docs.filter((doc) => doc.path === null).map((doc) => doc.name)))
         break
       case 'new-window':
         void window.editor.newWindow()
@@ -1108,6 +1117,7 @@ class App {
       if (group.docIds.length === 0 && active) {
         group.docIds.push(active.id)
         group.activeId = active.id
+        group.renderedDocId = null
       }
     }
 
@@ -1142,7 +1152,8 @@ class App {
       editorArea: area,
       editor: undefined as unknown as Editor,
       docIds: [],
-      activeId: null
+      activeId: null,
+      renderedDocId: null
     }
     group.editor = new Editor(
       host,
@@ -1184,7 +1195,7 @@ class App {
     if (!group) return
     const changed = this.activeGroup !== index
     for (const candidate of this.groups) candidate.root.classList.toggle('active', candidate.id === index)
-    if (changed && group.activeId) void this.activate(group.activeId, index)
+    if (group.activeId && (changed || group.renderedDocId !== group.activeId)) void this.activate(group.activeId, index)
   }
 
   private moveActiveToNextGroup(clone: boolean): void {
@@ -1199,8 +1210,15 @@ class App {
     if (!target.docIds.includes(doc.id)) target.docIds.push(doc.id)
     target.activeId = doc.id
     if (!clone) {
+      doc.content = source.editor.getContent()
+      doc.editorState = source.editor.getState()
+      doc.groupStates.set(source.id, source.editor.getState())
+      doc.viewStates.set(source.id, source.editor.getViewState(source.id))
       source.docIds = source.docIds.filter((id) => id !== doc.id)
-      if (source.activeId === doc.id) source.activeId = source.docIds[0] ?? null
+      if (source.activeId === doc.id) {
+        source.activeId = source.docIds[0] ?? null
+        source.renderedDocId = null
+      }
     }
     this.focusGroup(targetIndex)
     this.renderTabs()
@@ -1562,7 +1580,7 @@ class App {
   /** Persist only serialisable selection/scroll data; undo/folds stay in memory. */
   private captureViewState(groupId: number): void {
     const group = this.groups[groupId]
-    const doc = group?.activeId ? this.docs.find((candidate) => candidate.id === group.activeId) : undefined
+    const doc = group?.renderedDocId ? this.docs.find((candidate) => candidate.id === group.renderedDocId) : undefined
     if (!group || !doc) return
     doc.viewStates.set(groupId, group.editor.getViewState(groupId))
     this.scheduleSessionSave()
@@ -1570,22 +1588,27 @@ class App {
 
   /** Switch a group to a document, preserving the previous group's editor state. */
   private async activate(id: string, groupIndex = this.activeGroup): Promise<void> {
-    const previousGroup = this.groups[this.activeGroup]
-    const previousId = previousGroup?.activeId
-    const previous = previousId ? this.docs.find((doc) => doc.id === previousId) : undefined
-    if (previous && previousGroup) {
-      previous.content = previousGroup.editor.getContent()
-      previous.editorState = previousGroup.editor.getState()
-      previous.groupStates.set(previousGroup.id, previousGroup.editor.getState())
-      previous.viewStates.set(previousGroup.id, previousGroup.editor.getViewState(previousGroup.id))
+    const sourceGroup = this.groups[this.activeGroup]
+    const targetGroup = this.groups[groupIndex]
+    // Changing focus between groups must not snapshot the source editor as the
+    // target group's selected tab. Each editor keeps its own rendered ID.
+    for (const candidate of sourceGroup === targetGroup ? [targetGroup] : [sourceGroup, targetGroup]) {
+      const previousId = candidate?.renderedDocId
+      const previous = previousId ? this.docs.find((doc) => doc.id === previousId) : undefined
+      if (!previous || !candidate) continue
+      previous.content = candidate.editor.getContent()
+      previous.editorState = candidate.editor.getState()
+      previous.groupStates.set(candidate.id, candidate.editor.getState())
+      previous.viewStates.set(candidate.id, candidate.editor.getViewState(candidate.id))
     }
 
-    const group = this.groups[groupIndex]
+    const group = targetGroup
     const doc = this.docs.find((candidate) => candidate.id === id)
     if (!group || !doc) return
     if (!group.docIds.includes(id)) group.docIds.push(id)
     this.activeGroup = groupIndex
     group.activeId = id
+    group.renderedDocId = id
     this.hideFindResults()
     const activation = ++this.languageActivation
     group.editor.setDocument(doc.content, doc.groupStates.get(groupIndex) ?? doc.editorState)
@@ -1631,14 +1654,14 @@ class App {
   /** Update the active doc's cached content and refresh the dirty indicator. */
   private handleDocChange(groupIndex = this.activeGroup): void {
     const group = this.groups[groupIndex]
-    const doc = group?.activeId ? this.docs.find((candidate) => candidate.id === group.activeId) : undefined
+    const doc = group?.renderedDocId ? this.docs.find((candidate) => candidate.id === group.renderedDocId) : undefined
     if (!doc) return
     doc.content = group.editor.getContent()
     doc.editorState = group.editor.getState()
     doc.groupStates.set(groupIndex, group.editor.getState())
     doc.viewStates.set(groupIndex, group.editor.getViewState(groupIndex))
     for (const sibling of this.groups) {
-      if (sibling.id !== groupIndex && sibling.activeId === doc.id && sibling.editor.getContent() !== doc.content) {
+      if (sibling.id !== groupIndex && sibling.renderedDocId === doc.id && sibling.editor.getContent() !== doc.content) {
         this.syncingGroupContent = true
         try {
           sibling.editor.replaceContent(doc.content)
@@ -2175,13 +2198,37 @@ class App {
       void this.activate(existing.id, this.activeGroup)
       return
     }
-    // Replace a single pristine untitled buffer instead of stacking tabs.
-    if (this.docs.length === 1 && this.docs[0].path === null && !isDirty(this.docs[0])) {
-      const replacement = this.docs[0].id
-      this.docs = []
-      for (const group of this.groups) group.docIds = group.docIds.filter((id) => id !== replacement)
+    // Replace a pristine placeholder only when it is local to the active
+    // group; shared placeholders must remain valid in their other groups.
+    const currentGroup = this.groups[this.activeGroup]
+    const currentDoc = currentGroup?.activeId
+      ? this.docs.find((doc) => doc.id === currentGroup.activeId)
+      : undefined
+    const placeholder = currentDoc?.path === null
+      && !isDirty(currentDoc)
+      && currentDoc.content.length === 0
+      && /^Untitled-\d+$/.test(currentDoc.name)
+      && !currentDoc.pinned
+      && currentGroup.docIds.length === 1
+      && this.groups.every((candidate) => candidate.id === currentGroup.id || !candidate.docIds.includes(currentDoc.id))
+      ? currentDoc
+      : null
+    if (!placeholder) {
+      this.addDoc(createFromFile(path, content, encoding, eol))
+      return
     }
-    this.addDoc(createFromFile(path, content, encoding, eol))
+    const opened = createFromFile(path, content, encoding, eol)
+    const group = currentGroup
+    const index = group.docIds.indexOf(placeholder.id)
+    this.docs.push(opened)
+    if (index >= 0) group.docIds.splice(index, 1, opened.id)
+    else group.docIds.push(opened.id)
+    if (group.activeId === placeholder.id) group.activeId = null
+    if (!this.groups.some((candidate) => candidate.docIds.includes(placeholder.id))) {
+      this.docs = this.docs.filter((doc) => doc.id !== placeholder.id)
+    }
+    void this.activate(opened.id, this.activeGroup)
+    this.scheduleSessionSave()
   }
 
   /** Open a workspace folder via dialog and populate the file tree. */
@@ -3067,27 +3114,40 @@ class App {
     const group = this.groups[groupIndex]
     if (!doc || !group) return
     if (confirmClose && isDirty(doc) && !confirm(`"${doc.name}" has unsaved changes. Close anyway?`)) return
+    const wasActive = group.activeId === id
+    const wasRendered = group.renderedDocId === id
+    if (wasRendered) {
+      // Capture the closing view before clearing activeId. The subsequent
+      // activation must not mistake the old editor text for the next tab.
+      doc.content = group.editor.getContent()
+      doc.editorState = group.editor.getState()
+      doc.groupStates.set(group.id, group.editor.getState())
+      doc.viewStates.set(group.id, group.editor.getViewState(group.id))
+    }
     if (doc.path && !this.closedStack.includes(doc.path)) this.closedStack.push(doc.path)
     this.selectedTabIds.delete(id)
 
     const index = group.docIds.indexOf(id)
     group.docIds = group.docIds.filter((docId) => docId !== id)
-    if (group.activeId === id) group.activeId = group.docIds[Math.max(0, Math.min(index, group.docIds.length - 1))] ?? null
+    const nextId = group.docIds[Math.max(0, Math.min(index, group.docIds.length - 1))] ?? null
+    if (wasActive) group.activeId = null
+    if (wasRendered) group.renderedDocId = null
 
     const stillVisible = this.groups.some((candidate) => candidate.docIds.includes(id))
     if (!stillVisible) {
       this.docs = this.docs.filter((candidate) => candidate.id !== id)
       this.selectedTabIds.delete(id)
     }
-    if (this.docs.length === 0) {
-      const fresh = createUntitled()
+    let replacementId = nextId
+    if (group.docIds.length === 0) {
+      const fresh = createUntitled(this.docs.filter((candidate) => candidate.path === null).map((candidate) => candidate.name))
       this.docs.push(fresh)
-      this.groups[0].docIds = [fresh.id]
-      this.groups[0].activeId = fresh.id
+      group.docIds = [fresh.id]
+      replacementId = fresh.id
     }
-    if (groupIndex === this.activeGroup) {
-      const next = group.activeId ?? this.docs[0].id
-      void this.activate(next, groupIndex)
+    if (wasActive && replacementId) group.activeId = replacementId
+    if (wasRendered && replacementId && groupIndex === this.activeGroup) {
+      void this.activate(replacementId, groupIndex)
     }
     this.scheduleSessionSave()
   }
@@ -3996,7 +4056,7 @@ class App {
   private async persistSessionNow(): Promise<void> {
     // Keep all group-local active buffers current before snapshotting.
     for (const group of this.groups) {
-      const doc = group.activeId ? this.docs.find((candidate) => candidate.id === group.activeId) : undefined
+      const doc = group.renderedDocId ? this.docs.find((candidate) => candidate.id === group.renderedDocId) : undefined
       if (doc) {
         doc.content = group.editor.getContent()
         doc.editorState = group.editor.getState()
@@ -4005,38 +4065,36 @@ class App {
       }
     }
 
-    const openFiles: SessionFile[] = this.docs
-      // Drop pristine untitled buffers (no path, no content) — nothing to keep.
-      .filter((d) => d.path !== null || d.content.length > 0)
-      .map((d) => {
-        const keepDraft = isDirty(d) || (d.path === null && d.content.length > 0)
-        return {
-          path: d.path,
-          name: d.name,
-          ...(d.pinned ? { pinned: true } : {}),
-          language: d.language,
-          languageLocked: d.languageLocked,
-          encoding: d.encoding,
-          eol: d.eol,
-          ...(d.bookmarks.length > 0 ? { bookmarks: d.bookmarks } : {}),
-          ...(d.viewStates.size > 0 ? { views: [...d.viewStates.values()] } : {}),
-          ...(keepDraft ? { draft: d.content } : {})
-        }
-      })
-
-    const indexForId = (id: string): number => {
-      const doc = this.docs.find((candidate) => candidate.id === id)
-      return doc ? openFiles.findIndex((file) => file.path === doc.path && file.name === doc.name) : -1
-    }
+    // Drop pristine untitled buffers (no path, no content) — nothing to keep.
+    const persistedDocs = this.docs.filter((doc) => doc.path !== null || doc.content.length > 0)
+    const idToIndex = new Map(persistedDocs.map((doc, index) => [doc.id, index]))
+    const openFiles: SessionFile[] = persistedDocs.map((d) => {
+      const keepDraft = isDirty(d) || (d.path === null && d.content.length > 0)
+      return {
+        path: d.path,
+        name: d.name,
+        ...(d.pinned ? { pinned: true } : {}),
+        language: d.language,
+        languageLocked: d.languageLocked,
+        encoding: d.encoding,
+        eol: d.eol,
+        ...(d.bookmarks.length > 0 ? { bookmarks: d.bookmarks } : {}),
+        ...(d.viewStates.size > 0 ? { views: [...d.viewStates.values()] } : {}),
+        ...(keepDraft ? { draft: d.content } : {})
+      }
+    })
     const activeDoc = this.active
-    const activeIndex = activeDoc ? Math.max(0, indexForId(activeDoc.id)) : 0
+    const activeIndex = activeDoc ? idToIndex.get(activeDoc.id) ?? 0 : 0
     const layout: SessionLayout = {
       kind: this.layoutKind,
       activeGroup: this.activeGroup,
-      groups: this.groups.map((group) => ({
-        docIndexes: group.docIds.map(indexForId).filter((index) => index >= 0),
-        activeIndex: Math.max(0, group.docIds.indexOf(group.activeId ?? ''))
-      }))
+      groups: this.groups.map((group) => {
+        const persistedIds = group.docIds.filter((id) => idToIndex.has(id))
+        return {
+          docIndexes: persistedIds.map((id) => idToIndex.get(id)!),
+          activeIndex: Math.max(0, persistedIds.indexOf(group.activeId ?? ''))
+        }
+      })
     }
 
     const session: Session = { openFiles, activeIndex, folder: this.folder, folders: this.folders, layout }
