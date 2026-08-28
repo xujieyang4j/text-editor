@@ -85,6 +85,7 @@ import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { rulers } from './extensions/rulers.js'
 import { highlightTrailingWhitespace } from './extensions/trailingWhitespace.js'
 import { planLineTransform, type LineTransformMode } from './lineTransforms.js'
+import { planParagraphTransform, type ParagraphTransformMode } from './paragraphTransforms.js'
 import { caseTransformSpec, type CaseTransformKind } from './caseTransforms.js'
 import { planSingleFinalNewline } from './finalNewline.js'
 import {
@@ -187,6 +188,31 @@ function colorSchemeTheme(scheme: ColorScheme): Extension {
     '.cm-activeLine': { backgroundColor: '#44475a' }
   }, { dark: true })
   return oneDark
+}
+
+interface TextSelectionPlan {
+  readonly anchor: number
+  readonly head: number
+}
+
+function reconstructSelections(
+  originals: readonly SelectionRange[],
+  ranges: readonly TextSelectionPlan[]
+): SelectionRange[] {
+  return ranges.map((range, index) => {
+    const original = originals[index]
+    const bidiLevel = original?.bidiLevel ?? undefined
+    if (range.anchor === range.head) {
+      return EditorSelection.cursor(range.head, original?.assoc, bidiLevel, original?.goalColumn)
+    }
+    if (original?.undirectional) {
+      return EditorSelection.undirectionalRange(
+        Math.min(range.anchor, range.head),
+        Math.max(range.anchor, range.head)
+      )
+    }
+    return EditorSelection.range(range.anchor, range.head, original?.goalColumn, bidiLevel, original?.assoc)
+  })
 }
 
 /** Base set of extensions shared by every document. */
@@ -750,20 +776,7 @@ export class Editor {
     const { state } = this.view
     const plan = planLineTransform(state.doc.toString(), state.selection.ranges, mode)
     if (plan.changes.length === 0) return false
-    const ranges = plan.ranges.map((range, index) => {
-      const original = state.selection.ranges[index]
-      const bidiLevel = original.bidiLevel ?? undefined
-      if (range.anchor === range.head) {
-        return EditorSelection.cursor(range.head, original.assoc, bidiLevel, original.goalColumn)
-      }
-      if (original.undirectional) {
-        return EditorSelection.undirectionalRange(
-          Math.min(range.anchor, range.head),
-          Math.max(range.anchor, range.head)
-        )
-      }
-      return EditorSelection.range(range.anchor, range.head, original.goalColumn, bidiLevel, original.assoc)
-    })
+    const ranges = reconstructSelections(state.selection.ranges, plan.ranges)
     this.view.dispatch({
       changes: plan.changes,
       selection: EditorSelection.create(ranges, state.selection.mainIndex),
@@ -778,24 +791,36 @@ export class Editor {
   uniqueLines(): boolean { return this.transformLines('unique') }
   removeBlankLines(): boolean { return this.transformLines('remove-blank') }
 
+  private transformParagraph(mode: ParagraphTransformMode, column = 80): boolean {
+    const { state } = this.view
+    const plan = planParagraphTransform(
+      state.doc.toString(),
+      state.selection.ranges,
+      mode,
+      { column, tabWidth: this.tabWidth }
+    )
+    if (plan.changes.length === 0) return false
+    this.view.dispatch({
+      changes: plan.changes,
+      selection: EditorSelection.create(reconstructSelections(state.selection.ranges, plan.ranges), state.selection.mainIndex),
+      userEvent: mode === 'wrap' ? 'input.wrap-paragraph' : 'input.unwrap-paragraph'
+    })
+    return true
+  }
+
+  wrapParagraph(column = 80): boolean {
+    return this.transformParagraph('wrap', column)
+  }
+
+  unwrapParagraph(): boolean {
+    return this.transformParagraph('unwrap')
+  }
+
   ensureSingleFinalNewline(): boolean {
     const { state } = this.view
     const plan = planSingleFinalNewline(state.doc.toString(), state.selection.ranges)
     if (!plan) return false
-    const ranges = plan.ranges.map((range, index) => {
-      const original = state.selection.ranges[index]
-      const bidiLevel = original.bidiLevel ?? undefined
-      if (range.anchor === range.head) {
-        return EditorSelection.cursor(range.head, original.assoc, bidiLevel, original.goalColumn)
-      }
-      if (original.undirectional) {
-        return EditorSelection.undirectionalRange(
-          Math.min(range.anchor, range.head),
-          Math.max(range.anchor, range.head)
-        )
-      }
-      return EditorSelection.range(range.anchor, range.head, original.goalColumn, bidiLevel, original.assoc)
-    })
+    const ranges = reconstructSelections(state.selection.ranges, plan.ranges)
     this.view.dispatch({
       changes: plan.changes,
       selection: EditorSelection.create(ranges, state.selection.mainIndex),

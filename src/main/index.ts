@@ -653,6 +653,69 @@ function createWindow(sessionId = newSessionId()): void {
             throw new Error(`${command} did not produce the expected editor text: ${JSON.stringify({ expected, result })}`)
           }
         }
+        const paragraphOriginal = 'alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha\n\n// alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha'
+        const paragraphWrapped = 'alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha\nalpha alpha alpha\n\n// alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha\n// alpha alpha alpha'
+        const selectAllParagraphText = async (expected: string): Promise<void> => {
+          const selected = await win.webContents.executeJavaScript(`(async () => {
+            const content = document.querySelector('.cm-content')
+            if (!(content instanceof HTMLElement)) return { ok: false, selected: '' }
+            content.focus()
+            document.execCommand('selectAll')
+            await new Promise((resolve) => window.setTimeout(resolve, 30))
+            const selection = window.getSelection()
+            return {
+              ok: !!selection && !selection.isCollapsed,
+              selected: selection?.toString() ?? ''
+            }
+          })()`, true)
+          if (!selected.ok || selected.selected !== expected) {
+            throw new Error(`Could not select paragraph smoke text: ${JSON.stringify({ expected, selected })}`)
+          }
+        }
+        const undoParagraphTransform = async (expected: string): Promise<void> => {
+          const focused = await win.webContents.executeJavaScript(`(() => {
+            const content = document.querySelector('.cm-content')
+            if (!(content instanceof HTMLElement)) return false
+            content.focus()
+            return document.activeElement === content
+          })()`, true)
+          if (!focused) throw new Error('Could not focus the editor to undo a paragraph transform')
+          const modifier = process.platform === 'darwin' ? 'meta' as const : 'control' as const
+          win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Z', modifiers: [modifier] })
+          win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Z', modifiers: [modifier] })
+          await waitForEditorText(expected, 'undo')
+        }
+
+        // Reflow two independently prefixed paragraphs through the native-menu
+        // event path. Exact physical lines prove this is hard wrapping, not the
+        // editor's soft word-wrap setting, and one undo must restore both blocks.
+        await replaceEditorText(paragraphOriginal)
+        await new Promise<void>((resolve) => setTimeout(resolve, 650))
+        await selectAllParagraphText(paragraphOriginal)
+        const wrapParagraphCommand = 'wrap-paragraph-80' as MenuEvent
+        win.webContents.send(IPC.menuEvent, wrapParagraphCommand)
+        await waitForEditorText(paragraphWrapped, wrapParagraphCommand)
+        const paragraphWrapDirty = await win.webContents.executeJavaScript(
+          `(document.querySelector('#tab-bar > .tab.active .tab-dirty')?.textContent ?? '') === '●'`,
+          true
+        )
+        if (!paragraphWrapDirty) throw new Error('Wrapping paragraphs did not mark the active tab dirty')
+        await undoParagraphTransform(paragraphOriginal)
+
+        // Exercise Electron's real Alt+Q accelerator before using Unwrap via
+        // the explicit menu-event channel below.
+        await new Promise<void>((resolve) => setTimeout(resolve, 650))
+        await selectAllParagraphText(paragraphOriginal)
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Q', modifiers: ['alt'] })
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Q', modifiers: ['alt'] })
+        await waitForEditorText(paragraphWrapped, wrapParagraphCommand)
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 650))
+        await selectAllParagraphText(paragraphWrapped)
+        const unwrapParagraphCommand = 'unwrap-paragraph' as MenuEvent
+        win.webContents.send(IPC.menuEvent, unwrapParagraphCommand)
+        await waitForEditorText(paragraphOriginal, unwrapParagraphCommand)
+        await undoParagraphTransform(paragraphWrapped)
 
         // Exercise the CodeMirror search panel through the same menu-event
         // path used by Electron's native menu, including both wrap directions.

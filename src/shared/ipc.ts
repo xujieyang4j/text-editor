@@ -943,6 +943,8 @@ export type MenuEvent =
   | 'to-title-case'
   | 'swap-case'
   | 'join-lines'
+  | 'wrap-paragraph-80'
+  | 'unwrap-paragraph'
   | 'split-selection-lines'
   | 'indent-selection'
   | 'outdent-selection'

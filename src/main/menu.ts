@@ -113,6 +113,8 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Title Case', 'to-title-case'),
         item('Swap Case', 'swap-case'),
         item('Join Lines', 'join-lines'),
+        item('Wrap Paragraph at 80 Columns', 'wrap-paragraph-80', 'Alt+Q'),
+        item('Unwrap Paragraph', 'unwrap-paragraph'),
         item('Revert Current Change', 'revert-current-change'),
         item('Trim Trailing Whitespace', 'trim-trailing-whitespace'),
         item('Ensure Single Final Newline', 'ensure-single-final-newline'),

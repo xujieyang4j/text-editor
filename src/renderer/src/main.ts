@@ -880,6 +880,20 @@ class App {
             : 'No adjacent lines to join'
         }
         break
+      case 'wrap-paragraph-80':
+        if (!this.editor.wrapParagraph(80)) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '没有可重排的段落'
+            : 'No paragraph could be wrapped'
+        }
+        break
+      case 'unwrap-paragraph':
+        if (!this.editor.unwrapParagraph()) {
+          this.statusSelection.textContent = this.settings.locale === 'zh-CN'
+            ? '没有可取消换行的段落'
+            : 'No paragraph could be unwrapped'
+        }
+        break
       case 'split-selection-lines':
         if (!this.editor.splitSelectionIntoLines()) {
           this.statusSelection.textContent = this.settings.locale === 'zh-CN'
@@ -4009,7 +4023,18 @@ class App {
   }
 
   private isRecordableMacroEvent(event: MenuEvent): boolean {
-    return ['toggle-comment', 'move-line-up', 'move-line-down', 'copy-line-up', 'copy-line-down', 'delete-line', 'duplicate-selection', 'sort-lines'].includes(event)
+    return [
+      'toggle-comment',
+      'move-line-up',
+      'move-line-down',
+      'copy-line-up',
+      'copy-line-down',
+      'delete-line',
+      'duplicate-selection',
+      'sort-lines',
+      'wrap-paragraph-80',
+      'unwrap-paragraph'
+    ].includes(event)
   }
 
   /** Capture low-level editor edits so a macro can replay transformations, not a document snapshot. */

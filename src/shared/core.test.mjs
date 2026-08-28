@@ -26,6 +26,17 @@ import {
   uniqueLines,
   wouldTransformLines
 } from '../../out-test/renderer/src/lineTransforms.js'
+import {
+  classifyParagraphLine,
+  findParagraphBlocks,
+  measurePrefixColumns,
+  paragraphTransformEdits,
+  planParagraphTransform,
+  sanitizeParagraphTransformOptions,
+  splitParagraphTokens,
+  unwrapParagraphBlock,
+  wrapParagraphBlock
+} from '../../out-test/renderer/src/paragraphTransforms.js'
 import { NavigationHistory, NavigationIntentEpoch, resolveGotoLine } from '../../out-test/renderer/src/navigationHistory.js'
 import { createFromFile, createFromSession, createUntitled, effectiveDocumentEol, isCurrentDocumentSaveConflict, isDirty, nextUntitledName, reconcileReloadedDocumentEol, reconcileSavedDocumentEol } from '../../out-test/renderer/src/documents.js'
 import { JsonNumber, parseLosslessJson, stringifyLosslessJson } from '../../out-test/shared/losslessJson.js'
@@ -507,6 +518,221 @@ assert.deepEqual(planLineTransform('a\n \n ', [
   { anchor: 2, head: 3 },
   { anchor: 4, head: 5 }
 ], 'remove-blank').changes, [{ from: 1, to: 5, insert: '' }])
+
+assert.equal(measurePrefixColumns('\t# '), 10)
+assert.equal(measurePrefixColumns('\t# ', 4), 6)
+assert.deepEqual(sanitizeParagraphTransformOptions({ column: 0, tabWidth: -1 }), { column: 80, tabWidth: 8 })
+assert.deepEqual(sanitizeParagraphTransformOptions({ column: 72.9, tabWidth: 4.2 }), { column: 72, tabWidth: 4 })
+assert.deepEqual(splitParagraphTokens(' alpha\tbeta  gamma '), ['alpha', 'beta', 'gamma'])
+assert.deepEqual(classifyParagraphLine('  # heading').marker, '#')
+assert.deepEqual(classifyParagraphLine('  #heading').marker, '')
+assert.equal(classifyParagraphLine('  //').isBoundary, true)
+assert.equal(classifyParagraphLine('  /// note').marker, '///')
+
+const discoveredParagraphs = findParagraphBlocks(
+  'alpha beta\nstill same\n\n  indented block\n  stays grouped\n# title one\n# title two\n// note\n// more\n#invalid marker line\n'
+)
+assert.deepEqual(
+  discoveredParagraphs.map((block) => ({ indent: block.indent, marker: block.marker, text: block.text })),
+  [
+    { indent: '', marker: '', text: 'alpha beta\nstill same' },
+    { indent: '  ', marker: '', text: '  indented block\n  stays grouped' },
+    { indent: '', marker: '#', text: '# title one\n# title two' },
+    { indent: '', marker: '//', text: '// note\n// more' },
+    { indent: '', marker: '', text: '#invalid marker line' }
+  ]
+)
+
+const commentBlock = findParagraphBlocks('// alpha beta gamma\nafter boundary\n// one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen\n// tail')[2]
+assert.equal(commentBlock.marker, '//')
+assert.equal(unwrapParagraphBlock(commentBlock), '// one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen tail')
+
+const wrappedComment = wrapParagraphBlock(commentBlock, { column: 80 })
+assert.equal(
+  wrappedComment,
+  '// one two three four five six seven eight nine ten eleven twelve thirteen\n// fourteen fifteen sixteen tail'
+)
+
+const wrappedPlainPlan = planParagraphTransform(
+  'alpha   beta\ngamma\ndelta\n\nkeep outside\n',
+  [{ anchor: 0, head: 0 }],
+  'wrap'
+)
+assert.deepEqual(wrappedPlainPlan, {
+  changes: [{ from: 0, to: 24, insert: 'alpha beta gamma delta' }],
+  ranges: [{ anchor: 0, head: 0 }]
+})
+
+const wrapBoundaryText = `${'x'.repeat(78)} y z\n`
+assert.deepEqual(
+  planParagraphTransform(wrapBoundaryText, [{ anchor: 0, head: 0 }], 'wrap').changes,
+  [{ from: 0, to: wrapBoundaryText.length - 1, insert: `${'x'.repeat(78)} y\nz` }]
+)
+
+const longToken = 'a'.repeat(90)
+assert.deepEqual(
+  planParagraphTransform(`${longToken} tail\n`, [{ anchor: 0, head: 0 }], 'wrap').changes,
+  [{ from: 0, to: longToken.length + 5, insert: `${longToken}\ntail` }]
+)
+
+const unicodeWrapPlan = planParagraphTransform(
+  `${'🙂'.repeat(78)} aa bb\n`,
+  [{ anchor: 0, head: 0 }],
+  'wrap'
+)
+assert.deepEqual(unicodeWrapPlan.changes, [
+  { from: 0, to: 162, insert: `${'🙂'.repeat(78)}\naa bb` }
+])
+
+const prefixedWrapPlan = planParagraphTransform(
+  '# alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau\n',
+  [{ anchor: 2, head: 2 }],
+  'wrap'
+)
+assert.deepEqual(prefixedWrapPlan.changes, [
+  {
+    from: 0,
+    to: 99,
+    insert: '# alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi\n# omicron pi rho sigma tau'
+  }
+])
+
+const tabIndentedPlan = planParagraphTransform(
+  '\talpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau\n',
+  [{ anchor: 2, head: 2 }],
+  'wrap',
+  { tabWidth: 4 }
+)
+assert.deepEqual(tabIndentedPlan.changes, [
+  {
+    from: 0,
+    to: 98,
+    insert: '\talpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi\n\tomicron pi rho sigma tau'
+  }
+])
+
+const unwrapPlan = planParagraphTransform(
+  '# alpha beta\n# gamma   delta\n#\tepsilon\n\nkeep\n',
+  [{ anchor: 5, head: 5 }],
+  'unwrap'
+)
+assert.deepEqual(unwrapPlan.changes, [
+  { from: 0, to: 38, insert: '# alpha beta gamma delta epsilon' }
+])
+assert.deepEqual(unwrapPlan.ranges, [{ anchor: 5, head: 5 }])
+
+const codeLikeStillTransforms = planParagraphTransform(
+  'const x = 1;\nconst y = 2;\n',
+  [{ anchor: 0, head: 0 }],
+  'unwrap'
+)
+assert.deepEqual(codeLikeStillTransforms.changes, [
+  { from: 0, to: 25, insert: 'const x = 1; const y = 2;' }
+])
+
+const selectionAcrossParagraphs = planParagraphTransform(
+  'alpha beta\ngamma delta\n\n# one two\n# three four\n\nend\n',
+  [{ anchor: 1, head: 45 }],
+  'unwrap'
+)
+assert.deepEqual(selectionAcrossParagraphs.changes, [
+  { from: 0, to: 22, insert: 'alpha beta gamma delta' },
+  { from: 24, to: 46, insert: '# one two three four' }
+])
+assert.deepEqual(selectionAcrossParagraphs.ranges, [{ anchor: 1, head: 43 }])
+
+const excludeNextLineAtStart = planParagraphTransform(
+  'alpha beta\ngamma delta\n\n# one two\n# three four\n',
+  [{ anchor: 1, head: 24 }],
+  'unwrap'
+)
+assert.deepEqual(excludeNextLineAtStart.changes, [
+  { from: 0, to: 22, insert: 'alpha beta gamma delta' }
+])
+
+const dedupedMixedRanges = planParagraphTransform(
+  'alpha beta\ngamma delta\n\nomega psi\n',
+  [
+    { anchor: 0, head: 0 },
+    { anchor: 2, head: 18 },
+    { anchor: 8, head: 8 }
+  ],
+  'unwrap'
+)
+assert.deepEqual(dedupedMixedRanges.changes, [
+  { from: 0, to: 22, insert: 'alpha beta gamma delta' }
+])
+assert.deepEqual(dedupedMixedRanges.ranges, [
+  { anchor: 0, head: 0 },
+  { anchor: 2, head: 18 },
+  { anchor: 8, head: 8 }
+])
+
+const reverseSelectionPlan = planParagraphTransform(
+  '# alpha beta\n# gamma delta\n',
+  [{ anchor: 20, head: 2 }],
+  'unwrap'
+)
+assert.deepEqual(reverseSelectionPlan.ranges, [{ anchor: 18, head: 2 }])
+
+const caretMappingPlan = planParagraphTransform(
+  'alpha\nbeta gamma\n',
+  [{ anchor: 8, head: 8 }],
+  'unwrap'
+)
+assert.deepEqual(caretMappingPlan.changes, [
+  { from: 0, to: 16, insert: 'alpha beta gamma' }
+])
+assert.deepEqual(caretMappingPlan.ranges, [{ anchor: 8, head: 8 }])
+
+const prefixCaretPlan = planParagraphTransform(
+  '# alpha\n# beta\n',
+  [{ anchor: 1, head: 1 }],
+  'unwrap'
+)
+assert.deepEqual(prefixCaretPlan.ranges, [{ anchor: 1, head: 1 }])
+
+const shiftedNoOpSelectionPlan = planParagraphTransform(
+  'alpha   beta\ngamma delta\n\none line\n',
+  [
+    { anchor: 0, head: 0 },
+    { anchor: 29, head: 37 }
+  ],
+  'unwrap'
+)
+assert.deepEqual(shiftedNoOpSelectionPlan.changes, [
+  { from: 0, to: 24, insert: 'alpha beta gamma delta' }
+])
+assert.deepEqual(shiftedNoOpSelectionPlan.ranges, [
+  { anchor: 0, head: 0 },
+  { anchor: 27, head: 33 }
+])
+
+const physicalLineOnlyUnwrap = planParagraphTransform(
+  'single physical line only\n\nnext\n',
+  [{ anchor: 4, head: 4 }],
+  'unwrap'
+)
+assert.deepEqual(physicalLineOnlyUnwrap.changes, [])
+
+const outsidePreservedPlan = planParagraphTransform(
+  'before\n\nalpha beta\ngamma delta\n\nafter\n',
+  [{ anchor: 8, head: 8 }],
+  'unwrap'
+)
+assert.deepEqual(outsidePreservedPlan.changes, [
+  { from: 8, to: 30, insert: 'alpha beta gamma delta' }
+])
+
+assert.deepEqual(
+  paragraphTransformEdits(
+    '# alpha beta\n# gamma delta\n',
+    [{ anchor: 0, head: 0 }],
+    'unwrap',
+    { column: 10, tabWidth: 2 }
+  ),
+  [{ from: 0, to: 26, insert: '# alpha beta gamma delta' }]
+)
 
 const navigationLocation = (docId, path, line = 1, column = 1, groupId = 0) => ({ docId, path, groupId, line, column })
 const navA = navigationLocation('doc-a', '/workspace/a.ts', 1, 1)

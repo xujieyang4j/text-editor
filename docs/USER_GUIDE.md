@@ -299,6 +299,22 @@ line breaks at the end of the document, without removing spaces or tabs from the
 The logical `LF` is written using the currently selected `LF`, `CRLF`, or `CR` style when the document
 is saved. Selections and cursors remain mapped through any edit, and the change is undoable in one step.
 
+**Wrap and unwrap paragraphs.** *Edit: Wrap Paragraph at 80 Columns* (`Alt+Q`) inserts physical hard
+newlines into the targeted paragraph, while *Edit: Unwrap Paragraph* removes paragraph-internal hard
+newlines and joins the paragraph back into one logical line. These commands are different from `Alt+Z`
+word wrap: `Alt+Z` is only a soft on-screen view option and never changes file contents. Paragraph wrap
+targets the paragraph containing each cursor, or each non-empty selection independently when selections
+exist; multiple cursors and disjoint selections are handled separately. Blank lines end a paragraph, and
+so do changes in indentation or in a repeated supported prefix. The supported prefixes are `#`, `//`,
+and `///`; the command preserves a repeated prefix on each output line, but richer Markdown hanging
+prefixes, list indentation schemes, and block-comment hanging prefixes are not supported. Inside a
+wrapped paragraph, runs of internal spaces, tabs, and physical newlines are normalized to single
+separators, while the paragraph's leading indentation and repeated prefix are preserved. Width is
+measured as 80 logical grapheme columns with tab stops, so combining characters and emoji count by
+user-visible graphemes rather than raw code units. Long tokens are never split just to satisfy the
+target width, so an individual token may still exceed 80 columns. Each wrap or unwrap action is
+undoable in one step.
+
 **Reindent selection.** *Edit: Reindent Selection* (`Ctrl/Cmd+Alt+\`) uses the active language's
 local syntax indentation service to recalculate the leading whitespace of selected lines. Unlike
 manual indent/outdent, it is useful after pasting a malformed block or changing braces, Python
@@ -322,6 +338,8 @@ status message.
 | Unique lines | Edit menu or Command Palette → *Edit: Unique Lines* |
 | Remove blank lines | Edit menu or Command Palette → *Edit: Remove Blank Lines* |
 | Ensure single final newline | Edit menu or Command Palette → *Edit: Ensure Single Final Newline* |
+| Wrap paragraph at 80 columns | `Alt+Q` |
+| Unwrap paragraph | Edit menu or Command Palette → *Edit: Unwrap Paragraph* |
 | Select line | `Alt+L` |
 | Select enclosing syntax | `Ctrl/Cmd+I` |
 
@@ -412,6 +430,7 @@ you trust.
 | Trailing-whitespace highlight | always on unless disabled | `highlightTrailingWhitespace` |
 | Vertical rulers | set columns in settings | `rulers` |
 | Word wrap | `Alt+Z` | `wordWrap` |
+| Wrap paragraph at 80 columns | `Alt+Q` | none (content-editing command) |
 | Dark / light theme | `Ctrl/Cmd+K` | `theme` |
 | Font zoom in / out / reset | `Ctrl/Cmd+=` / `-` / `0` | `fontSize` |
 
@@ -542,6 +561,7 @@ settings as `session.json` for the legacy window or `session-<id>.json` per wind
 | Toggle comment | `Ctrl+/` | `Cmd+/` |
 | Move / Copy line | `Alt+↑↓` / `Shift+Alt+↑↓` | `Alt+↑↓` / `Shift+Alt+↑↓` |
 | Duplicate / Delete line | `Ctrl+Shift+D` / `Ctrl+Shift+K` | `Cmd+Shift+D` / `Cmd+Shift+K` |
+| Wrap paragraph at 80 columns / Unwrap paragraph | `Alt+Q` / Command Palette | `Alt+Q` / Command Palette |
 | Zoom in / out / reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | `Cmd+=` / `Cmd+-` / `Cmd+0` |
 | Toggle sidebar / wrap / theme | `Ctrl+B` / `Alt+Z` / `Ctrl+K` | `Cmd+B` / `Alt+Z` / `Cmd+K` |
 
@@ -819,6 +839,17 @@ Final Newline* 执行。非空文档末尾没有逻辑 `LF` 时添加一个，�
 Tab。内部的逻辑 `LF` 会在保存时按当前选择写为 `LF`、`CRLF` 或 `CR`。选区和光标会随编辑映射，整个
 改动可一次撤销。
 
+**段落重排与取消段落换行。** *Edit: Wrap Paragraph at 80 Columns*（`Alt+Q`）会在目标段落内插入物理
+硬换行，*Edit: Unwrap Paragraph* 会移除段落内部的硬换行并把段落重新并成一条逻辑行。它们不同于
+`Alt+Z` 软换行：`Alt+Z` 只影响屏幕显示，不会修改文件内容。存在选区时，每个非空选区会独立作用于其
+命中的段落；没有选区时，则按每个光标所在段落处理，多光标和不相邻选区互不影响。空行会结束段落，缩进
+变化或重复前缀变化也会结束段落。当前支持的重复前缀只有 `#`、`//` 和 `///`；重排后会在每一输出行保留
+该重复前缀，但更丰富的 Markdown 悬挂前缀、列表缩进方案和块注释悬挂前缀暂不支持。重排时，段落内部
+连续的空格、Tab 与物理换行会被规范化为单个分隔；段落已有的前导缩进和重复前缀会被保留。宽度按 80 个
+逻辑字素列并结合 Tab 停靠位计算，因此组合字符、emoji 等按用户可见字素计数，而不是按原始代码单元。
+超长 token 不会被强行拆开来满足宽度目标，所以单个 token 仍可能超过 80 列。每次重排或取消换行都可
+一次撤销。
+
 **自动重新缩进选区。** *Edit: Reindent Selection*（`Ctrl/Cmd+Alt+\`）利用当前语言的本地语法缩进
 服务重新计算选中行前导空白。它区别于手工增加/减少一级缩进，适合粘贴错位代码或修改括号、Python 块、
 列表、分支后恢复结构。它不会启动 LSP、终端或外部格式化器；语言没有可用缩进信息时，文本保持不变并
@@ -840,6 +871,8 @@ Tab。内部的逻辑 `LF` 会在保存时按当前选择写为 `LF`、`CRLF` �
 | 删除重复行 | “编辑”菜单或命令面板 |
 | 删除空白行 | “编辑”菜单或命令面板 |
 | 确保单个末尾换行 | “编辑”菜单或命令面板：*Edit: Ensure Single Final Newline* |
+| 按 80 列重排段落 | `Alt+Q` |
+| 取消段落换行 | “编辑”菜单或命令面板：*Edit: Unwrap Paragraph* |
 | 选中整行 | `Alt+L` |
 | 选中所在语法块 | `Ctrl/Cmd+I` |
 
@@ -911,6 +944,7 @@ Tab。内部的逻辑 `LF` 会在保存时按当前选择写为 `LF`、`CRLF` �
 | 行尾空白高亮 | 默认开，可禁用 | `highlightTrailingWhitespace` |
 | 竖直标尺 | 在设置里指定列 | `rulers` |
 | 软换行 | `Alt+Z` | `wordWrap` |
+| 按 80 列重排段落 | `Alt+Q` | 无（内容编辑命令） |
 | 明 / 暗主题 | `Ctrl/Cmd+K` | `theme` |
 | 字号放大 / 缩小 / 复位 | `Ctrl/Cmd+=` / `-` / `0` | `fontSize` |
 
@@ -1018,6 +1052,7 @@ Sublime 的 “hot exit”）。
 | 切换注释 | `Ctrl+/` | `Cmd+/` |
 | 移动 / 复制行 | `Alt+↑↓` / `Shift+Alt+↑↓` | `Alt+↑↓` / `Shift+Alt+↑↓` |
 | 复制 / 删除行 | `Ctrl+Shift+D` / `Ctrl+Shift+K` | `Cmd+Shift+D` / `Cmd+Shift+K` |
+| 按 80 列重排段落 / 取消段落换行 | `Alt+Q` / 命令面板 | `Alt+Q` / 命令面板 |
 | 放大 / 缩小 / 复位字号 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | `Cmd+=` / `Cmd+-` / `Cmd+0` |
 | 显隐侧栏 / 换行 / 主题 | `Ctrl+B` / `Alt+Z` / `Ctrl+K` | `Cmd+B` / `Alt+Z` / `Cmd+K` |
 

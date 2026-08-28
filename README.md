@@ -57,6 +57,14 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   the document, never spaces or tabs in the final content line. The logical `LF` is written as the
   currently selected `LF`, `CRLF`, or `CR` style on save. Selections and cursors remain mapped through
   the edit, which is undoable in one step
+- **Paragraph wrap / unwrap** — *Edit: Wrap Paragraph at 80 Columns* (`Alt+Q`) inserts physical hard
+  newlines to reflow the paragraph around each cursor or non-empty selection to 80 logical grapheme
+  columns; *Edit: Unwrap Paragraph* removes paragraph-internal hard newlines. This differs from `Alt+Z`
+  soft wrap, which changes only on-screen display. Blank lines plus changes in indentation or supported
+  repeated prefixes (`#`, `//`, `///`) bound each paragraph; whitespace inside the paragraph is
+  normalized, tabs count with tab stops for column measurement, long tokens remain intact even when they
+  exceed 80 columns, richer Markdown hanging prefixes and block-comment leaders are not supported, and
+  each command is undoable in one step
 - **File tree sidebar** — starts collapsed (`Ctrl/Cmd+B` to show), opens a folder as a
   workspace, and lazily expands directories
 - **Find & replace**, **text undo/redo**, **multi-cursor**, rectangular selection, bracket matching,
@@ -236,6 +244,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Copy line up/down   | `Shift+Alt+Up/Down`         |
 | Duplicate line/sel  | `Ctrl/Cmd+Shift+D`          |
 | Delete line         | `Ctrl/Cmd+Shift+K`          |
+| Wrap paragraph at 80 columns | `Alt+Q`          |
 | Zoom in/out/reset   | `Ctrl/Cmd+=` / `-` / `0`    |
 | Toggle sidebar      | `Ctrl/Cmd+B`                |
 | Toggle word wrap    | `Alt+Z`                     |

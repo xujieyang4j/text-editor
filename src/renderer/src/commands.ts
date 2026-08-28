@@ -145,6 +145,8 @@ export const COMMANDS: Command[] = [
   { id: 'to-title-case', title: 'Edit: Title Case' },
   { id: 'swap-case', title: 'Edit: Swap Case' },
   { id: 'join-lines', title: 'Edit: Join Lines' },
+  { id: 'wrap-paragraph-80', title: 'Edit: Wrap Paragraph at 80 Columns', hint: 'Alt+Q' },
+  { id: 'unwrap-paragraph', title: 'Edit: Unwrap Paragraph' },
   { id: 'split-selection-lines', title: 'Selection: Split Selection into Lines', hint: 'Ctrl/Cmd+Shift+L' },
   { id: 'indent-selection', title: 'Edit: Indent Selection' },
   { id: 'outdent-selection', title: 'Edit: Outdent Selection' },
