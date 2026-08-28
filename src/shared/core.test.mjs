@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict'
 import { EditorSelection, EditorState } from '@codemirror/state'
+import {
+  applyEditorConfig,
+  applyEditorConfigChain,
+  compileEditorConfigGlob,
+  editorConfigGlobMatches,
+  editorConfigRelativePath,
+  parseEditorConfig,
+  resolveEditorConfigIndentation
+} from '../../out-test/shared/editorConfig.js'
 import { maxEditableBytes, isBinaryBuffer } from '../../out-test/shared/filePolicy.js'
 import { score, fuzzyFilter } from '../../out-test/renderer/src/fuzzy.js'
 import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
@@ -18,7 +27,7 @@ import {
   wouldTransformLines
 } from '../../out-test/renderer/src/lineTransforms.js'
 import { NavigationHistory, NavigationIntentEpoch, resolveGotoLine } from '../../out-test/renderer/src/navigationHistory.js'
-import { createFromFile, createFromSession, createUntitled, isCurrentDocumentSaveConflict, isDirty, nextUntitledName } from '../../out-test/renderer/src/documents.js'
+import { createFromFile, createFromSession, createUntitled, effectiveDocumentEol, isCurrentDocumentSaveConflict, isDirty, nextUntitledName, reconcileReloadedDocumentEol, reconcileSavedDocumentEol } from '../../out-test/renderer/src/documents.js'
 import { JsonNumber, parseLosslessJson, stringifyLosslessJson } from '../../out-test/shared/losslessJson.js'
 import { parseGitRemoteLines, parseGitTracking, sanitizeGitRemoteUrl } from '../../out-test/shared/git.js'
 import {
@@ -42,6 +51,130 @@ assert.equal(maxEditableBytes(0), 1024 * 1024)
 assert.equal(maxEditableBytes(300), 200 * 1024 * 1024)
 assert.equal(isBinaryBuffer(Buffer.from([0, 1])), true)
 assert.equal(isBinaryBuffer(Buffer.from([0, 1]), true), false)
+
+const parsedEditorConfig = parseEditorConfig('\uFEFF # BOM\r\nROOT = TRUE\r\n\r\n[*]\r\nindent_style = SPACE\r\nindent_size = 2\r\ntab_width = 8\r\nend_of_line = CRLF\r\nunknown = ignored\r\n\r\n[*.md]\r\nindent_size = unset\r\nend_of_line = lf # not an inline comment\r\nEND_OF_LINE = LF\r\n')
+assert.equal(parsedEditorConfig.valid, true)
+assert.equal(parsedEditorConfig.root, true)
+assert.deepEqual(applyEditorConfig({}, parsedEditorConfig, 'docs/readme.md'), { indentStyle: 'space', tabWidth: 8, endOfLine: 'LF' })
+assert.deepEqual(applyEditorConfig({}, parsedEditorConfig, 'src/main.ts'), { indentStyle: 'space', indentSize: 2, tabWidth: 8, endOfLine: 'CRLF' })
+assert.deepEqual(parseEditorConfig('root=true\r[*]\rindent_size=2'), { valid: false, root: false, sections: [] })
+const invalidValues = parseEditorConfig('root=true\nindent_size=3\n[*]\nindent_style=spaces\nindent_size=0\ntab_width=17\nend_of_line=unix')
+assert.equal(invalidValues.root, true)
+assert.deepEqual(applyEditorConfig({}, invalidValues, 'file.ts'), {})
+assert.equal(parseEditorConfig('[*]\nroot=true').root, false)
+assert.deepEqual(applyEditorConfig({ indentSize: 4 }, parseEditorConfig('[*]\nindent_size='), 'a'), { indentSize: 4 })
+assert.deepEqual(applyEditorConfig({ indentSize: 4 }, parseEditorConfig('[*]\nindent_size=unset\nindent_size=3'), 'a'), { indentSize: 3 })
+
+assert.equal(editorConfigGlobMatches('*.ts', 'src/deep/main.ts'), true)
+assert.equal(editorConfigGlobMatches('*.ts', 'src/deep/main.js'), false)
+assert.equal(editorConfigGlobMatches('src/*.ts', 'src/main.ts'), true)
+assert.equal(editorConfigGlobMatches('/src/*.ts', 'src/main.ts'), true)
+assert.equal(editorConfigGlobMatches('src/*.ts', 'src/deep/main.ts'), false)
+assert.equal(editorConfigGlobMatches('src/**/*.ts', 'src/main.ts'), true)
+assert.equal(editorConfigGlobMatches('src/**/*.ts', 'src/deep/main.ts'), true)
+assert.equal(editorConfigGlobMatches('src/?.ts', 'src/a.ts'), true)
+assert.equal(editorConfigGlobMatches('src/?.ts', 'src/ab.ts'), false)
+assert.equal(editorConfigGlobMatches('[ab].ts', 'deep/a.ts'), true)
+assert.equal(editorConfigGlobMatches('[!ab].ts', 'deep/c.ts'), true)
+assert.equal(editorConfigGlobMatches('[!ab].ts', 'deep/a.ts'), false)
+assert.equal(editorConfigGlobMatches('[a-z].ts', 'deep/b.ts'), true)
+assert.equal(editorConfigGlobMatches('[a-z].ts', 'deep/7.ts'), false)
+assert.equal(editorConfigGlobMatches('[!a-z].ts', 'deep/b.ts'), false)
+assert.equal(editorConfigGlobMatches('[!a-z].ts', 'deep/7.ts'), true)
+assert.equal(editorConfigGlobMatches('[-a].ts', 'deep/-.ts'), true)
+assert.equal(editorConfigGlobMatches('[a-].ts', 'deep/-.ts'), true)
+assert.equal(editorConfigGlobMatches('[a\\-z].ts', 'deep/-.ts'), true)
+assert.equal(editorConfigGlobMatches('*.{js,ts,tsx}', 'deep/main.tsx'), true)
+assert.equal(editorConfigGlobMatches('file\\?.ts', 'file?.ts'), true)
+assert.equal(editorConfigGlobMatches('file\\*.ts', 'file*.ts'), true)
+assert.equal(editorConfigGlobMatches('src\\*.ts', 'src/main.ts'), false)
+assert.equal(editorConfigGlobMatches('*.ts', 'folder\\name.ts'), true)
+assert.equal(editorConfigGlobMatches('folder/*.ts', 'folder\\name.ts'), false)
+assert.equal(editorConfigGlobMatches('Makefile', 'src/Makefile'), true)
+assert.equal(editorConfigGlobMatches('Makefile', 'src/makefile'), false)
+assert.equal(compileEditorConfigGlob('bad['), null)
+assert.equal(compileEditorConfigGlob('bad{a,b'), null)
+assert.equal(compileEditorConfigGlob('{1..3}'), null)
+assert.equal(compileEditorConfigGlob('file{1..3}.ts'), null)
+assert.equal(compileEditorConfigGlob('{single}'), null)
+assert.equal(compileEditorConfigGlob('{a,}'), null)
+assert.equal(compileEditorConfigGlob('{a,{b,c}}'), null)
+assert.equal(compileEditorConfigGlob('src/'), null)
+assert.equal(compileEditorConfigGlob('x'.repeat(513)), null)
+assert.equal(parseEditorConfig(Array.from({ length: 4_097 }, () => '').join('\n')).valid, false)
+assert.equal(parseEditorConfig(Array.from({ length: 257 }, (_, index) => `[file${index}]`).join('\n')).valid, false)
+const invalidSection = parseEditorConfig('[bad[]\nindent_size=2\n[*]\nindent_size=4')
+assert.deepEqual(applyEditorConfig({}, invalidSection, 'file.ts'), { indentSize: 4 })
+
+assert.equal(editorConfigRelativePath('/repo', '/repo/src/a.ts', 'posix'), 'src/a.ts')
+assert.equal(editorConfigRelativePath('/repo', '/repo2/a.ts', 'posix'), null)
+assert.equal(editorConfigRelativePath('/repo', '/repo', 'posix'), null)
+assert.equal(editorConfigRelativePath('C:\\Repo', 'c:\\repo\\src\\A.ts', 'win32'), 'src/A.ts')
+assert.equal(editorConfigRelativePath('C:\\repo', 'D:\\repo\\a.ts', 'win32'), null)
+assert.equal(editorConfigRelativePath('C:\\repo', 'C:\\repo2\\a.ts', 'win32'), null)
+assert.equal(editorConfigRelativePath('\\\\server\\share\\repo', '\\\\SERVER\\SHARE\\repo\\src\\a.ts', 'win32'), 'src/a.ts')
+assert.equal(editorConfigGlobMatches('*.TS', 'src/a.ts'), false)
+
+const parentConfig = '[*]\nindent_style=space\nindent_size=2\ntab_width=4\nend_of_line=lf'
+const childConfig = '[*.ts]\nindent_style=tab\nindent_size=tab\ntab_width=8\nend_of_line=crlf'
+assert.deepEqual(applyEditorConfigChain([
+  { path: '/repo/.editorconfig', source: parentConfig },
+  { path: '/repo/src/.editorconfig', source: childConfig }
+], '/repo/src/main.ts'), { indentStyle: 'tab', indentSize: 'tab', tabWidth: 8, endOfLine: 'CRLF' })
+assert.deepEqual(applyEditorConfigChain([
+  { path: '/repo/src/.editorconfig', source: childConfig },
+  { path: '/repo/.editorconfig', source: parentConfig }
+], '/repo/src/main.ts'), { indentStyle: 'tab', indentSize: 'tab', tabWidth: 8, endOfLine: 'CRLF' })
+assert.deepEqual(applyEditorConfigChain([
+  { path: '/repo/.editorconfig', source: '[*]\ntab_width=6' },
+  { path: '/repo/src/.editorconfig', source: '[*.ts]\nindent_size=tab' }
+], '/repo/src/main.ts'), { indentSize: 'tab', tabWidth: 6 })
+assert.deepEqual(applyEditorConfigChain([
+  { path: '/repo/.editorconfig', source: parentConfig },
+  { path: '/repo/src/.editorconfig', source: 'root=true\n[*.ts]\nindent_size=4' }
+], '/repo/src/main.ts'), { indentSize: 4 })
+assert.deepEqual(applyEditorConfigChain([
+  { path: '/repo/.editorconfig', source: parentConfig },
+  { path: '/repo/src/.editorconfig', source: '[*.ts]\nindent_size=unset\nend_of_line=unset' }
+], '/repo/src/main.ts'), { indentStyle: 'space', tabWidth: 4 })
+assert.deepEqual(applyEditorConfigChain([
+  { path: 'C:\\Repo\\.editorconfig', source: '[src/**.ts]\nindent_size=2' }
+], 'c:\\repo\\src\\Main.ts', 'win32'), { indentSize: 2 })
+assert.deepEqual(applyEditorConfigChain([
+  { path: 'C:\\Repo\\.editorconfig', source: '[src/**.TS]\nindent_size=2' }
+], 'c:\\repo\\src\\Main.ts', 'win32'), {})
+assert.deepEqual(resolveEditorConfigIndentation(
+  { indentStyle: 'tab', indentSize: 'tab', tabWidth: 8 },
+  { indentSize: 2, insertSpaces: true },
+  4
+), { indentSize: 8, tabWidth: 8, insertSpaces: false })
+assert.deepEqual(resolveEditorConfigIndentation(
+  { indentStyle: 'space', indentSize: 2, tabWidth: 8 },
+  { indentSize: 4, insertSpaces: false },
+  4
+), { indentSize: 2, tabWidth: 8, insertSpaces: true })
+assert.deepEqual(resolveEditorConfigIndentation(
+  { indentStyle: 'tab', indentSize: 4, tabWidth: 8 },
+  { indentSize: 2, insertSpaces: true },
+  4
+), { indentSize: 8, tabWidth: 8, insertSpaces: false })
+assert.deepEqual(resolveEditorConfigIndentation(
+  { tabWidth: 6 },
+  { indentSize: 3, insertSpaces: false },
+  4
+), { indentSize: 6, tabWidth: 6, insertSpaces: false })
+assert.deepEqual(resolveEditorConfigIndentation(
+  { indentSize: 'tab' },
+  { indentSize: 2, insertSpaces: true },
+  4
+), { indentSize: 4, tabWidth: 4, insertSpaces: true })
+assert.deepEqual(applyEditorConfigChain([
+  { path: '/.editorconfig', source: '[tmp/*.ts]\nindent_size=2' }
+], '/tmp/main.ts'), { indentSize: 2 })
+assert.deepEqual(applyEditorConfigChain([
+  { path: 'C:\\.editorconfig', source: '[src/*.ts]\ntab_width=4' }
+], 'c:\\src\\main.ts', 'win32'), { tabWidth: 4 })
+
 assert.ok(score('mt', 'src/main.ts'))
 assert.equal(fuzzyFilter('xyz', ['main.ts'], (item) => item).length, 0)
 assert.deepEqual(
@@ -532,6 +665,36 @@ assert.equal(restoredFile.savedEncoding, 'utf16be')
 assert.equal(restoredFile.savedEol, 'CRLF')
 assert.equal(restoredFile.diskRevision, null)
 assert.equal(isDirty(restoredFile), false)
+restoredFile.editorConfig = { endOfLine: 'LF', sources: ['/tmp/.editorconfig'], truncated: false }
+assert.equal(effectiveDocumentEol(restoredFile), 'LF')
+assert.equal(isDirty(restoredFile), false)
+restoredFile.eolOverride = 'CR'
+assert.equal(effectiveDocumentEol(restoredFile), 'CR')
+assert.equal(isDirty(restoredFile), true)
+restoredFile.eolOverride = undefined
+const stableEolSave = createFromFile('/tmp/stable.ts', 'x', 'utf8', 'CRLF')
+stableEolSave.editorConfig = { endOfLine: 'LF', sources: [], truncated: false }
+reconcileSavedDocumentEol(stableEolSave, 'LF', undefined)
+assert.equal(stableEolSave.eol, 'LF')
+assert.equal(stableEolSave.savedEol, 'LF')
+const racingEolSave = createFromFile('/tmp/racing.ts', 'x', 'utf8', 'CRLF')
+const startedOverride = racingEolSave.eolOverride
+racingEolSave.eolOverride = 'CR'
+racingEolSave.eol = 'CR'
+reconcileSavedDocumentEol(racingEolSave, 'LF', startedOverride)
+assert.equal(racingEolSave.eol, 'CR')
+assert.equal(racingEolSave.savedEol, 'LF')
+assert.equal(isDirty(racingEolSave), true)
+reconcileReloadedDocumentEol(racingEolSave, 'CRLF')
+assert.equal(racingEolSave.eol, 'CRLF')
+assert.equal(racingEolSave.savedEol, 'CRLF')
+assert.equal(racingEolSave.eolOverride, undefined)
+assert.equal(isDirty(racingEolSave), false)
+const externalEolAfterOverride = createFromFile('/tmp/external.ts', 'x', 'utf8', 'CRLF')
+externalEolAfterOverride.eolOverride = 'CRLF'
+externalEolAfterOverride.eol = 'LF'
+externalEolAfterOverride.savedEol = 'LF'
+assert.equal(isDirty(externalEolAfterOverride), true)
 restoredFile.encoding = 'utf8'
 assert.equal(isDirty(restoredFile), true)
 restoredFile.encoding = restoredFile.savedEncoding

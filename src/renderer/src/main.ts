@@ -11,6 +11,7 @@ import { JsonView } from './jsonView.js'
 import { OutlinePanel } from './outlinePanel.js'
 import { parseLosslessJson, stringifyLosslessJson } from '../../shared/losslessJson.js'
 import { jsonStringUtf8ByteLength, textStatistics, type TextStatistics } from '../../shared/text.js'
+import { resolveEditorConfigIndentation } from '../../shared/editorConfig.js'
 import { BuildPanel } from './buildPanel.js'
 import { TerminalPanel } from './terminalPanel.js'
 import { LanguageServerPanel } from './languageServerPanel.js'
@@ -25,6 +26,9 @@ import {
   createUntitled,
   createFromFile,
   createFromSession,
+  effectiveDocumentEol,
+  reconcileReloadedDocumentEol,
+  reconcileSavedDocumentEol,
   isDirty,
   isCurrentDocumentSaveConflict,
   baseName,
@@ -59,6 +63,7 @@ import {
   , type LanguageServerInteractiveResult
   , type LanguageRenameEdit
   , type GitAction
+  , type ResolvedEditorConfig
 } from '../../shared/ipc.js'
 import './styles.css'
 
@@ -175,6 +180,11 @@ class App {
   /** Only the newest asynchronous disk read for a path may update its document. */
   private externalChangeGeneration = 0
   private externalChangeRequests = new Map<string, number>()
+  /** Only the newest per-document EditorConfig lookup may update its cached preferences. */
+  private editorConfigGeneration = 0
+  private editorConfigRequests = new Map<string, number>()
+  private editorConfigRefreshTimer: number | null = null
+  private pendingEditorConfigRoots = new Set<string>()
   private conflictBar: HTMLDivElement | null = null
   private conflictDocId: string | null = null
   private navigationHistory = new NavigationHistory()
@@ -364,6 +374,7 @@ class App {
       if (this.folder) void this.reloadWorkspaceTree()
       this.projectSymbols = []
       this.workspaceWords = []
+      if (baseName(change.path).toLowerCase() === '.editorconfig') this.scheduleEditorConfigRefresh(this.workspaceRootForPath(change.path))
       void this.handleExternalFileChange(change.path)
     })
     window.editor.onOpenPathRequested((filePath) => {
@@ -557,6 +568,7 @@ class App {
       const active = restoredBySessionIndex[session.activeIndex] ?? this.docs[0]
       await this.activate(active.id, 0)
     }
+    this.refreshEditorConfigs()
     this.organizePinnedTabs()
     this.renderTabs()
   }
@@ -1701,10 +1713,11 @@ class App {
       let encoding: Doc['encoding'] = 'utf8'
       let eol: Doc['eol'] = 'LF'
       let revision: string | null = null
+      const eolOverrideSnapshot = doc?.eolOverride
       if (doc) {
         content = doc.content
         encoding = doc.encoding
-        eol = doc.eol
+        eol = doc.eolOverride ?? doc.eol
         revision = doc.diskRevision
       } else {
         const opened = await window.editor.openPath(filePath)
@@ -1713,6 +1726,14 @@ class App {
         encoding = opened.encoding
         eol = opened.eol
         revision = opened.revision
+        const root = this.workspaceRootForPath(filePath)
+        if (root) {
+          try {
+            eol = (await window.editor.resolveEditorConfig(filePath, root)).endOfLine ?? eol
+          } catch {
+            // A missing or racing config must not block an otherwise safe LSP edit.
+          }
+        }
       }
       const lines = content.split('\n')
       const offset = (lineIndex: number, character: number): number => {
@@ -1733,6 +1754,7 @@ class App {
       const result = await window.editor.save(filePath, next, {
         encoding,
         eol,
+        respectEditorConfigEol: doc?.eolOverride === undefined,
         expectedRevision: revision
       })
       if (!result.saved) {
@@ -1752,10 +1774,11 @@ class App {
       if (doc) {
         doc.savedContent = next
         doc.savedEncoding = encoding
-        doc.savedEol = eol
+        reconcileSavedDocumentEol(doc, result.eol ?? eol, eolOverrideSnapshot)
         doc.diskRevision = result.revision ?? doc.diskRevision
         doc.requiresSave = false
         this.reconcileSuccessfulSave(doc, result.revision)
+        void this.refreshEditorConfig(doc)
       }
     }
     this.renderTabs()
@@ -1839,8 +1862,7 @@ class App {
       group.editor.setSpellCheck(this.settings.spellCheck && (this.isMarkdownDoc(doc) || doc.language === 'Plain Text'))
       group.editor.restoreViewState(doc.viewStates.get(groupIndex))
     })
-    const indentation = this.detectIndentation(doc.content)
-    group.editor.setIndentation(indentation.tabSize, indentation.insertSpaces)
+    this.applyDocumentFormatting(doc, group.editor)
     this.refreshIncrementalDiff(doc, group.editor)
     group.editor.setDiagnostics((doc.diagnostics ?? []).map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
 
@@ -1970,7 +1992,7 @@ class App {
   }
 
   /** Match Sublime's practical indentation detection without overriding user defaults on sparse files. */
-  private detectIndentation(content: string): { tabSize: number; insertSpaces: boolean } {
+  private detectIndentation(content: string): { indentSize: number; insertSpaces: boolean } {
     let tabs = 0
     const widths = new Map<number, number>()
     for (const line of content.split('\n').slice(0, 2_000)) {
@@ -1983,8 +2005,78 @@ class App {
       }
     }
     const [bestWidth, count] = [...widths.entries()].sort((a, b) => b[1] - a[1])[0] ?? [this.settings.tabSize, 0]
-    if (tabs === 0 && count === 0) return { tabSize: this.settings.tabSize, insertSpaces: this.settings.insertSpaces }
-    return { tabSize: bestWidth, insertSpaces: tabs < count }
+    if (tabs === 0 && count === 0) return { indentSize: this.settings.tabSize, insertSpaces: this.settings.insertSpaces }
+    return { indentSize: bestWidth, insertSpaces: tabs < count }
+  }
+
+  /** Apply project formatting preferences without mutating document text or global settings. */
+  private applyDocumentFormatting(doc: Doc, editor: Editor): void {
+    const detected = this.detectIndentation(doc.content)
+    const effective = resolveEditorConfigIndentation(doc.editorConfig, detected, this.settings.tabSize)
+    editor.setIndentation(effective.indentSize, effective.insertSpaces, effective.tabWidth)
+  }
+
+  /** Preview the next save format; main re-resolves config at write time. */
+  private effectiveEol(doc: Doc): Doc['eol'] {
+    return effectiveDocumentEol(doc)
+  }
+
+  private invalidateEditorConfigRequest(doc: Doc): void {
+    this.editorConfigRequests.set(doc.id, ++this.editorConfigGeneration)
+  }
+
+  private clearDocumentEditorConfig(doc: Doc): void {
+    this.invalidateEditorConfigRequest(doc)
+    doc.editorConfig = undefined
+    for (const group of this.groups) {
+      if (group.renderedDocId === doc.id) this.applyDocumentFormatting(doc, group.editor)
+    }
+    if (this.activeId === doc.id) this.updateStatus()
+  }
+
+  /** Refresh one document's project formatting with stale-response protection. */
+  private async refreshEditorConfig(doc: Doc): Promise<void> {
+    const request = ++this.editorConfigGeneration
+    this.editorConfigRequests.set(doc.id, request)
+    const requestedPath = doc.path
+    const requestedRoot = this.workspaceRootForPath(requestedPath)
+    let resolved: ResolvedEditorConfig | undefined
+    if (requestedPath && requestedRoot) {
+      try {
+        resolved = await window.editor.resolveEditorConfig(requestedPath, requestedRoot)
+        if (resolved.truncated) console.warn(`EditorConfig lookup was truncated for ${requestedPath}`)
+      } catch (error) {
+        console.warn(`Could not resolve EditorConfig for ${requestedPath}:`, error)
+      }
+    }
+
+    const current = this.docs.find((candidate) => candidate.id === doc.id)
+    if (!current || this.editorConfigRequests.get(doc.id) !== request || current.path !== requestedPath ||
+      this.workspaceRootForPath(current.path) !== requestedRoot) return
+    current.editorConfig = resolved
+    for (const group of this.groups) {
+      if (group.renderedDocId === current.id) this.applyDocumentFormatting(current, group.editor)
+    }
+    if (this.activeId === current.id) this.updateStatus()
+  }
+
+  private refreshEditorConfigs(root: string | null = null): void {
+    for (const doc of this.docs) {
+      if (!doc.path || (root && this.workspaceRootForPath(doc.path) !== root)) continue
+      void this.refreshEditorConfig(doc)
+    }
+  }
+
+  private scheduleEditorConfigRefresh(root: string | null): void {
+    if (!root) return
+    this.pendingEditorConfigRoots.add(root)
+    if (this.editorConfigRefreshTimer !== null) window.clearTimeout(this.editorConfigRefreshTimer)
+    this.editorConfigRefreshTimer = window.setTimeout(() => {
+      this.editorConfigRefreshTimer = null
+      const roots = [...this.pendingEditorConfigRoots]
+      this.pendingEditorConfigRoots.clear()
+      for (const pendingRoot of roots) this.refreshEditorConfigs(pendingRoot)
+    }, 150)
   }
 
   /** Compute Sublime-style change markers against the last saved/disk version. */
@@ -2148,8 +2240,7 @@ class App {
     doc.savedContent = doc.externalChange.content
     doc.encoding = doc.externalChange.encoding
     doc.savedEncoding = doc.externalChange.encoding
-    doc.eol = doc.externalChange.eol
-    doc.savedEol = doc.externalChange.eol
+    reconcileReloadedDocumentEol(doc, doc.externalChange.eol)
     doc.diskRevision = doc.externalChange.revision
     doc.editorState = undefined
     doc.externalChange = undefined
@@ -2625,6 +2716,7 @@ class App {
       this.docs.push(opened)
       currentGroup.docIds.push(opened.id)
       await this.activate(opened.id, this.activeGroup, generation)
+      void this.refreshEditorConfig(opened)
       this.scheduleSessionSave()
       return this.activeId === opened.id ? opened : null
     }
@@ -2640,6 +2732,7 @@ class App {
       this.docs = this.docs.filter((doc) => doc.id !== placeholder.id)
     }
     await this.activate(opened.id, this.activeGroup, generation)
+    void this.refreshEditorConfig(opened)
     this.scheduleSessionSave()
     return this.activeId === opened.id ? opened : null
   }
@@ -2689,6 +2782,7 @@ class App {
     if (!this.settings.distractionFree) this.setSidebarVisible(true)
     void window.editor.watchWorkspace(root)
     void window.editor.addRecentProject(root)
+    this.refreshEditorConfigs(root)
     this.projectSymbols = []
     this.workspaceWords = []
     this.statusSelection.textContent = this.settings.locale === 'zh-CN'
@@ -2714,6 +2808,17 @@ class App {
       ))
     await window.editor.releaseWorkspace(root, retainedFiles)
     this.languageServerPanel.clearRoot(root)
+    this.clearEditorConfigForRoot(root)
+  }
+
+  private clearEditorConfigForRoot(root: string): void {
+    for (const doc of this.docs) {
+      if (!doc.path || (doc.path !== root && !doc.path.startsWith(`${root}/`) && !doc.path.startsWith(root + '\\'))) continue
+      this.clearDocumentEditorConfig(doc)
+    }
+    if (this.active?.path && (this.active.path === root || this.active.path.startsWith(`${root}/`) || this.active.path.startsWith(root + '\\'))) {
+      this.updateStatus()
+    }
   }
 
   /** Add a folder to the active project without discarding its existing roots. */
@@ -2730,6 +2835,7 @@ class App {
       await this.renderProjectRoots()
       void window.editor.watchWorkspace(root)
       void window.editor.addRecentProject(root)
+      this.refreshEditorConfigs(root)
     } catch (error) {
       this.showError(`Could not add folder “${baseName(root)}”.`, error)
     }
@@ -2792,6 +2898,8 @@ class App {
       await window.editor.releaseWorkspace(root, retainedFiles)
       this.languageServerPanel.clearRoot(root)
       this.folders = this.folders.filter((candidate) => candidate !== root)
+      this.clearEditorConfigForRoot(root)
+      this.refreshEditorConfigs()
       this.projectSymbols = []
       this.workspaceWords = []
       this.projectSymbolIndexAt = 0
@@ -2874,6 +2982,7 @@ class App {
     for (const group of this.groups) group.editor.applySettings(this.settings)
     for (const group of this.groups) {
       const doc = group.activeId ? this.docs.find((candidate) => candidate.id === group.activeId) : undefined
+      if (doc && group.renderedDocId === doc.id) this.applyDocumentFormatting(doc, group.editor)
       group.editor.setSpellCheck(this.settings.spellCheck && !!doc && (this.isMarkdownDoc(doc) || doc.language === 'Plain Text'))
     }
     this.applyDistractionFreeMode(this.settings.distractionFree)
@@ -3288,6 +3397,7 @@ class App {
       for (const doc of this.docs) {
         if (doc.path) void this.handleExternalFileChange(doc.path)
       }
+      this.refreshEditorConfigs()
     }, 5_000)
     window.addEventListener('beforeunload', () => {
       if (this.workspacePollTimer !== null) window.clearInterval(this.workspacePollTimer)
@@ -3329,11 +3439,13 @@ class App {
       doc.savedContent = opened.content
       doc.encoding = opened.encoding
       doc.savedEncoding = opened.encoding
-      doc.eol = opened.eol
-      doc.savedEol = opened.eol
+      reconcileReloadedDocumentEol(doc, opened.eol)
       doc.diskRevision = opened.revision
       doc.editorState = undefined
       doc.externalChange = undefined
+      for (const group of this.groups) {
+        if (group.renderedDocId === doc.id) this.applyDocumentFormatting(doc, group.editor)
+      }
       if (this.activeId === doc.id) await this.activate(doc.id)
       this.renderTabs()
       this.scheduleSessionSave()
@@ -3390,6 +3502,8 @@ class App {
           doc.name = baseName(doc.path)
           this.invalidateExternalChangeRead(previousPath)
           this.invalidateExternalChangeRead(doc.path)
+          this.clearDocumentEditorConfig(doc)
+          void this.refreshEditorConfig(doc)
         }
       }
       this.renderTabs()
@@ -3414,6 +3528,8 @@ class App {
           doc.name = baseName(doc.path)
           this.invalidateExternalChangeRead(previousPath)
           this.invalidateExternalChangeRead(doc.path)
+          this.clearDocumentEditorConfig(doc)
+          void this.refreshEditorConfig(doc)
         }
       }
       await this.reloadWorkspaceTree()
@@ -3459,18 +3575,23 @@ class App {
     const originalPath = doc.path
     const savedSnapshot = this.editor.getContent()
     const savedEncodingSnapshot = doc.encoding
-    const savedEolSnapshot = doc.eol
+    const eolOverrideSnapshot = doc.eolOverride
     const promptedForDestination = forceDialog || originalPath === null
+    const savedEolSnapshot = doc.eolOverride ?? doc.eol
+    const writeOptions = {
+      encoding: savedEncodingSnapshot,
+      eol: savedEolSnapshot,
+      ...(doc.eolOverride === undefined ? { respectEditorConfigEol: true } : {})
+    }
     if (promptedForDestination) this.beginNavigationIntent()
     doc.content = savedSnapshot
 
     let result
     try {
       result = forceDialog
-        ? await window.editor.saveAs(savedSnapshot, doc.name, { encoding: savedEncodingSnapshot, eol: savedEolSnapshot })
+        ? await window.editor.saveAs(savedSnapshot, doc.name, writeOptions)
         : await window.editor.save(doc.path, savedSnapshot, {
-            encoding: savedEncodingSnapshot,
-            eol: savedEolSnapshot,
+            ...writeOptions,
             ...(doc.path ? { expectedRevision: doc.diskRevision } : {})
           })
     } catch (error) {
@@ -3502,11 +3623,14 @@ class App {
       doc.name = baseName(result.path)
       this.navigationHistory.updateDocumentPath(doc.id, result.path)
     }
+    if (promptedForDestination) {
+      this.clearDocumentEditorConfig(doc)
+    }
     // Mark only the exact snapshot written to disk as saved. Edits made while
     // the async write was in flight remain dirty and cannot be silently lost.
     doc.savedContent = savedSnapshot
     doc.savedEncoding = savedEncodingSnapshot
-    doc.savedEol = savedEolSnapshot
+    reconcileSavedDocumentEol(doc, result.eol ?? savedEolSnapshot, eolOverrideSnapshot)
     doc.diskRevision = result.revision ?? doc.diskRevision
     doc.requiresSave = false
     if (forceDialog || originalPath !== result.path) doc.externalChange = undefined
@@ -3518,6 +3642,7 @@ class App {
         this.showError(`Syntax support for “${doc.name}” could not be loaded.`, error)
       }
     }
+    void this.refreshEditorConfig(doc)
     this.renderTabs()
     this.updateStatus()
     this.scheduleSessionSave()
@@ -3588,24 +3713,28 @@ class App {
       this.autoSaveInFlight.add(doc.id)
       const snapshot = doc.content
       const encodingSnapshot = doc.encoding
-      const eolSnapshot = doc.eol
+      const eolOverrideSnapshot = doc.eolOverride
+      const eolSnapshot = doc.eolOverride ?? doc.eol
       const pathSnapshot = doc.path
       let saved = false
       try {
         const result = await window.editor.save(pathSnapshot, snapshot, {
           encoding: encodingSnapshot,
           eol: eolSnapshot,
+          respectEditorConfigEol: doc.eolOverride === undefined,
           expectedRevision: doc.diskRevision
         })
         if (result.saved) {
           this.invalidateExternalChangeRead(pathSnapshot)
           doc.savedContent = snapshot
           doc.savedEncoding = encodingSnapshot
-          doc.savedEol = eolSnapshot
+          reconcileSavedDocumentEol(doc, result.eol ?? eolSnapshot, eolOverrideSnapshot)
           doc.diskRevision = result.revision ?? doc.diskRevision
           doc.requiresSave = false
           this.reconcileSuccessfulSave(doc, result.revision)
           saved = true
+          void this.refreshEditorConfig(doc)
+          if (doc.eolOverride === undefined) void this.refreshEditorConfig(doc)
         } else if ((result.reason === 'conflict' || result.reason === 'hardlink') && doc.path === pathSnapshot) {
           this.handleSaveConflict(
             doc,
@@ -3678,6 +3807,7 @@ class App {
     const stillVisible = this.groups.some((candidate) => candidate.docIds.includes(id))
     if (!stillVisible) {
       if (doc.path === null) this.navigationHistory.removeDocument(doc.id)
+      this.editorConfigRequests.delete(doc.id)
       this.docs = this.docs.filter((candidate) => candidate.id !== id)
       this.selectedTabIds.delete(id)
     }
@@ -3923,12 +4053,13 @@ class App {
     const doc = this.active
     if (!doc) return
     const values: Doc['eol'][] = ['LF', 'CRLF', 'CR']
-    const ordered = [doc.eol, ...values.filter((value) => value !== doc.eol)]
+    const current = this.effectiveEol(doc)
+    const ordered = [current, ...values.filter((value) => value !== current)]
     this.palette.open({
       placeholder: this.t('lineEndingPickerPlaceholder'),
       items: ordered.map((value) => ({
         label: value,
-        hint: value === doc.eol ? this.t('current') : undefined,
+        hint: value === current ? this.t('current') : undefined,
         value
       })),
       onAccept: (item) => this.setDocumentEol(item.value as Doc['eol'])
@@ -3974,7 +4105,8 @@ class App {
 
   private setDocumentEol(eol: Doc['eol']): void {
     const doc = this.active
-    if (!doc || doc.eol === eol) return
+    if (!doc || (doc.eol === eol && doc.eolOverride === eol)) return
+    doc.eolOverride = eol
     doc.eol = eol
     this.renderTabs()
     this.updateStatus()
@@ -4737,7 +4869,7 @@ class App {
     const idToIndex = new Map(persistedDocs.map((doc, index) => [doc.id, index]))
     const openFiles: SessionFile[] = persistedDocs.map((d) => {
       const contentDirty = d.content !== d.savedContent
-      const formatDirty = d.encoding !== d.savedEncoding || d.eol !== d.savedEol
+      const formatDirty = d.encoding !== d.savedEncoding || (d.eolOverride ?? d.eol) !== d.savedEol
       const keepDraft = contentDirty || d.externalChange !== undefined || d.requiresSave || (d.path === null && d.content.length > 0)
       return {
         path: d.path,
@@ -4747,6 +4879,7 @@ class App {
         languageLocked: d.languageLocked,
         encoding: d.encoding,
         eol: d.eol,
+        ...(d.eolOverride ? { eolOverride: d.eolOverride } : {}),
         formatDirty,
         ...((contentDirty || formatDirty || d.externalChange) ? { baseRevision: d.diskRevision } : {}),
         ...(formatDirty && !keepDraft && d.path !== null ? { recoveryContent: d.content } : {}),
@@ -4957,9 +5090,13 @@ class App {
     this.statusLanguage.setAttribute('aria-label', this.settings.locale === 'zh-CN'
       ? `选择语法，当前为${this.statusLanguage.textContent}`
       : `Select syntax, currently ${this.statusLanguage.textContent}`)
-    this.statusEol.textContent = doc?.eol ?? '—'
+    const effectiveEol = doc ? this.effectiveEol(doc) : null
+    this.statusEol.textContent = effectiveEol ?? '—'
+    this.statusEol.title = doc?.editorConfig?.endOfLine && doc.eolOverride === undefined
+      ? `${effectiveEol} · EditorConfig`
+      : (effectiveEol ?? '')
     this.statusEol.setAttribute('aria-label', doc
-      ? `${this.t('lineEndingAriaLabel')}${this.statusEol.textContent}`
+      ? `${this.t('lineEndingAriaLabel')}${this.statusEol.textContent}${doc.editorConfig?.endOfLine && doc.eolOverride === undefined ? ' (EditorConfig)' : ''}`
       : this.t('lineEndingPickerPlaceholder'))
     this.statusEncoding.textContent = doc ? encodingLabel(doc.encoding) : '—'
     this.statusEncoding.setAttribute('aria-label', doc

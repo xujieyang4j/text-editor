@@ -6,6 +6,8 @@ import {
   type SaveResult,
   type OpenedFolder,
   type DirEntry,
+  type EditorConfigRequest,
+  type ResolvedEditorConfig,
   type BrowserOpenRequest,
   type Settings,
   type Session,
@@ -79,6 +81,10 @@ const api = {
 
   /** Recursively list every file under a root (for Goto Anything). */
   listFiles: (root: string): Promise<string[]> => ipcRenderer.invoke(IPC.dirListFiles, root),
+
+  /** Resolve supported EditorConfig properties without exposing configuration contents. */
+  resolveEditorConfig: (filePath: string, workspaceRoot: string): Promise<ResolvedEditorConfig> =>
+    ipcRenderer.invoke(IPC.editorConfigResolve, { filePath, workspaceRoot } satisfies EditorConfigRequest),
 
   /** Revoke a workspace root while retaining direct access to listed open files. */
   releaseWorkspace: (root: string, retainFiles: string[]): Promise<void> =>

@@ -257,6 +257,7 @@ export class Editor {
   readonly view: EditorView
   private callbacks: EditorCallbacks
   private settings: Settings
+  private tabWidth: number
   /** In-flight language loads are versioned so stale tabs cannot reconfigure the active view. */
   private languageRequest = 0
   private snippetRanges: Array<{ from: number; to: number; index: number }> = []
@@ -272,6 +273,7 @@ export class Editor {
   constructor(parent: HTMLElement, callbacks: EditorCallbacks, settings: Settings) {
     this.callbacks = callbacks
     this.settings = settings
+    this.tabWidth = settings.tabSize
     this.view = new EditorView({
       parent,
       state: this.makeState('')
@@ -413,6 +415,7 @@ export class Editor {
   /** Apply a full settings object at once (used on boot + settings change). */
   applySettings(settings: Settings): void {
     this.settings = settings
+    this.tabWidth = settings.tabSize
     const indent = settings.insertSpaces ? ' '.repeat(settings.tabSize) : '\t'
     this.view.dispatch({
       effects: [
@@ -433,11 +436,16 @@ export class Editor {
     })
   }
 
-  /** Apply per-document indentation inferred from its existing non-empty lines. */
-  setIndentation(tabSize: number, insertSpaces: boolean): void {
-    const width = Math.max(1, Math.min(16, Math.round(tabSize)))
-    const indent = insertSpaces ? ' '.repeat(width) : '\t'
-    this.view.dispatch({ effects: tabConf.reconfigure([indentUnit.of(indent), EditorState.tabSize.of(width)]) })
+  /** Apply per-document indentation, keeping indent width and tab display width independent. */
+  setIndentation(indentSize: number, insertSpaces: boolean, tabWidth = indentSize): void {
+    const indentWidth = Math.max(1, Math.min(16, Math.round(indentSize)))
+    const displayWidth = Math.max(1, Math.min(16, Math.round(tabWidth)))
+    // CodeMirror's indentUnit facet accepts only repeated instances of one
+    // whitespace character. For the uncommon mixed-width tab case, spaces
+    // preserve the requested indentation columns without corrupting layout.
+    const indent = insertSpaces || indentWidth !== displayWidth ? ' '.repeat(indentWidth) : '\t'
+    this.tabWidth = displayWidth
+    this.view.dispatch({ effects: tabConf.reconfigure([indentUnit.of(indent), EditorState.tabSize.of(displayWidth)]) })
   }
 
   setSpellCheck(enabled: boolean): void {
@@ -955,7 +963,7 @@ export class Editor {
   }
 
   convertIndentation(toTabs: boolean): void {
-    const width = this.settings.tabSize
+    const width = this.tabWidth
     const converted = this.getContent().split('\n').map((line) => {
       const prefix = /^[ \t]*/.exec(line)?.[0] ?? ''
       const columns = [...prefix].reduce((count, char) => char === '\t' ? count + width : count + 1, 0)

@@ -1,7 +1,7 @@
 import { dialog, ipcMain, BrowserWindow, app, shell, clipboard, type IpcMainInvokeEvent } from 'electron'
-import { createReadStream, promises as fs, watch, type FSWatcher } from 'fs'
+import { constants as fsConstants, createReadStream, promises as fs, watch, type FSWatcher } from 'fs'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process'
-import { promisify } from 'util'
+import { promisify, TextDecoder } from 'util'
 import { StringDecoder } from 'string_decoder'
 import { createHash } from 'crypto'
 import path from 'path'
@@ -11,6 +11,7 @@ import { isBinaryBuffer, maxEditableBytes } from '../shared/filePolicy.js'
 import { extractWorkspaceSymbols } from '../shared/symbolIndex.js'
 import { parseGitRemoteLines, parseGitTracking } from '../shared/git.js'
 import { createLspMessageReader, encodeLspMessage, LspProtocolError } from '../shared/lspProtocol.js'
+import { applyEditorConfigChain, parseEditorConfig } from '../shared/editorConfig.js'
 import {
   IPC,
   MAX_SESSION_OPEN_FILES,
@@ -22,6 +23,8 @@ import {
   type SaveResult,
   type OpenedFolder,
   type DirEntry,
+  type EditorConfigRequest,
+  type ResolvedEditorConfig,
   type BrowserOpenRequest,
   type Settings,
   type Session,
@@ -79,6 +82,9 @@ import {
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
 const MAX_SEARCH_RESULTS = 5_000
 const MAX_SESSION_SERIALIZED_BYTES = MAX_SESSION_RECOVERY_BYTES + 8 * 1024 * 1024
+const MAX_EDITOR_CONFIG_LEVELS = 32
+const MAX_EDITOR_CONFIG_FILE_BYTES = 64 * 1024
+const MAX_EDITOR_CONFIG_TOTAL_BYTES = 512 * 1024
 
 /** Directory entries that are noisy and rarely useful in an editor workspace. */
 const IGNORED_ENTRIES = new Set([
@@ -268,6 +274,146 @@ function assertGrantedRoot(event: IpcMainInvokeEvent, root: string): void {
   const resolved = path.resolve(root)
   if (![...(grantedRoots.get(event.sender.id) ?? [])].some((granted) => granted === resolved)) {
     throw new Error('This workspace has not been authorised for the current editor window.')
+  }
+}
+
+function emptyEditorConfig(truncated = false): ResolvedEditorConfig {
+  return { sources: [], truncated }
+}
+
+function emptyAuthorisedEditorConfig(event: IpcMainInvokeEvent, root: string, truncated = false): ResolvedEditorConfig {
+  assertGrantedRoot(event, root)
+  return emptyEditorConfig(truncated)
+}
+
+async function readBoundedEditorConfig(
+  candidate: string,
+  byteLimit: number,
+  expectedIdentity: { dev: number; ino: number }
+): Promise<string | null> {
+  const flags = fsConstants.O_RDONLY | (process.platform === 'win32' ? 0 : (fsConstants.O_NOFOLLOW ?? 0))
+  const handle = await fs.open(candidate, flags)
+  try {
+    const stat = await handle.stat()
+    if (!stat.isFile() || stat.dev !== expectedIdentity.dev || stat.ino !== expectedIdentity.ino || stat.size > byteLimit) return null
+    const bytes = Buffer.allocUnsafe(byteLimit + 1)
+    let offset = 0
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    if (offset > byteLimit) return null
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, offset))
+    } catch {
+      return null
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
+ * Read only project-owned EditorConfig files. The caller establishes the
+ * lexical grant first; real paths then prevent symlinks escaping that grant.
+ */
+async function resolveEditorConfig(
+  event: IpcMainInvokeEvent,
+  request: EditorConfigRequest,
+  allowMissingTarget = false
+): Promise<ResolvedEditorConfig> {
+  const root = path.resolve(request.workspaceRoot)
+  const target = path.resolve(request.filePath)
+  assertGrantedRoot(event, root)
+  if (!isInside(root, target)) throw new Error('The EditorConfig target is outside the requested workspace root.')
+  const rootGrantIsActive = (): boolean => grantedRoots.get(event.sender.id)?.has(root) === true
+
+  try {
+    const realRoot = await fs.realpath(root)
+    let realTarget: string
+    try {
+      realTarget = await fs.realpath(target)
+    } catch (error) {
+      if (!allowMissingTarget || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      realTarget = path.join(await fs.realpath(path.dirname(target)), path.basename(target))
+    }
+    if (!isInside(realRoot, realTarget)) {
+      throw new Error('The EditorConfig target resolves outside the requested workspace root.')
+    }
+
+    const configsNearToFar: Array<{ path: string; source: string }> = []
+    let directory = path.dirname(target)
+    let totalBytes = 0
+    let truncated = false
+
+    for (let level = 0; level < MAX_EDITOR_CONFIG_LEVELS; level += 1) {
+      if (!rootGrantIsActive()) throw new Error('This workspace has not been authorised for the current editor window.')
+      if (!isInside(root, directory)) break
+      const candidate = path.join(directory, '.editorconfig')
+      try {
+        const candidateStat = await fs.lstat(candidate)
+        if (candidateStat.isSymbolicLink() || !candidateStat.isFile()) {
+          return emptyAuthorisedEditorConfig(event, root)
+        }
+        if (candidateStat.size > MAX_EDITOR_CONFIG_FILE_BYTES || totalBytes + candidateStat.size > MAX_EDITOR_CONFIG_TOTAL_BYTES) {
+          return emptyAuthorisedEditorConfig(event, root, true)
+        }
+        const realCandidate = await fs.realpath(candidate)
+        if (!isInside(realRoot, realCandidate)) {
+          return emptyAuthorisedEditorConfig(event, root)
+        }
+        const remainingBytes = Math.min(MAX_EDITOR_CONFIG_FILE_BYTES, MAX_EDITOR_CONFIG_TOTAL_BYTES - totalBytes)
+        const source = await readBoundedEditorConfig(candidate, remainingBytes, {
+          dev: candidateStat.dev,
+          ino: candidateStat.ino
+        })
+        if (!rootGrantIsActive()) throw new Error('This workspace has not been authorised for the current editor window.')
+        if (source === null) return emptyAuthorisedEditorConfig(event, root, true)
+        const bytes = Buffer.byteLength(source, 'utf8')
+        if (bytes > MAX_EDITOR_CONFIG_FILE_BYTES || totalBytes + bytes > MAX_EDITOR_CONFIG_TOTAL_BYTES) {
+          truncated = true
+          break
+        }
+        totalBytes += bytes
+        const config = parseEditorConfig(source)
+        if (!config.valid) return emptyAuthorisedEditorConfig(event, root)
+        configsNearToFar.push({ path: candidate, source })
+        if (config.root) break
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'ELOOP') return emptyAuthorisedEditorConfig(event, root)
+        if (code !== 'ENOENT') return emptyAuthorisedEditorConfig(event, root)
+      }
+
+      if (directory === root) break
+      const parent = path.dirname(directory)
+      if (parent === directory) break
+      directory = parent
+      if (level === MAX_EDITOR_CONFIG_LEVELS - 1 && isInside(root, directory)) truncated = true
+    }
+
+    // A workspace may be released while filesystem reads are pending. Never
+    // return data collected under a grant that is no longer active.
+    assertGrantedRoot(event, root)
+    if (truncated) return emptyEditorConfig(true)
+    const configs = [...configsNearToFar].reverse()
+    const values = applyEditorConfigChain(
+      configs,
+      target,
+      process.platform === 'win32' ? 'win32' : 'posix'
+    )
+    return {
+      ...values,
+      sources: configs.map((config) => config.path),
+      truncated
+    }
+  } catch (error) {
+    // Authorization failures are security decisions; missing/racing project
+    // files are ordinary editor conditions and degrade to global preferences.
+    if (error instanceof Error && /outside the requested workspace root|not been authorised/.test(error.message)) throw error
+    assertGrantedRoot(event, root)
+    return emptyEditorConfig()
   }
 }
 
@@ -595,7 +741,8 @@ async function saveFile(
 ): Promise<SaveResult> {
   const validated = validWriteOptions(options)
   const expectedRevision = expectedFileRevision(options?.expectedRevision)
-  return saveFileBytes(filePath, encodeText(content, validated), expectedRevision)
+  const result = await saveFileBytes(filePath, encodeText(content, validated), expectedRevision)
+  return result.saved ? { ...result, eol: validated.eol } : result
 }
 
 async function saveFileBytes(
@@ -1095,6 +1242,7 @@ function sanitizeSession(value: unknown, rejectOversizedText = false): Session {
               : {}),
             ...(file.encoding === 'utf8' || file.encoding === 'utf8bom' || file.encoding === 'utf16le' || file.encoding === 'utf16be' ? { encoding: file.encoding } : {}),
             ...(file.eol === 'LF' || file.eol === 'CRLF' || file.eol === 'CR' ? { eol: file.eol } : {}),
+            ...(file.eolOverride === 'LF' || file.eolOverride === 'CRLF' || file.eolOverride === 'CR' ? { eolOverride: file.eolOverride } : {}),
             ...(Array.isArray(file.bookmarks)
               ? { bookmarks: file.bookmarks.filter((line): line is number => typeof line === 'number' && Number.isInteger(line) && line > 0 && line <= 10_000_000).slice(0, 10_000) }
               : {}),
@@ -3234,6 +3382,15 @@ export function registerFileHandlers(): void {
     return listFilesRecursive(root)
   })
 
+  ipcMain.handle(IPC.editorConfigResolve, async (event, rawRequest: unknown): Promise<ResolvedEditorConfig> => {
+    assertTrustedSender(event)
+    if (!rawRequest || typeof rawRequest !== 'object') throw new Error('Invalid EditorConfig request.')
+    const request = rawRequest as Partial<EditorConfigRequest>
+    assertAbsolutePath(request.filePath, 'EditorConfig target')
+    assertAbsolutePath(request.workspaceRoot, 'workspace root')
+    return resolveEditorConfig(event, { filePath: request.filePath, workspaceRoot: request.workspaceRoot })
+  })
+
   ipcMain.handle(IPC.workspaceRelease, async (event, root: unknown, retainFiles: unknown): Promise<void> => {
     assertTrustedSender(event)
     assertAbsolutePath(root, 'workspace root')
@@ -3293,10 +3450,11 @@ export function registerFileHandlers(): void {
     async (event, filePath: unknown, content: unknown, options?: FileWriteOptions): Promise<SaveResult> => {
       assertTrustedSender(event)
       if (typeof content !== 'string') throw new Error('Invalid file contents.')
-      if (filePath === null) return saveAs(event.sender, content, undefined, options)
+      if (filePath === null) return saveAs(event, content, undefined, options)
       assertAbsolutePath(filePath)
       assertGrantedFile(event, filePath)
-      return saveFile(filePath, content, options)
+      const configured = await editorConfigWriteOptions(event, filePath, options)
+      return saveFile(filePath, content, { ...configured, expectedRevision: options?.expectedRevision })
     }
   )
 
@@ -3305,7 +3463,7 @@ export function registerFileHandlers(): void {
     async (event, content: unknown, suggestedName?: unknown, options?: FileWriteOptions): Promise<SaveResult> => {
       assertTrustedSender(event)
       if (typeof content !== 'string') throw new Error('Invalid file contents.')
-      return saveAs(event.sender, content, typeof suggestedName === 'string' ? suggestedName : undefined, options)
+      return saveAs(event, content, typeof suggestedName === 'string' ? suggestedName : undefined, options)
     }
   )
 
@@ -3931,23 +4089,49 @@ function validWriteOptions(options?: FileWriteOptions): FileWriteOptions {
   }
 }
 
+async function editorConfigWriteOptions(
+  event: IpcMainInvokeEvent,
+  target: string,
+  options?: FileWriteOptions,
+  allowMissingTarget = false
+): Promise<FileWriteOptions> {
+  const validated = validWriteOptions(options)
+  if (options?.respectEditorConfigEol !== true) return validated
+  const root = [...(grantedRoots.get(event.sender.id) ?? [])]
+    .filter((candidate) => isInside(candidate, target))
+    .sort((left, right) => right.length - left.length)[0]
+  if (!root) return validated
+  try {
+    const config = await resolveEditorConfig(event, { filePath: target, workspaceRoot: root }, allowMissingTarget)
+    if (config.endOfLine) validated.eol = config.endOfLine
+  } catch {
+    // Saving an explicitly authorised file remains available if its project
+    // config disappears, races, or the workspace grant is removed.
+  }
+  return validated
+}
+
 async function saveAs(
-  sender: Electron.WebContents,
+  event: IpcMainInvokeEvent,
   content: string,
   suggestedName?: string,
   options?: FileWriteOptions
 ): Promise<SaveResult> {
+  const sender = event.sender
   const win = BrowserWindow.fromWebContents(sender)
   const result = await dialog.showSaveDialog(win!, { title: 'Save File', defaultPath: suggestedName })
   if (result.canceled || !result.filePath) return { saved: false, reason: 'cancelled' }
   grantFile(sender.id, result.filePath)
+  // Freeze the overwrite baseline immediately after the user confirms the
+  // native dialog. Config lookup must not widen this optimistic-save window.
+  const expectedRevision = await readRawFileRevision(result.filePath)
+  const validated = await editorConfigWriteOptions(event, result.filePath, options, true)
   // Capture the selected target after the dialog returns, then use the same
   // optimistic checks as a normal save. A change after the user's overwrite
   // confirmation must not be silently replaced.
-  const expectedRevision = await readRawFileRevision(result.filePath)
   return saveFile(result.filePath, content, {
-    encoding: options?.encoding ?? 'utf8',
-    eol: options?.eol ?? 'LF',
+    encoding: validated.encoding,
+    eol: validated.eol,
     expectedRevision
   })
 }

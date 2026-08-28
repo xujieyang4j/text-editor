@@ -27,6 +27,10 @@ export interface Doc {
   eol: import('../../shared/ipc.js').LineEnding
   /** Newline convention last written to / read from disk, used to compute the dirty flag. */
   savedEol: import('../../shared/ipc.js').LineEnding
+  /** Explicit per-document EOL choice, which takes precedence over EditorConfig. */
+  eolOverride?: import('../../shared/ipc.js').LineEnding
+  /** Project formatting preferences resolved for this file without exposing config text. */
+  editorConfig?: import('../../shared/ipc.js').ResolvedEditorConfig
   /** SHA-256 of the last exact disk bytes observed by this document. */
   diskRevision: string | null
   /** Untitled/recovered content that has never been confirmed on disk. */
@@ -152,6 +156,7 @@ export function createFromSession(
     baseRevision?: string | null
     encoding?: import('../../shared/ipc.js').TextEncoding
     eol?: import('../../shared/ipc.js').LineEnding
+    eolOverride?: import('../../shared/ipc.js').LineEnding
     bookmarks?: number[]
     views?: import('../../shared/ipc.js').SessionViewState[]
   },
@@ -173,7 +178,12 @@ export function createFromSession(
   const diskEncoding = diskFormat.encoding
   const diskEol = diskFormat.eol
   const encoding = hasFormatIntent ? (sf.encoding ?? diskEncoding) : diskEncoding
-  const eol = hasFormatIntent ? (sf.eol ?? diskEol) : diskEol
+  const eol = hasFormatIntent ? (sf.eolOverride ?? sf.eol ?? diskEol) : diskEol
+  // New sessions identify an explicit EOL choice directly. Older sessions
+  // encoded it only as a format-dirty `eol`, which remains migratable.
+  const eolOverride = sf.eolOverride ?? (sf.formatDirty === true && sf.eol !== undefined && sf.eol !== diskEol
+    ? sf.eol
+    : undefined)
   const diskRevision = diskFormat.revision ?? null
   const diskChangedWhileClosed = sf.path !== null
     && (hasDraft || sf.formatDirty === true)
@@ -193,6 +203,7 @@ export function createFromSession(
     savedEncoding: diskEncoding,
     eol,
     savedEol: diskEol,
+    ...(eolOverride ? { eolOverride } : {}),
     diskRevision: diskChangedWhileClosed ? (sf.baseRevision ?? null) : diskRevision,
     requiresSave: sf.path === null && hasDraft,
     bookmarks: Array.isArray(sf.bookmarks) ? sf.bookmarks.filter((line) => Number.isInteger(line) && line > 0).slice(0, 10_000) : [],
@@ -208,9 +219,36 @@ export function createFromSession(
 export function isDirty(doc: Doc): boolean {
   return doc.content !== doc.savedContent
     || doc.encoding !== doc.savedEncoding
-    || doc.eol !== doc.savedEol
+    || (doc.eolOverride ?? doc.eol) !== doc.savedEol
     || doc.requiresSave
     || doc.externalChange !== undefined
+}
+
+/** Resolve the physical line ending for the next save without changing dirty state. */
+export function effectiveDocumentEol(
+  doc: Pick<Doc, 'eol' | 'eolOverride' | 'editorConfig'>
+): import('../../shared/ipc.js').LineEnding {
+  return doc.eolOverride ?? doc.editorConfig?.endOfLine ?? doc.eol
+}
+
+/** Record an async save without erasing an EOL selection made while it ran. */
+export function reconcileSavedDocumentEol(
+  doc: Pick<Doc, 'eol' | 'savedEol' | 'eolOverride'>,
+  savedEol: import('../../shared/ipc.js').LineEnding,
+  startedOverride: import('../../shared/ipc.js').LineEnding | undefined
+): void {
+  doc.savedEol = savedEol
+  if (doc.eolOverride === startedOverride) doc.eol = savedEol
+}
+
+/** Replace disk metadata and discard an explicit EOL choice after a reload. */
+export function reconcileReloadedDocumentEol(
+  doc: Pick<Doc, 'eol' | 'savedEol' | 'eolOverride'>,
+  diskEol: import('../../shared/ipc.js').LineEnding
+): void {
+  doc.eol = diskEol
+  doc.savedEol = diskEol
+  doc.eolOverride = undefined
 }
 
 /** Only a direct save conflict belongs to the document's external-change UI. */

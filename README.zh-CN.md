@@ -66,6 +66,12 @@
 - **热退出 / 会话恢复**：下次启动自动重开上次的标签与文件夹，并在意外退出后**保留未保存的编辑**
   （含未命名缓冲区）；**重开关闭的标签**（`Ctrl/Cmd+Shift+T`）
 - **持久化设置**（userData 中的 JSON）：字号、Tab 宽度、主题、换行、Minimap、行号、空白字符标记、标尺
+- **EditorConfig 互操作**：工作区内文件会读取项目中的 `.editorconfig`，支持 `indent_style`、
+  `indent_size`、`tab_width`、`end_of_line`、嵌套配置、`root = true`、常用 section glob 与 `unset`。
+  规则只影响后续编辑和保存，单纯打开文件不会改写内容或标脏；状态栏中手动选择的换行格式优先。解析
+  严格限制在已授权工作区内，过深、过大或过于复杂的配置会安全回退到正文检测和用户默认设置。
+  `indent_style = tab` 始终插入硬 Tab；若数字 `indent_size` 与 `tab_width` 不同，每级硬 Tab 采用
+  `tab_width` 的列宽。
 - **字号缩放**（`Ctrl/Cmd+=` / `-` / `0`）、明暗主题、软换行、可折叠侧边栏
 - **状态栏编码与换行符可点击**：可选 `UTF-8`、`UTF-8 BOM`、`UTF-16 LE`、`UTF-16 BE`，
   以及 `LF`、`CRLF`、`CR`。选择后会把它设为下次保存目标并标记为未保存；保存、全部保存或

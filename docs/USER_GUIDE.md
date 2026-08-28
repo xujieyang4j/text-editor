@@ -469,6 +469,18 @@ Unknown/missing keys fall back to defaults, so a partial file is fine. The app m
 `session.json` for the legacy window and `session-<id>.json` for additional windows in the same
 folder.
 
+For files inside an open workspace, Lumen reads nested `.editorconfig` files from the workspace root
+to the file. It supports `root = true`, `unset`, common section globs, and `indent_style`,
+`indent_size` (`1`–`16` or `tab`), `tab_width` (`1`–`16`), and `end_of_line` (`lf`, `crlf`, or `cr`).
+Rules override content-based indentation detection one property at a time; detection then falls back
+to these user settings. Merely loading or changing a config never rewrites the buffer or marks it
+dirty. Its EOL is used on the next content/manual save, while an explicit status-bar choice wins.
+`charset`, `trim_trailing_whitespace`, and `insert_final_newline` are not yet applied.
+Resolution stays inside the authorised workspace and is resource-bounded; an excessively deep, large,
+or complex configuration safely falls back to content detection and user defaults.
+`indent_style = tab` always inserts hard tabs. If its numeric `indent_size` differs from `tab_width`,
+the configured `tab_width` is used for each fixed hard-tab indentation level.
+
 When importing Sublime Text settings, `draw_white_space` values `all` and `selection` map to
 `showWhitespace: true`; `none` maps to `false`. This mapping changes only `showWhitespace`;
 `highlightTrailingWhitespace` keeps its current value. A boolean `line_numbers` value maps to
@@ -941,6 +953,16 @@ Git 面板会显示当前分支、已配置的上游以及本地缓存的领先/
 
 缺失/未知键回退到默认值，写一部分也没问题。旧窗口使用同目录的 `session.json`，多窗口使用
 `session-<id>.json` 保存打开的标签与文件夹，均由程序自动管理。
+
+对于已打开工作区内的文件，Lumen 会从工作区根目录到文件所在目录逐层读取 `.editorconfig`。当前支持
+`root = true`、`unset`、常用 section glob，以及 `indent_style`、`indent_size`（`1`–`16` 或 `tab`）、
+`tab_width`（`1`–`16`）和 `end_of_line`（`lf`、`crlf`、`cr`）。各属性按 EditorConfig、正文缩进
+检测、用户默认设置的顺序独立决议。加载或修改配置本身不会改写正文或把文档标为未保存；配置的换行
+格式在下一次正文/手动保存时采用，状态栏中的手动选择优先。当前不会应用 `charset`、
+`trim_trailing_whitespace` 或 `insert_final_newline`。
+解析严格限制在已授权工作区内；过深、过大或过于复杂的配置会安全回退到正文检测和用户默认设置。
+`indent_style = tab` 始终插入硬 Tab；若数字 `indent_size` 与 `tab_width` 不同，每级硬 Tab 使用
+`tab_width` 的列宽。
 
 导入 Sublime Text 设置时，`draw_white_space` 的 `all` / `selection` 均映射为
 `showWhitespace: true`，`none` 映射为 `false`。此映射只更改 `showWhitespace`，

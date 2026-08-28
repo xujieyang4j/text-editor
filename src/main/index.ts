@@ -1318,6 +1318,256 @@ function createWindow(sessionId = newSessionId()): void {
         ].join('\n')
         const terminalResult = await win.webContents.executeJavaScript(terminalSmokeScript, true)
         if (!terminalResult) throw new Error('Terminal did not echo its smoke marker')
+
+        const editorConfigWorkspace = path.join(app.getPath('userData'), 'editorconfig-smoke-workspace')
+        const editorConfigSrc = path.join(editorConfigWorkspace, 'src')
+        const editorConfigNested = path.join(editorConfigSrc, 'nested')
+        const editorConfigSamplePath = path.join(editorConfigNested, 'sample.ts')
+        const editorConfigRootSource = path.join(editorConfigWorkspace, '.editorconfig')
+        const editorConfigNestedSource = path.join(editorConfigSrc, '.editorconfig')
+        const editorConfigSiblingRoot = path.join(app.getPath('userData'), 'editorconfig-smoke-sibling')
+        const editorConfigSiblingPath = path.join(editorConfigSiblingRoot, 'sibling.ts')
+        const editorConfigSampleBytes = 'const value = 1\r\n\r\nconst other = 2\r\n'
+        let editorConfigWorkspaceAuthorised = false
+        try {
+          await fs.mkdir(editorConfigNested, { recursive: true })
+          await fs.mkdir(editorConfigSiblingRoot, { recursive: true })
+          await fs.writeFile(editorConfigRootSource, [
+            'root = true',
+            '',
+            '[*]',
+            'indent_style = tab',
+            'indent_size = 4',
+            'tab_width = 6',
+            'end_of_line = crlf',
+            ''
+          ].join('\n'), 'utf8')
+          await fs.writeFile(editorConfigNestedSource, [
+            '[*.ts]',
+            'indent_style = space',
+            'indent_size = 2',
+            'end_of_line = lf',
+            ''
+          ].join('\n'), 'utf8')
+          await fs.writeFile(editorConfigSamplePath, editorConfigSampleBytes, 'utf8')
+          await fs.writeFile(editorConfigSiblingPath, 'sibling\n', 'utf8')
+          authorizeWorkspaceForRenderer(win.webContents.id, editorConfigWorkspace)
+          editorConfigWorkspaceAuthorised = true
+
+          const editorConfigResolution = await win.webContents.executeJavaScript(`(async () => {
+            const resolved = await window.editor.resolveEditorConfig(
+              ${JSON.stringify(editorConfigSamplePath)},
+              ${JSON.stringify(editorConfigWorkspace)}
+            )
+            let siblingTargetRejected = false
+            let siblingRootRejected = false
+            try {
+              await window.editor.resolveEditorConfig(
+                ${JSON.stringify(editorConfigSiblingPath)},
+                ${JSON.stringify(editorConfigWorkspace)}
+              )
+            } catch (error) {
+              siblingTargetRejected = /outside the requested workspace root/i.test(String(error))
+            }
+            try {
+              await window.editor.resolveEditorConfig(
+                ${JSON.stringify(editorConfigSiblingPath)},
+                ${JSON.stringify(editorConfigSiblingRoot)}
+              )
+            } catch (error) {
+              siblingRootRejected = /not been authorised/i.test(String(error))
+            }
+            return { resolved, siblingTargetRejected, siblingRootRejected }
+          })()`, true)
+          const expectedEditorConfigSources = [editorConfigRootSource, editorConfigNestedSource]
+          if (editorConfigResolution.resolved.indentStyle !== 'space'
+            || editorConfigResolution.resolved.indentSize !== 2
+            || editorConfigResolution.resolved.tabWidth !== 6
+            || editorConfigResolution.resolved.endOfLine !== 'LF'
+            || editorConfigResolution.resolved.truncated !== false
+            || JSON.stringify(editorConfigResolution.resolved.sources) !== JSON.stringify(expectedEditorConfigSources)
+            || !editorConfigResolution.siblingTargetRejected || !editorConfigResolution.siblingRootRejected) {
+            throw new Error(`EditorConfig resolution or workspace isolation failed: ${JSON.stringify(editorConfigResolution)}`)
+          }
+
+          const originalShowOpenDialog = dialog.showOpenDialog
+          dialog.showOpenDialog = (async () => ({
+            canceled: false,
+            filePaths: [editorConfigWorkspace]
+          })) as typeof dialog.showOpenDialog
+          try {
+            win.webContents.send(IPC.menuEvent, 'open-folder' as MenuEvent)
+            const editorConfigWorkspaceOpened = await win.webContents.executeJavaScript(`(async () => {
+              const deadline = Date.now() + 3_000
+              while (Date.now() < deadline) {
+                if (document.querySelector('#workspace-name')?.textContent?.trim()
+                  === ${JSON.stringify(path.basename(editorConfigWorkspace).toUpperCase())}) return true
+                await new Promise((resolve) => window.setTimeout(resolve, 20))
+              }
+              return false
+            })()`, true)
+            if (!editorConfigWorkspaceOpened) throw new Error('EditorConfig smoke workspace did not open through the App')
+          } finally {
+            dialog.showOpenDialog = originalShowOpenDialog
+          }
+
+          win.webContents.send(IPC.openPathRequested, editorConfigSamplePath)
+          const editorConfigOpened = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 5_000
+            let observed = {}
+            while (Date.now() < deadline) {
+              const active = document.querySelector('#tab-bar > .tab.active')
+              const eol = document.querySelector('#status-eol')
+              observed = {
+                label: active?.querySelector('.tab-label')?.textContent?.trim() ?? '',
+                dirtyMark: active?.querySelector('.tab-dirty')?.textContent ?? '',
+                eol: eol?.textContent?.trim() ?? '',
+                title: eol?.getAttribute('title') ?? '',
+                ariaLabel: eol?.getAttribute('aria-label') ?? '',
+                tabWidth: document.querySelector('.cm-content') instanceof HTMLElement
+                  ? getComputedStyle(document.querySelector('.cm-content')).tabSize
+                  : '',
+                text: [...document.querySelectorAll('.cm-content .cm-line')]
+                  .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')})
+              }
+              if (observed.label === 'sample.ts' && observed.dirtyMark === ''
+                && observed.eol === 'LF' && observed.title === 'LF · EditorConfig'
+                && /EditorConfig/.test(observed.ariaLabel) && observed.tabWidth === '6') return { ok: true, ...observed }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, ...observed }
+          })()`, true)
+          if (!editorConfigOpened.ok) {
+            throw new Error(`EditorConfig file did not open with effective App formatting: ${JSON.stringify(editorConfigOpened)}`)
+          }
+          if (await fs.readFile(editorConfigSamplePath, 'utf8') !== editorConfigSampleBytes) {
+            throw new Error('Opening and resolving EditorConfig rewrote the sample file instead of preserving CRLF bytes')
+          }
+
+          const editorConfigEditorFocused = await win.webContents.executeJavaScript(`(() => {
+            const content = document.querySelector('.cm-content')
+            if (!(content instanceof HTMLElement)) return false
+            content.focus()
+            return document.activeElement === content
+          })()`, true)
+          if (!editorConfigEditorFocused) throw new Error('Could not focus the EditorConfig sample')
+          win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Down' })
+          win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Down' })
+          const editorConfigBlankLineFocused = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            let status = ''
+            while (Date.now() < deadline) {
+              status = document.querySelector('#status-position')?.textContent?.trim() ?? ''
+              const position = status.match(/\\d+/g)?.map(Number) ?? []
+              if (position[0] === 2 && position[1] === 1) return { ok: true, status }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, status }
+          })()`, true)
+          if (!editorConfigBlankLineFocused.ok) {
+            throw new Error(`Could not move to the EditorConfig sample blank line: ${JSON.stringify(editorConfigBlankLineFocused)}`)
+          }
+          win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
+          win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' })
+          const editorConfigIndentation = await win.webContents.executeJavaScript(`(async () => {
+            const expected = ${JSON.stringify('const value = 1\n  \nconst other = 2\n')}
+            const deadline = Date.now() + 3_000
+            let text = ''
+            while (Date.now() < deadline) {
+              text = [...document.querySelectorAll('.cm-content .cm-line')]
+                .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')})
+              const dirty = (document.querySelector('#tab-bar > .tab.active .tab-dirty')?.textContent ?? '') === '●'
+              if (text === expected && dirty) return { ok: true, text, dirty }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, text, dirty: false }
+          })()`, true)
+          if (!editorConfigIndentation.ok) {
+            throw new Error(`EditorConfig Tab did not insert two spaces: ${JSON.stringify(editorConfigIndentation)}`)
+          }
+          win.webContents.send(IPC.menuEvent, 'save' as MenuEvent)
+          const editorConfigSave = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            let text = ''
+            while (Date.now() < deadline) {
+              text = [...document.querySelectorAll('.cm-content .cm-line')]
+                .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')})
+              const dirty = (document.querySelector('#tab-bar > .tab.active .tab-dirty')?.textContent ?? '') === '●'
+              if (!dirty) return { ok: true, text, dirty }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, text, dirty: true }
+          })()`, true)
+          const editorConfigSavedBytes = await fs.readFile(editorConfigSamplePath, 'utf8')
+          if (!editorConfigSave.ok || editorConfigSavedBytes !== 'const value = 1\n  \nconst other = 2\n') {
+            throw new Error(`EditorConfig save did not apply LF with the expected edit: ${JSON.stringify({ editorConfigSave, editorConfigSavedBytes })}`)
+          }
+
+          const editorConfigTabClosed = await win.webContents.executeJavaScript(`(async () => {
+            const active = document.querySelector('#tab-bar > .tab.active')
+            const close = active?.querySelector('.tab-close')
+            if (active?.querySelector('.tab-label')?.textContent?.trim() !== 'sample.ts'
+              || !(close instanceof HTMLButtonElement)) return false
+            close.click()
+            const deadline = Date.now() + 3_000
+            while (Date.now() < deadline) {
+              if (document.querySelector('#tab-bar > .tab.active .tab-label')?.textContent?.trim() !== 'sample.ts') {
+                await new Promise((resolve) => window.setTimeout(resolve, 100))
+                return true
+              }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return false
+          })()`, true)
+          if (!editorConfigTabClosed) throw new Error('EditorConfig smoke tab was not closed during cleanup')
+          win.webContents.send(IPC.menuEvent, 'remove-folder-from-project' as MenuEvent)
+          const editorConfigWorkspaceRemoved = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            const originalConfirm = window.confirm
+            window.confirm = () => true
+            try {
+              while (Date.now() < deadline) {
+                const option = document.querySelector('.palette-overlay:not(.hidden) .palette-item.active')
+                if (option instanceof HTMLElement) {
+                  option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+                  break
+                }
+                await new Promise((resolve) => window.setTimeout(resolve, 20))
+              }
+              while (Date.now() < deadline) {
+                if (document.querySelector('#workspace-name')?.textContent?.trim()
+                  !== ${JSON.stringify(path.basename(editorConfigWorkspace).toUpperCase())}) return true
+                await new Promise((resolve) => window.setTimeout(resolve, 20))
+              }
+              return false
+            } finally {
+              window.confirm = originalConfirm
+            }
+          })()`, true)
+          if (!editorConfigWorkspaceRemoved) throw new Error('EditorConfig smoke workspace was not released through the App')
+          editorConfigWorkspaceAuthorised = false
+          const editorConfigGrantRevoked = await win.webContents.executeJavaScript(`(async () => {
+            try {
+              await window.editor.resolveEditorConfig(
+                ${JSON.stringify(editorConfigSamplePath)},
+                ${JSON.stringify(editorConfigWorkspace)}
+              )
+              return false
+            } catch {
+              return true
+            }
+          })()`, true)
+          if (!editorConfigGrantRevoked) throw new Error('Released EditorConfig workspace remained authorised')
+        } finally {
+          if (editorConfigWorkspaceAuthorised && !win.isDestroyed()) {
+            await win.webContents.executeJavaScript(
+              `window.editor.releaseWorkspace(${JSON.stringify(editorConfigWorkspace)}, []).catch(() => undefined)`,
+              true
+            ).catch(() => undefined)
+          }
+          await fs.rm(editorConfigWorkspace, { recursive: true, force: true })
+          await fs.rm(editorConfigSiblingRoot, { recursive: true, force: true })
+        }
         await win.webContents.executeJavaScript(`window.editor.releaseWorkspace(${JSON.stringify(smokeRoot)}, [])`, true)
         console.log('[smoke] renderer, editor, and controlled terminal passed')
         // The smoke profile is disposable and every tested resource is already

@@ -84,6 +84,11 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   (`Ctrl/Cmd+Shift+T`)
 - **Persistent settings** (JSON in userData): font size, tab size, theme, wrap, minimap, line numbers,
   whitespace character markers, rulers
+- **EditorConfig interoperability** — files inside an open workspace inherit bounded, project-local
+  `.editorconfig` rules for `indent_style`, `indent_size`, `tab_width`, and `end_of_line`, including
+  nested files, `root = true`, common section globs, and `unset`. Rules affect future editing and saves
+  without rewriting or marking a file dirty merely because it was opened; an explicit status-bar EOL
+  choice takes precedence.
 - **Font zoom** (`Ctrl/Cmd+=` / `-` / `0`), dark/light theme, word-wrap, collapsible sidebar
 - **Clickable encoding & line endings** in the status bar: choose `UTF-8`, `UTF-8 BOM`,
   `UTF-16 LE`, or `UTF-16 BE`, and `LF`, `CRLF`, or `CR`. A choice sets the target for
@@ -176,6 +181,16 @@ It holds workspace excludes, build command, key overrides, enabled plugins, lang
 Language servers, formatters, and other external commands from this file require a one-time approval per app
 session before Lumen starts them. Local declarative plugins live in `.lumen-plugins/<id>/plugin.json` and may
 contribute snippets or insert-text commands only.
+
+Lumen also reads `.editorconfig` files from the opened workspace root down to each file. The first
+version supports `indent_style`, `indent_size` (`1`–`16` or `tab`), `tab_width` (`1`–`16`),
+`end_of_line` (`lf`, `crlf`, or `cr`), `root = true`, `unset`, and common EditorConfig section globs.
+Per-property precedence is EditorConfig, then detected indentation, then user defaults. It does not
+yet apply `charset`, `trim_trailing_whitespace`, or `insert_final_newline`.
+Resolution is confined to the authorised workspace and resource-bounded; unusually deep, large, or
+complex configurations safely fall back to detected indentation and user defaults.
+Because CodeMirror uses a fixed indent unit, `indent_style = tab` always inserts hard tabs; when a
+numeric `indent_size` differs from `tab_width`, the configured `tab_width` determines each hard-tab level.
 
 ## Packaging installers
 

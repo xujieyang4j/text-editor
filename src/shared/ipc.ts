@@ -1,3 +1,6 @@
+import type { EditorConfigProperties } from './editorConfig.js'
+export type { EditorConfigProperties } from './editorConfig.js'
+
 /**
  * Shared type definitions used across main, preload and renderer.
  * Keeping the IPC contract in one place avoids drift between processes.
@@ -14,6 +17,7 @@ export const IPC = {
   fileSaveAs: 'file:save-as',
   dirRead: 'dir:read',
   dirListFiles: 'dir:list-files',
+  editorConfigResolve: 'editor-config:resolve',
   workspaceRelease: 'workspace:release',
   clipboardWritePath: 'clipboard:write-path',
   openInBrowser: 'shell:open-in-browser',
@@ -126,9 +130,25 @@ export type UiLocale = 'zh-CN' | 'en-US'
 /** Physical newline convention used when a document is saved. */
 export type LineEnding = 'LF' | 'CRLF' | 'CR'
 
+/** A bounded request for project-owned EditorConfig settings for one file. */
+export interface EditorConfigRequest {
+  filePath: string
+  workspaceRoot: string
+}
+
+/** Supported, normalised EditorConfig properties after parent-to-child cascading. */
+export interface ResolvedEditorConfig extends EditorConfigProperties {
+  /** Configuration files inspected for this target, ordered from outermost to innermost. */
+  sources: string[]
+  /** True when a configured resource budget prevented a complete search. */
+  truncated: boolean
+}
+
 export interface FileWriteOptions {
   encoding: TextEncoding
   eol: LineEnding
+  /** For Save As, resolve the destination project's EOL unless the user explicitly overrode it. */
+  respectEditorConfigEol?: boolean
   /** Last raw-byte revision observed by the caller; null means the path was absent. */
   expectedRevision?: string | null
 }
@@ -141,6 +161,8 @@ export interface SaveResult {
   path?: string
   /** Revision of the bytes written, present after a successful save. */
   revision?: string
+  /** Physical line ending actually selected for the successful write. */
+  eol?: LineEnding
   /** Why no write occurred: dialog cancellation, stale bytes, or unsafe hard-link replacement. */
   reason?: 'cancelled' | 'conflict' | 'hardlink'
   /** Latest disk snapshot when an optimistic save detects a conflict. */
@@ -536,6 +558,8 @@ export interface SessionFile {
   baseRevision?: string | null
   encoding?: TextEncoding
   eol?: LineEnding
+  /** Explicit per-document EOL choice; distinct from an EditorConfig suggestion. */
+  eolOverride?: LineEnding
   /** 1-based bookmark lines restored with the session. */
   bookmarks?: number[]
   /** Per-editor-group selection and scroll state, restored without undo history. */
