@@ -1,9 +1,11 @@
 import type { MenuEvent, UiLocale } from './ipc.js'
 
+export const APP_NAME = '文本编辑器(徐洁阳)'
+
 export type TranslationKey = keyof typeof ZH
 
 const ZH = {
-  appTitle: 'Lumen 编辑器',
+  appTitle: APP_NAME,
   file: '文件', edit: '编辑', selection: '选择', goto: '转到', view: '视图', tools: '工具', preferences: '偏好设置', project: '项目', git: 'Git', window: '窗口', help: '帮助',
   newFile: '新建文件', newWindow: '新建窗口', openFile: '打开文件…', openFolder: '打开文件夹…', openRecentFile: '打开最近文件…', openRecentProject: '打开最近项目…',
   save: '保存', saveAs: '另存为…', saveAll: '全部保存', pinTab: '固定/取消固定标签页', cycleAutoSave: '切换自动保存模式', closeTab: '关闭标签页', closeOtherTabs: '关闭其他标签页', closeTabsRight: '关闭右侧标签页', closeAllTabs: '关闭全部标签页', reopenTab: '重新打开已关闭标签页',
@@ -26,7 +28,7 @@ const ZH = {
 } as const
 
 const EN: Record<TranslationKey, string> = {
-  appTitle: 'Lumen Editor',
+  appTitle: APP_NAME,
   file: 'File', edit: 'Edit', selection: 'Selection', goto: 'Goto', view: 'View', tools: 'Tools', preferences: 'Preferences', project: 'Project', git: 'Git', window: 'Window', help: 'Help',
   newFile: 'New File', newWindow: 'New Window', openFile: 'Open File…', openFolder: 'Open Folder…', openRecentFile: 'Open Recent File…', openRecentProject: 'Open Recent Project…',
   save: 'Save', saveAs: 'Save As…', saveAll: 'Save All', pinTab: 'Pin / Unpin Tab', cycleAutoSave: 'Cycle Auto Save Mode', closeTab: 'Close Tab', closeOtherTabs: 'Close Other Tabs', closeTabsRight: 'Close Tabs to the Right', closeAllTabs: 'Close All Tabs', reopenTab: 'Reopen Closed Tab',

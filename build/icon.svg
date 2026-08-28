@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">文本编辑器(徐洁阳)应用图标</title>
+  <desc id="description">A white document with the Chinese character 文 and a cyan editing pencil on a deep blue-purple rounded square.</desc>
+
+  <defs>
+    <linearGradient id="baseGradient" x1="143" y1="108" x2="877" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#14275f"/>
+      <stop offset="0.46" stop-color="#28317c"/>
+      <stop offset="1" stop-color="#642d8f"/>
+    </linearGradient>
+    <radialGradient id="blueGlow" cx="0" cy="0" r="1" gradientTransform="translate(259 185) rotate(43) scale(613 553)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4878e8" stop-opacity="0.72"/>
+      <stop offset="0.54" stop-color="#3157bc" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#243373" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="violetGlow" cx="0" cy="0" r="1" gradientTransform="translate(824 817) rotate(-133) scale(469 411)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a43bb2" stop-opacity="0.48"/>
+      <stop offset="1" stop-color="#5e2c8c" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="documentGradient" x1="304" y1="190" x2="660" y2="789" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="0.68" stop-color="#f8faff"/>
+      <stop offset="1" stop-color="#e9effb"/>
+    </linearGradient>
+    <linearGradient id="foldGradient" x1="601" y1="193" x2="705" y2="314" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e2e9f7"/>
+      <stop offset="1" stop-color="#c9d5eb"/>
+    </linearGradient>
+    <linearGradient id="glyphGradient" x1="391" y1="331" x2="579" y2="619" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#33458f"/>
+      <stop offset="1" stop-color="#542d82"/>
+    </linearGradient>
+    <linearGradient id="pencilGradient" x1="650" y1="424" x2="750" y2="738" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#44e4ed"/>
+      <stop offset="0.48" stop-color="#18cbd9"/>
+      <stop offset="1" stop-color="#0aa4bd"/>
+    </linearGradient>
+    <linearGradient id="pencilCapGradient" x1="651" y1="388" x2="750" y2="485" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8cf6f4"/>
+      <stop offset="1" stop-color="#22cddd"/>
+    </linearGradient>
+    <linearGradient id="nibGradient" x1="666" y1="740" x2="718" y2="842" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e8faff"/>
+      <stop offset="0.72" stop-color="#bce7ef"/>
+      <stop offset="1" stop-color="#86cad8"/>
+    </linearGradient>
+    <filter id="baseShadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#07102d" flood-opacity="0.36"/>
+    </filter>
+    <filter id="paperShadow" x="-30%" y="-20%" width="170%" height="170%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#101b54" flood-opacity="0.38"/>
+    </filter>
+    <filter id="pencilShadow" x="-50%" y="-35%" width="200%" height="190%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#071a47" flood-opacity="0.42"/>
+    </filter>
+    <clipPath id="baseClip">
+      <rect x="54" y="54" width="916" height="916" rx="214"/>
+    </clipPath>
+  </defs>
+
+  <!-- macOS-style squircle base -->
+  <g id="base" filter="url(#baseShadow)">
+    <rect x="54" y="54" width="916" height="916" rx="214" fill="url(#baseGradient)"/>
+    <g clip-path="url(#baseClip)">
+      <rect x="54" y="54" width="916" height="916" fill="url(#blueGlow)"/>
+      <rect x="54" y="54" width="916" height="916" fill="url(#violetGlow)"/>
+      <path d="M93 731C274 632 342 704 492 661C656 614 727 470 958 421V970H54V757C67 748 80 739 93 731Z" fill="#1e245f" opacity="0.15"/>
+      <circle cx="836" cy="222" r="137" fill="none" stroke="#9acaff" stroke-width="2" opacity="0.12"/>
+      <circle cx="836" cy="222" r="92" fill="none" stroke="#9acaff" stroke-width="2" opacity="0.1"/>
+    </g>
+    <rect x="56" y="56" width="912" height="912" rx="212" fill="none" stroke="#a9c5ff" stroke-width="4" opacity="0.23"/>
+  </g>
+
+  <!-- Editable document -->
+  <g id="document" filter="url(#paperShadow)">
+    <path d="M285 176H594L724 306V752C724 778.51 702.51 800 676 800H285C258.49 800 237 778.51 237 752V224C237 197.49 258.49 176 285 176Z" fill="url(#documentGradient)"/>
+    <path d="M594 176L724 306H637C613.25 306 594 286.75 594 263V176Z" fill="url(#foldGradient)"/>
+    <path d="M594 176L724 306H637C613.25 306 594 286.75 594 263V176Z" fill="none" stroke="#bac9e4" stroke-width="3" opacity="0.62"/>
+    <path d="M286 178H590" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8"/>
+  </g>
+
+  <!-- The character 文 is drawn as editable vector strokes, not font text. -->
+  <g id="wen-mark" fill="none" stroke="url(#glyphGradient)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M474 326L498 356" stroke-width="34"/>
+    <path d="M365 403H606" stroke-width="35"/>
+    <path d="M414 452C438 521 477 570 568 625" stroke-width="38"/>
+    <path d="M565 451C538 531 487 586 393 633" stroke-width="38"/>
+  </g>
+  <g id="document-lines" fill="none" stroke="#9cabc8" stroke-linecap="round" opacity="0.56">
+    <path d="M336 701H455" stroke-width="18"/>
+    <path d="M336 746H418" stroke-width="18"/>
+  </g>
+
+  <!-- Cyan editing pencil -->
+  <g id="editing-pencil" transform="rotate(43 700 640)" filter="url(#pencilShadow)">
+    <path d="M650 430V421C650 393.39 672.39 371 700 371C727.61 371 750 393.39 750 421V430H650Z" fill="url(#pencilCapGradient)"/>
+    <rect x="650" y="424" width="100" height="324" rx="12" fill="url(#pencilGradient)"/>
+    <path d="M668 438V718" stroke="#c9ffff" stroke-width="13" stroke-linecap="round" opacity="0.6"/>
+    <path d="M733 438V718" stroke="#087f9f" stroke-width="8" stroke-linecap="round" opacity="0.35"/>
+    <path d="M650 480H750" stroke="#0a91b1" stroke-width="8" opacity="0.52"/>
+    <path d="M650 735L700 846L750 735C721.69 748.32 678.31 748.32 650 735Z" fill="url(#nibGradient)"/>
+    <path d="M684 777L700 846L716 777C705.37 780.76 694.63 780.76 684 777Z" fill="#176083"/>
+    <path d="M650 735C679 749 721 749 750 735" fill="none" stroke="#087f9f" stroke-width="7" opacity="0.68"/>
+  </g>
+</svg>

@@ -6,8 +6,14 @@ import { fileURLToPath, pathToFileURL } from 'url'
 import { authorizePathForRenderer, authorizeWorkspaceForRenderer, clearWindowSessionId, listWindowSessionIds, registerFileHandlers, setWindowSessionId } from './files.js'
 import { buildMenu } from './menu.js'
 import { IPC, type MenuEvent, type SaveResult } from '../shared/ipc.js'
+import { APP_NAME } from '../shared/i18n.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const developmentIconPath = path.join(__dirname, '../../build/icon.png')
+
+// Keep the development and packaged application names consistent. The bundle
+// metadata uses the same value through electron-builder.yml.
+app.setName(APP_NAME)
 
 // GUI smoke tests exercise real settings, session persistence and IPC. Keep
 // their transient application data outside a developer's normal profile so a
@@ -112,7 +118,8 @@ function createWindow(sessionId = newSessionId()): void {
     minHeight: 480,
     show: false,
     backgroundColor: '#1e1e1e',
-    title: 'Lumen Editor',
+    title: APP_NAME,
+    ...(app.isPackaged ? {} : { icon: developmentIconPath }),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.cjs'),
       // Security: keep the renderer sandboxed from Node.
@@ -1685,6 +1692,13 @@ app.on('open-file', (event, filePath) => {
 })
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock.setIcon(developmentIconPath)
+  app.setAboutPanelOptions({
+    applicationName: APP_NAME,
+    applicationVersion: app.getVersion(),
+    version: app.getVersion(),
+    copyright: 'Copyright © 徐洁阳'
+  })
   registerFileHandlers()
   ipcMain.handle(IPC.appNewWindow, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)

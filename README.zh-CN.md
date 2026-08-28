@@ -173,6 +173,18 @@ npm run dist:mac     # macOS：.dmg + .zip
 npm run dist:linux   # Linux：AppImage + .deb
 ```
 
+只在当前 Mac 上日常使用和测试时，可以用一条命令完成构建、清除产物隔离属性、临时签名、
+签名校验及重新压缩：
+
+```bash
+npm run dist:mac:local       # 生成本机临时签名的 .app 和 .zip
+npm run dist:mac:local:open  # 生成后直接启动应用
+```
+
+本地产物位于 `release/<版本>/mac-<架构>-local/`，ZIP 文件名以 `-local.zip` 结尾。该命令不会
+关闭 Gatekeeper；它生成的是 ad-hoc 本地签名，不可替代 Developer ID 签名和 Apple 公证，
+因此只适合本机使用，不应作为正式发行包发送给其他用户。
+
 > electron-builder 默认为宿主操作系统构建。生成 macOS 产物必须在 macOS 上；Windows/Linux 目标在
 > 多数宿主上可跨平台构建（在 Linux 上打 Windows 包可能需要 Wine）。目标配置见 `electron-builder.yml`。
 

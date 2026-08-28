@@ -21,7 +21,7 @@ import { COMMANDS, localizedCommands } from './commands.js'
 import { extractSymbols } from './symbols.js'
 import { fuzzyFilter } from './fuzzy.js'
 import { NavigationHistory, NavigationIntentEpoch, resolveGotoLine, type NavigationDirection, type NavigationLocation } from './navigationHistory.js'
-import { makeTranslator, type TranslationKey } from '../../shared/i18n.js'
+import { APP_NAME, makeTranslator, type TranslationKey } from '../../shared/i18n.js'
 import {
   createUntitled,
   createFromFile,
@@ -2980,7 +2980,7 @@ class App {
     try {
       const settings = await window.editor.importSublimeSettings()
       if (!settings) return
-      if (!window.confirm('Apply the imported Sublime settings to this Lumen window?')) return
+      if (!window.confirm(`Apply the imported Sublime settings to this ${APP_NAME} window?`)) return
       this.applyUserSettings(settings)
       this.statusSelection.textContent = 'Imported Sublime settings'
     } catch (error) {
@@ -3251,10 +3251,10 @@ class App {
     try {
       const update = await window.editor.checkForUpdate()
       if (!update.available || !update.latestVersion) {
-        this.statusSelection.textContent = `Lumen ${update.currentVersion} is up to date`
+        this.statusSelection.textContent = `${APP_NAME} ${update.currentVersion} is up to date`
         return
       }
-      const message = `Lumen ${update.latestVersion} is available (current: ${update.currentVersion}).`
+      const message = `${APP_NAME} ${update.latestVersion} is available (current: ${update.currentVersion}).`
       if (update.releaseUrl && window.confirm(`${message}\n\nOpen the release page to download the signed installer?`)) {
         await window.editor.openExternal(update.releaseUrl)
       } else {

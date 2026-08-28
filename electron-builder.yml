@@ -1,5 +1,5 @@
 appId: com.lumen.editor
-productName: Lumen Editor
+productName: "文本编辑器(徐洁阳)"
 directories:
   buildResources: build
   output: release/${version}
@@ -26,9 +26,10 @@ fileAssociations:
       - go
       - rs
       - sh
-    name: Lumen Editor Document
+    name: "文本编辑器(徐洁阳) 文档"
     role: Editor
 win:
+  icon: build/icon.png
   target:
     - nsis
     - portable
@@ -37,6 +38,7 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 mac:
+  icon: build/icon.icns
   target:
     - dmg
     - zip
@@ -50,6 +52,7 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
 linux:
+  icon: build/icon.png
   target:
     - AppImage
     - deb
