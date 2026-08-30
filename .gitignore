@@ -7,6 +7,7 @@ out/
 out-test/
 dist/
 release/
+release-assets/
 
 # Logs
 *.log

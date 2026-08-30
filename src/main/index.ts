@@ -319,9 +319,43 @@ function createWindow(sessionId = newSessionId()): void {
         if (!unconditionalSave.saved || await fs.readFile(missingRevisionPath, 'utf8') !== 'explicit overwrite\n') {
           throw new Error(`Legacy unconditional save failed: ${JSON.stringify(unconditionalSave)}`)
         }
+        const legacyEncodingPath = path.join(app.getPath('userData'), 'legacy-gbk.txt')
+        const originalGbkBytes = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x0d, 0x0a])
+        await fs.writeFile(legacyEncodingPath, originalGbkBytes)
+        authorizePathForRenderer(win.webContents.id, legacyEncodingPath)
+        const automaticallyDecodedLegacy = await win.webContents.executeJavaScript(
+          `window.editor.openPath(${JSON.stringify(legacyEncodingPath)})`, true
+        )
+        const explicitlyDecodedLegacy = await win.webContents.executeJavaScript(
+          `window.editor.reopenWithEncoding(${JSON.stringify(legacyEncodingPath)}, { encoding: 'gbk' })`, true
+        )
+        if (automaticallyDecodedLegacy.encoding !== 'utf8' || automaticallyDecodedLegacy.encodingIssue !== 'invalid-bytes' ||
+          explicitlyDecodedLegacy.content !== '中文\n' || explicitlyDecodedLegacy.encoding !== 'gbk' ||
+          explicitlyDecodedLegacy.encodingLocked !== true || explicitlyDecodedLegacy.eol !== 'CRLF') {
+          throw new Error(`Explicit legacy decoding failed: ${JSON.stringify({ automaticallyDecodedLegacy, explicitlyDecodedLegacy })}`)
+        }
+        const legacySave = await win.webContents.executeJavaScript(`window.editor.save(
+          ${JSON.stringify(legacyEncodingPath)},
+          ${JSON.stringify('中文测试\n')},
+          { encoding: 'gbk', eol: 'CRLF', expectedEncoding: 'gbk', expectedRevision: ${JSON.stringify(explicitlyDecodedLegacy.revision)} }
+        )`, true) as SaveResult
+        const savedGbkBytes = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0xb2, 0xe2, 0xca, 0xd4, 0x0d, 0x0a])
+        if (!legacySave.saved || !Buffer.from(await fs.readFile(legacyEncodingPath)).equals(savedGbkBytes)) {
+          throw new Error(`Legacy encoding save failed: ${JSON.stringify(legacySave)}`)
+        }
+        const lossyLegacySave = await win.webContents.executeJavaScript(`window.editor.save(
+          ${JSON.stringify(legacyEncodingPath)},
+          ${JSON.stringify('中文🙂\n')},
+          { encoding: 'gbk', eol: 'CRLF', expectedEncoding: 'gbk', expectedRevision: ${JSON.stringify(legacySave.revision)} }
+        ).then(() => ({ rejected: false })).catch((error) => ({ rejected: true, message: String(error) }))`, true)
+        if (!lossyLegacySave.rejected || !/without data loss/i.test(lossyLegacySave.message) ||
+          !Buffer.from(await fs.readFile(legacyEncodingPath)).equals(savedGbkBytes)) {
+          throw new Error(`Lossy legacy save was not rejected safely: ${JSON.stringify(lossyLegacySave)}`)
+        }
         await fs.unlink(revisionSmokePath)
         await fs.unlink(missingRevisionPath)
         await fs.unlink(oversizedRevisionPath)
+        await fs.unlink(legacyEncodingPath)
         const accessibilityPrepared = await win.webContents.executeJavaScript(`(() => {
           const languageButton = document.querySelector('#status-language')
           if (!(languageButton instanceof HTMLButtonElement)) return false
@@ -501,6 +535,7 @@ function createWindow(sessionId = newSessionId()): void {
         })()`, true)
         if (!encodingFocused) throw new Error('Could not focus the encoding status button')
         await pressKey('Enter')
+        await pressKey('Enter')
         await pressKey('ArrowDown')
         await pressKey('Enter')
         const encodingKeyboardSelected = await win.webContents.executeJavaScript(`(() => {
@@ -569,6 +604,8 @@ function createWindow(sessionId = newSessionId()): void {
                 formatDirty: true,
                 hasDraft: Object.prototype.hasOwnProperty.call(file, 'draft'),
                 encoding: file.encoding,
+                diskEncoding: file.diskEncoding,
+                encodingLocked: file.encodingLocked,
                 eol: file.eol
               }
             }
@@ -577,7 +614,8 @@ function createWindow(sessionId = newSessionId()): void {
           return { formatDirty: false }
         })()`, true)
         if (!metadataSessionResult.formatDirty || metadataSessionResult.hasDraft ||
-          metadataSessionResult.encoding !== 'utf8bom' || metadataSessionResult.eol !== 'CRLF') {
+          metadataSessionResult.encoding !== 'utf8bom' || metadataSessionResult.diskEncoding !== 'utf8' ||
+          metadataSessionResult.encodingLocked !== true || metadataSessionResult.eol !== 'CRLF') {
           throw new Error(`Metadata-only session persistence failed: ${JSON.stringify(metadataSessionResult)}`)
         }
         const largeSessionRoundTrip = await win.webContents.executeJavaScript(`(async () => {
@@ -1514,6 +1552,135 @@ function createWindow(sessionId = newSessionId()): void {
             throw new Error('Opening and resolving EditorConfig rewrote the sample file instead of preserving CRLF bytes')
           }
 
+          const revealActiveFilePrepared = await win.webContents.executeJavaScript(`(() => {
+            const sidebar = document.querySelector('#sidebar')
+            const tree = document.querySelector('#file-tree')
+            const content = document.querySelector('.cm-content')
+            const active = document.querySelector('#tab-bar > .tab.active')
+            const srcItem = [...document.querySelectorAll('#file-tree .tree-item')]
+              .find((item) => item instanceof HTMLElement
+                && item.dataset.treePath === ${JSON.stringify(editorConfigSrc)})
+            const sampleRow = [...document.querySelectorAll('#file-tree .tree-row')]
+              .find((row) => row instanceof HTMLElement
+                && row.dataset.treePath === ${JSON.stringify(editorConfigSamplePath)})
+            if (!(sidebar instanceof HTMLElement) || !(tree instanceof HTMLElement)
+              || !(content instanceof HTMLElement) || !(active instanceof HTMLElement)
+              || !(srcItem instanceof HTMLElement)
+              || srcItem.querySelector(':scope > ul.tree-list') || sampleRow) return { ok: false }
+            content.focus()
+            const original = Element.prototype.scrollIntoView
+            window.__lumenRevealScrollSmoke = { original, path: '', block: '' }
+            Element.prototype.scrollIntoView = function (options) {
+              const state = window.__lumenRevealScrollSmoke
+              if (state) {
+                state.path = this instanceof HTMLElement ? this.dataset.treePath ?? '' : ''
+                state.block = options && typeof options === 'object' ? options.block ?? '' : ''
+              }
+              return original.call(this, options)
+            }
+            return {
+              ok: document.activeElement === content,
+              sidebarHidden: sidebar.classList.contains('hidden'),
+              activeDocId: active.dataset.docId ?? '',
+              text: [...content.querySelectorAll('.cm-line')]
+                .map((line) => line.textContent ?? '').join(${JSON.stringify('\n')}),
+              dirtyMark: active.querySelector('.tab-dirty')?.textContent ?? ''
+            }
+          })()`, true)
+          if (!revealActiveFilePrepared.ok || !revealActiveFilePrepared.activeDocId) {
+            throw new Error(`Could not prepare active-file reveal smoke: ${JSON.stringify(revealActiveFilePrepared)}`)
+          }
+          if (!revealActiveFilePrepared.sidebarHidden) {
+            win.webContents.send(IPC.menuEvent, 'toggle-sidebar' as MenuEvent)
+          }
+          const revealSidebarHidden = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            while (Date.now() < deadline) {
+              const sidebar = document.querySelector('#sidebar')
+              const content = document.querySelector('.cm-content')
+              if (sidebar instanceof HTMLElement && sidebar.classList.contains('hidden')
+                && sidebar.inert && sidebar.getAttribute('aria-hidden') === 'true'
+                && content instanceof HTMLElement && document.activeElement === content) return true
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return false
+          })()`, true)
+          if (!revealSidebarHidden) throw new Error('Could not hide the sidebar before revealing the active file')
+          win.webContents.send(IPC.menuEvent, 'reveal-active-file-in-sidebar' as MenuEvent)
+          const revealActiveFileResult = await win.webContents.executeJavaScript(`(async () => {
+            const original = window.__lumenRevealScrollSmoke?.original
+            const deadline = Date.now() + 5_000
+            let observed = {}
+            try {
+              while (Date.now() < deadline) {
+                const sidebar = document.querySelector('#sidebar')
+                const tree = document.querySelector('#file-tree')
+                const content = document.querySelector('.cm-content')
+                const active = document.querySelector('#tab-bar > .tab.active')
+                const items = [...document.querySelectorAll('#file-tree .tree-item')]
+                const findItem = (target) => items.find((item) => item instanceof HTMLElement && item.dataset.treePath === target)
+                const srcItem = findItem(${JSON.stringify(editorConfigSrc)})
+                const nestedItem = findItem(${JSON.stringify(editorConfigNested)})
+                const sampleItem = findItem(${JSON.stringify(editorConfigSamplePath)})
+                const sampleRow = sampleItem instanceof HTMLElement
+                  ? sampleItem.querySelector(':scope > .tree-row')
+                  : null
+                const srcExpanded = srcItem instanceof HTMLElement
+                  && srcItem.querySelector(':scope > ul.tree-list') instanceof HTMLElement
+                  && srcItem.querySelector(':scope > .tree-row > .tree-twisty')?.textContent === '▾'
+                const nestedExpanded = nestedItem instanceof HTMLElement
+                  && nestedItem.querySelector(':scope > ul.tree-list') instanceof HTMLElement
+                  && nestedItem.querySelector(':scope > .tree-row > .tree-twisty')?.textContent === '▾'
+                const currentRows = [...document.querySelectorAll('#file-tree .tree-row[aria-current="location"]')]
+                const treeRect = tree instanceof HTMLElement ? tree.getBoundingClientRect() : null
+                const rowRect = sampleRow instanceof HTMLElement ? sampleRow.getBoundingClientRect() : null
+                const inViewport = !!treeRect && !!rowRect
+                  && rowRect.top >= treeRect.top - 1 && rowRect.bottom <= treeRect.bottom + 1
+                const scroll = window.__lumenRevealScrollSmoke
+                observed = {
+                  sidebarVisible: sidebar instanceof HTMLElement && !sidebar.classList.contains('hidden')
+                    && !sidebar.inert && sidebar.getAttribute('aria-hidden') === 'false',
+                  srcExpanded,
+                  nestedExpanded,
+                  currentCount: currentRows.length,
+                  currentPath: sampleRow instanceof HTMLElement ? sampleRow.dataset.treePath ?? '' : '',
+                  ariaCurrent: sampleRow?.getAttribute('aria-current') ?? '',
+                  highlighted: sampleRow instanceof HTMLElement && srcItem instanceof HTMLElement
+                    && getComputedStyle(sampleRow).backgroundColor !== getComputedStyle(srcItem.querySelector(':scope > .tree-row')).backgroundColor,
+                  inViewport,
+                  scrollPath: scroll?.path ?? '',
+                  scrollBlock: scroll?.block ?? '',
+                  activeDocId: active instanceof HTMLElement ? active.dataset.docId ?? '' : '',
+                  focused: content instanceof HTMLElement && document.activeElement === content,
+                  text: content instanceof HTMLElement
+                    ? [...content.querySelectorAll('.cm-line')].map((line) => line.textContent ?? '').join(${JSON.stringify('\n')})
+                    : '',
+                  dirtyMark: active?.querySelector('.tab-dirty')?.textContent ?? ''
+                }
+                if (observed.sidebarVisible && observed.srcExpanded && observed.nestedExpanded
+                  && observed.currentCount === 1
+                  && observed.currentPath === ${JSON.stringify(editorConfigSamplePath)}
+                  && observed.ariaCurrent === 'location' && observed.highlighted && observed.inViewport
+                  && observed.scrollPath === ${JSON.stringify(editorConfigSamplePath)}
+                  && observed.scrollBlock === 'nearest'
+                  && observed.activeDocId === ${JSON.stringify(revealActiveFilePrepared.activeDocId)}
+                  && observed.focused
+                  && observed.text === ${JSON.stringify(revealActiveFilePrepared.text)}
+                  && observed.dirtyMark === ${JSON.stringify(revealActiveFilePrepared.dirtyMark)}) {
+                  return { ok: true, ...observed }
+                }
+                await new Promise((resolve) => window.setTimeout(resolve, 20))
+              }
+              return { ok: false, ...observed }
+            } finally {
+              if (typeof original === 'function') Element.prototype.scrollIntoView = original
+              delete window.__lumenRevealScrollSmoke
+            }
+          })()`, true)
+          if (!revealActiveFileResult.ok) {
+            throw new Error(`Active file was not revealed safely in the sidebar: ${JSON.stringify(revealActiveFileResult)}`)
+          }
+
           const editorConfigEditorFocused = await win.webContents.executeJavaScript(`(() => {
             const content = document.querySelector('.cm-content')
             if (!(content instanceof HTMLElement)) return false
@@ -1590,6 +1757,63 @@ function createWindow(sessionId = newSessionId()): void {
             return false
           })()`, true)
           if (!editorConfigTabClosed) throw new Error('EditorConfig smoke tab was not closed during cleanup')
+          const outsideRevealPrepared = await win.webContents.executeJavaScript(`(async () => {
+            const tab = document.querySelector('#tab-bar > .tab[data-doc-id=${JSON.stringify(secondWhitespaceTab.id)}]')
+            if (!(tab instanceof HTMLElement)) return { ok: false, sidebarHidden: false, activeDocId: '' }
+            if (!tab.classList.contains('active')) tab.click()
+            const deadline = Date.now() + 3_000
+            while (Date.now() < deadline) {
+              const active = document.querySelector('#tab-bar > .tab.active')
+              const content = document.querySelector('.cm-content')
+              const sidebar = document.querySelector('#sidebar')
+              const current = document.querySelector('#file-tree .tree-row[aria-current="location"]')
+              if (active?.getAttribute('data-doc-id') === ${JSON.stringify(secondWhitespaceTab.id)}
+                && content instanceof HTMLElement && sidebar instanceof HTMLElement && !current) {
+                content.focus()
+                return {
+                  ok: document.activeElement === content,
+                  sidebarHidden: sidebar.classList.contains('hidden'),
+                  activeDocId: active.getAttribute('data-doc-id') ?? ''
+                }
+              }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, sidebarHidden: false, activeDocId: '' }
+          })()`, true)
+          if (!outsideRevealPrepared.ok) {
+            throw new Error(`Could not prepare outside-workspace reveal smoke: ${JSON.stringify(outsideRevealPrepared)}`)
+          }
+          if (!outsideRevealPrepared.sidebarHidden) {
+            win.webContents.send(IPC.menuEvent, 'toggle-sidebar' as MenuEvent)
+            await new Promise<void>((resolve) => setTimeout(resolve, 50))
+          }
+          win.webContents.send(IPC.menuEvent, 'reveal-active-file-in-sidebar' as MenuEvent)
+          const outsideRevealResult = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            let observed = {}
+            while (Date.now() < deadline) {
+              const sidebar = document.querySelector('#sidebar')
+              const active = document.querySelector('#tab-bar > .tab.active')
+              const content = document.querySelector('.cm-content')
+              observed = {
+                status: document.querySelector('#status-selection')?.textContent?.trim() ?? '',
+                sidebarHidden: sidebar instanceof HTMLElement && sidebar.classList.contains('hidden')
+                  && sidebar.inert && sidebar.getAttribute('aria-hidden') === 'true',
+                currentCount: document.querySelectorAll('#file-tree .tree-row[aria-current="location"]').length,
+                activeDocId: active?.getAttribute('data-doc-id') ?? '',
+                focused: content instanceof HTMLElement && document.activeElement === content
+              }
+              if (/不在工作区|outside.*workspace/i.test(observed.status) && observed.sidebarHidden
+                && observed.currentCount === 0
+                && observed.activeDocId === ${JSON.stringify(outsideRevealPrepared.activeDocId)}
+                && observed.focused) return { ok: true, ...observed }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, ...observed }
+          })()`, true)
+          if (!outsideRevealResult.ok) {
+            throw new Error(`Outside-workspace reveal changed sidebar state: ${JSON.stringify(outsideRevealResult)}`)
+          }
           win.webContents.send(IPC.menuEvent, 'remove-folder-from-project' as MenuEvent)
           const editorConfigWorkspaceRemoved = await win.webContents.executeJavaScript(`(async () => {
             const deadline = Date.now() + 3_000

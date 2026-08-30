@@ -7,46 +7,47 @@ files:
   - out/**/*
   - package.json
 asar: true
+publish: null
+# Use one entry per extension. app-builder's AppImage helper expects `ext` to
+# be scalar even though electron-builder's shared schema also permits arrays.
 fileAssociations:
-  - ext:
-      - txt
-      - md
-      - markdown
-      - json
-      - js
-      - ts
-      - html
-      - css
-      - py
-      - java
-      - c
-      - cpp
-      - h
-      - hpp
-      - go
-      - rs
-      - sh
-    name: "文本编辑器(徐洁阳) 文档"
-    role: Editor
+  - { ext: txt, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: md, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: markdown, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: json, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: js, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: ts, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: html, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: css, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: py, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: java, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: c, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: cpp, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: h, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: hpp, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: go, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: rs, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: sh, name: "文本编辑器(徐洁阳) 文档", role: Editor }
 win:
   icon: build/icon.png
   target:
     - nsis
     - portable
-  artifactName: ${productName}-${version}-win-${arch}.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  artifactName: text-editor-xujieyang-${version}-windows-${arch}-setup.${ext}
+portable:
+  artifactName: text-editor-xujieyang-${version}-windows-${arch}-portable.${ext}
 mac:
   icon: build/icon.icns
   target:
     - dmg
     - zip
   category: public.app-category.developer-tools
-  artifactName: ${productName}-${version}-mac-${arch}.${ext}
-  # Provide CSC_LINK / CSC_KEY_PASSWORD in release CI to sign with a Developer
-  # ID certificate. Set APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
-  # there as well to enable electron-builder's notarization flow.
+  artifactName: text-editor-xujieyang-${version}-macos-${arch}.${ext}
+  # Release CI supplies a Developer ID certificate and passes
+  # mac.notarize.teamId explicitly so electron-builder 24 uses notarytool.
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
@@ -57,4 +58,8 @@ linux:
     - AppImage
     - deb
   category: Utility
-  artifactName: ${productName}-${version}-linux-${arch}.${ext}
+  maintainer: "徐洁阳 <xujieyang4j@users.noreply.github.com>"
+appImage:
+  artifactName: text-editor-xujieyang-${version}-linux-${arch}.${ext}
+deb:
+  artifactName: text-editor-xujieyang-${version}-linux-${arch}.${ext}

@@ -11,6 +11,7 @@ export const IPC = {
   fileNew: 'file:new',
   fileOpen: 'file:open',
   fileOpenPath: 'file:open-path',
+  fileReopenWithEncoding: 'file:reopen-with-encoding',
   dropOpen: 'file:drop-open',
   folderOpen: 'folder:open',
   fileSave: 'file:save',
@@ -104,8 +105,12 @@ export interface OpenedFile {
   path: string
   /** Decoded Unicode text with logical LF line endings. */
   content: string
-  /** Encoding detected on read and used when the file is saved again. */
+  /** Encoding detected automatically or explicitly selected for this read. */
   encoding: TextEncoding
+  /** True when the bytes were deliberately decoded with a user-selected encoding. */
+  encodingLocked?: boolean
+  /** Signals an automatic decode that may need an explicit encoding choice. */
+  encodingIssue?: 'invalid-bytes' | 'uncertain'
   /** Original line-ending convention. CodeMirror internally normalises to LF. */
   eol: LineEnding
   /** SHA-256 of exact bytes read, or null when an oversized file was not read. */
@@ -118,8 +123,25 @@ export interface OpenedFile {
   isTooLarge: boolean
 }
 
-/** Text encodings the built-in reader/writer can preserve without native add-ons. */
-export type TextEncoding = 'utf8' | 'utf8bom' | 'utf16le' | 'utf16be'
+/** Explicitly supported text encodings. BOM-bearing UTF encodings retain legacy IDs for session compatibility. */
+export type TextEncoding =
+  | 'utf8'
+  | 'utf8bom'
+  | 'utf16le'
+  | 'utf16be'
+  | 'utf16le-nobom'
+  | 'utf16be-nobom'
+  | 'gb18030'
+  | 'gbk'
+  | 'big5'
+  | 'shiftjis'
+  | 'windows1252'
+  | 'iso88591'
+
+export interface FileReadOptions {
+  /** Force a byte-level decoding instead of automatic BOM/strict UTF detection. */
+  encoding: TextEncoding
+}
 
 /** UI and editor color schemes are independent from language syntax selection. */
 export type ColorScheme = 'dark' | 'light' | 'solarized-dark' | 'dracula'
@@ -147,10 +169,14 @@ export interface ResolvedEditorConfig extends EditorConfigProperties {
 export interface FileWriteOptions {
   encoding: TextEncoding
   eol: LineEnding
+  /** Encoding used to decode the currently observed disk revision, for conflict previews. */
+  expectedEncoding?: TextEncoding
   /** For Save As, resolve the destination project's EOL unless the user explicitly overrode it. */
   respectEditorConfigEol?: boolean
   /** Last raw-byte revision observed by the caller; null means the path was absent. */
   expectedRevision?: string | null
+  /** Source file that Save As must not overwrite while its decode is unsafe. */
+  protectedSourcePath?: string
 }
 
 /** Result of a save operation. */
@@ -163,8 +189,8 @@ export interface SaveResult {
   revision?: string
   /** Physical line ending actually selected for the successful write. */
   eol?: LineEnding
-  /** Why no write occurred: dialog cancellation, stale bytes, or unsafe hard-link replacement. */
-  reason?: 'cancelled' | 'conflict' | 'hardlink'
+  /** Why no write occurred: dialog cancellation, stale bytes, or an unsafe target. */
+  reason?: 'cancelled' | 'conflict' | 'hardlink' | 'protected-source'
   /** Latest disk snapshot when an optimistic save detects a conflict. */
   conflict?: OpenedFile | null
 }
@@ -557,6 +583,12 @@ export interface SessionFile {
   /** Raw-byte revision on which the pending text/format intent was based. */
   baseRevision?: string | null
   encoding?: TextEncoding
+  /** Encoding used for the current bytes on disk when a different save encoding is pending. */
+  diskEncoding?: TextEncoding
+  /** Reopen this file using the persisted explicit encoding instead of automatic detection. */
+  encodingLocked?: boolean
+  /** Preserve a detected decode warning across hot-exit without persisting malformed output to disk. */
+  encodingIssue?: OpenedFile['encodingIssue']
   eol?: LineEnding
   /** Explicit per-document EOL choice; distinct from an EditorConfig suggestion. */
   eolOverride?: LineEnding
@@ -790,6 +822,7 @@ export const EMPTY_SESSION: Session = {
 export type MenuEvent =
   | 'new-file'
   | 'open-file'
+  | 'open-file-with-encoding'
   | 'open-folder'
   | 'save'
   | 'save-as'
@@ -807,6 +840,7 @@ export type MenuEvent =
   | 'find-previous'
   | 'replace'
   | 'toggle-sidebar'
+  | 'reveal-active-file-in-sidebar'
   | 'toggle-word-wrap'
   | 'toggle-theme'
   | 'toggle-line-numbers'
@@ -830,6 +864,8 @@ export type MenuEvent =
   | 'select-language'
   | 'select-line-ending'
   | 'select-encoding'
+  | 'encoding-actions'
+  | 'reopen-with-encoding'
   | 'toggle-comment'
   | 'toggle-block-comment'
   | 'add-cursor-above'

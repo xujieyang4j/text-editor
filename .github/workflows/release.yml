@@ -2,41 +2,350 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "20"
 
 jobs:
-  package:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Match tag to package version
+        run: node scripts/release-artifacts.mjs verify-tag "${GITHUB_REF_NAME}"
+      - name: Require the tagged commit to be on main
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Release tag $GITHUB_REF_NAME is not reachable from main." >&2
+            exit 1
+          }
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Test, type-check, and build
+        run: npm test
+
+  build-linux:
+    name: Linux x64
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Package AppImage and Debian package
+        run: npx --no-install electron-builder --linux --x64 --publish never
+      - name: Validate and stage Linux files
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          APPIMAGE="release/$VERSION/text-editor-xujieyang-$VERSION-linux-x86_64.AppImage"
+          DEB="release/$VERSION/text-editor-xujieyang-$VERSION-linux-amd64.deb"
+          test -s "$APPIMAGE"
+          test -x "$APPIMAGE"
+          test -s "$DEB"
+          dpkg-deb --info "$DEB" >/dev/null
+          node scripts/release-artifacts.mjs stage linux-x64
+      - name: Upload Linux release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-linux-x64
+          path: release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  build-macos:
+    name: macOS ${{ matrix.arch }}
+    needs: validate
+    environment: production-release
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: linux
-          - os: windows-latest
-            target: win
-          - os: macos-latest
-            target: mac
-    runs-on: ${{ matrix.os }}
+          - arch: x64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Require Apple signing and notarization credentials
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.MAC_APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MAC_APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.MAC_APPLE_TEAM_ID }}
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing $name in the production-release environment." >&2
+              exit 1
+            fi
+          done
+      - run: npm ci
+      - run: npm run build
+      - name: Package signed and notarized macOS files
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.MAC_APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MAC_APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.MAC_APPLE_TEAM_ID }}
+        run: |
+          npx --no-install electron-builder --mac --${{ matrix.arch }} --publish never \
+            --config.forceCodeSigning=true \
+            --config.mac.notarize.teamId="$APPLE_TEAM_ID"
+      - name: Verify Developer ID signature, notarization, DMG, and ZIP
+        env:
+          RELEASE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          OUTPUT="release/$VERSION"
+          DMG="$OUTPUT/text-editor-xujieyang-$VERSION-macos-$RELEASE_ARCH.dmg"
+          ZIP="$OUTPUT/text-editor-xujieyang-$VERSION-macos-$RELEASE_ARCH.zip"
+          test -s "$DMG"
+          test -s "$ZIP"
+
+          verify_app() {
+            local app_path="$1"
+            test -d "$app_path"
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            codesign --display --verbose=4 "$app_path" 2>&1 | grep -q '^Authority=Developer ID Application:'
+            spctl --assess --type execute --verbose=4 "$app_path"
+            xcrun stapler validate "$app_path"
+          }
+          only_top_level_app() {
+            local root="$1"
+            local candidates=()
+            for candidate in "$root"/*.app; do
+              if [ -d "$candidate" ] && [ ! -L "$candidate" ]; then candidates+=("$candidate"); fi
+            done
+            if [ "${#candidates[@]}" -ne 1 ]; then
+              echo "Expected exactly one top-level application in $root, found ${#candidates[@]}." >&2
+              return 1
+            fi
+            printf '%s\n' "${candidates[0]}"
+          }
+
+          if [ "$RELEASE_ARCH" = x64 ]; then
+            APP_OUTPUT_DIR="$OUTPUT/mac"
+          else
+            APP_OUTPUT_DIR="$OUTPUT/mac-arm64"
+          fi
+          APP_PATH="$(only_top_level_app "$APP_OUTPUT_DIR")"
+          verify_app "$APP_PATH"
+
+          ZIP_DIR="$(mktemp -d "$RUNNER_TEMP/text-editor-zip.XXXXXX")"
+          ditto -x -k "$ZIP" "$ZIP_DIR"
+          ZIP_APP="$(only_top_level_app "$ZIP_DIR")"
+          verify_app "$ZIP_APP"
+
+          MOUNT_PARENT="$(mktemp -d "$RUNNER_TEMP/text-editor-dmg.XXXXXX")"
+          MOUNT_DIR="$MOUNT_PARENT/volume"
+          mkdir "$MOUNT_DIR"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_DIR" "$DMG"
+          cleanup_dmg() { hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || true; }
+          trap cleanup_dmg EXIT
+          DMG_APP="$(only_top_level_app "$MOUNT_DIR")"
+          verify_app "$DMG_APP"
+          hdiutil detach "$MOUNT_DIR"
+          trap - EXIT
+
+          node scripts/release-artifacts.mjs stage "macos-$RELEASE_ARCH"
+      - name: Upload macOS release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  build-windows:
+    name: Windows x64
+    needs: validate
+    runs-on: windows-2022
+    environment: production-release
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Require Windows signing credentials
+        shell: pwsh
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK) -or [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) {
+            throw 'Configure WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD in the production-release environment.'
+          }
+      - run: npm ci
+      - run: npm run build
+      - name: Package signed installer and portable executable
+        shell: pwsh
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: npx --no-install electron-builder --win --x64 --publish never --config.forceCodeSigning=true
+      - name: Verify Authenticode signatures and stage files
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $expected = @(
+            "release/$version/text-editor-xujieyang-$version-windows-x64-setup.exe",
+            "release/$version/text-editor-xujieyang-$version-windows-x64-portable.exe"
+          )
+          $signtoolCommand = Get-Command signtool.exe -ErrorAction SilentlyContinue
+          $signtoolPath = if ($signtoolCommand) { $signtoolCommand.Source } else { $null }
+          if (-not $signtoolPath) {
+            $signtoolPath = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+              Where-Object { $_.Directory.Name -eq 'x64' } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $signtoolPath) { throw 'signtool.exe was not found on the runner.' }
+          foreach ($file in $expected) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing Windows release file: $file" }
+            & $signtoolPath verify /pa /all /v $file
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed: $file" }
+          }
+          node scripts/release-artifacts.mjs stage windows-x64
+      - name: Upload Windows release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-windows-x64
+          path: release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - build-linux
+      - build-windows
+      - build-macos
+    runs-on: ubuntu-22.04
+    environment: production-release
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run test
-      - name: Package
-        run: npm run dist:${{ matrix.target }}
+          persist-credentials: false
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - name: Prepare an immutable release slot
         env:
-          # Configure these repository secrets for signed Windows/macOS releases.
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - uses: softprops/action-gh-release@v2
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          STATUS="$(curl --silent --show-error --output "$RUNNER_TEMP/existing-release.json" --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME")"
+          case "$STATUS" in
+            404) ;;
+            200)
+              if [ "$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).draft" "$RUNNER_TEMP/existing-release.json")" != true ]; then
+                echo "Published release $GITHUB_REF_NAME already exists; publish a new version instead of replacing assets." >&2
+                exit 1
+              fi
+              RELEASE_ID="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).id" "$RUNNER_TEMP/existing-release.json")"
+              curl --fail-with-body --silent --show-error --request DELETE \
+                --header "Authorization: Bearer $GH_TOKEN" \
+                --header 'Accept: application/vnd.github+json' \
+                --header 'X-GitHub-Api-Version: 2022-11-28' \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+              ;;
+            *) echo "Could not verify release immutability (GitHub API HTTP $STATUS)." >&2; exit 1 ;;
+          esac
+      - name: Verify the complete release and generate checksums
+        run: node scripts/release-artifacts.mjs verify-all "${GITHUB_REF_NAME}" artifacts
+      - name: Create a draft release and upload the verified files
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          files: release/**/*
+          draft: true
+          overwrite_files: false
+          fail_on_unmatched_files: true
           generate_release_notes: true
+          make_latest: false
+          body: |
+            ## 下载说明
+
+            - Windows x64：选择名称以 `windows-x64-setup.exe` 结尾的安装版；免安装使用 `windows-x64-portable.exe`。
+            - Apple Silicon Mac：选择名称以 `macos-arm64.dmg` 结尾的文件；Intel Mac：选择 `macos-x64.dmg`。ZIP 适合免安装解压使用。
+            - Linux x64：通用桌面优先选择名称以 `linux-x86_64.AppImage` 结尾的文件；Debian/Ubuntu 可选择 `linux-amd64.deb`。
+            - `SHA256SUMS.txt` 可用于核对下载文件完整性。macOS 文件已进行 Developer ID 签名和 Apple 公证，Windows 文件已进行 Authenticode 签名。
+          files: |
+            artifacts/*.exe
+            artifacts/*.dmg
+            artifacts/*.zip
+            artifacts/*.AppImage
+            artifacts/*.deb
+            artifacts/SHA256SUMS.txt
+            artifacts/release-manifest.json
+      - name: Publish the completed draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_ID="$(curl --fail-with-body --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" | \
+            node -e "let data=''; process.stdin.on('data', chunk => data += chunk).on('end', () => process.stdout.write(String(JSON.parse(data).id)))")"
+          curl --fail-with-body --silent --show-error --request PATCH \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            --data '{"draft":false,"make_latest":"true"}' >/dev/null

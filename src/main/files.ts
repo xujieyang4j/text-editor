@@ -6,7 +6,8 @@ import { StringDecoder } from 'string_decoder'
 import { createHash } from 'crypto'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { detectLineEnding, encodeText as encodePreservedText, jsonStringUtf8ByteLength, normalizeLineEndings } from '../shared/text.js'
+import { applyLineEnding, detectLineEnding, isTextEncoding, jsonStringUtf8ByteLength, normalizeLineEndings } from '../shared/text.js'
+import { decodeTextAuto, decodeTextWithEncoding, detectTextEncoding, encodeTextBytes } from './textEncoding.js'
 import { isBinaryBuffer, maxEditableBytes } from '../shared/filePolicy.js'
 import { extractWorkspaceSymbols } from '../shared/symbolIndex.js'
 import { parseGitRemoteLines, parseGitTracking } from '../shared/git.js'
@@ -30,6 +31,7 @@ import {
   type Session,
   type TextEncoding,
   type FileWriteOptions,
+  type FileReadOptions,
   type WorkspaceMatch,
   type WorkspaceSearchRequest,
   type WorkspaceReplaceRequest,
@@ -639,26 +641,9 @@ async function listFilesRecursive(root: string): Promise<string[]> {
   return results
 }
 
-function detectEncoding(buffer: Buffer): TextEncoding {
-  if (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) return 'utf8bom'
-  if (buffer[0] === 0xff && buffer[1] === 0xfe) return 'utf16le'
-  if (buffer[0] === 0xfe && buffer[1] === 0xff) return 'utf16be'
-  return 'utf8'
-}
-
-function decodeText(buffer: Buffer, encoding: TextEncoding): string {
-  if (encoding === 'utf8bom') return buffer.subarray(3).toString('utf8')
-  if (encoding === 'utf16le') return buffer.subarray(2).toString('utf16le')
-  if (encoding === 'utf16be') {
-    const copy = Buffer.from(buffer.subarray(2))
-    copy.swap16()
-    return copy.toString('utf16le')
-  }
-  return buffer.toString('utf8')
-}
-
 function encodeText(content: string, options: FileWriteOptions): Buffer {
-  return encodePreservedText(content, options.encoding, options.eol)
+  const normalized = applyLineEnding(content, options.eol)
+  return encodeTextBytes(normalized, options.encoding)
 }
 
 function fileRevision(buffer: Uint8Array): string {
@@ -687,11 +672,11 @@ function expectedFileRevision(value: unknown): string | null | undefined {
 }
 
 function looksBinary(buffer: Buffer, encoding: TextEncoding): boolean {
-  return isBinaryBuffer(buffer, encoding === 'utf16le' || encoding === 'utf16be')
+  return isBinaryBuffer(buffer, encoding.startsWith('utf16'))
 }
 
 /** Read a file safely, preserving its physical encoding and newline convention. */
-async function readFile(filePath: string): Promise<OpenedFile> {
+async function readFile(filePath: string, forcedEncoding?: TextEncoding): Promise<OpenedFile> {
   const stat = await fs.stat(filePath)
   if (!stat.isFile()) throw new Error('The selected path is not a file.')
   const byteLength = stat.size
@@ -713,23 +698,30 @@ async function readFile(filePath: string): Promise<OpenedFile> {
       isTooLarge: true
     }
   }
-  const encoding = detectEncoding(buffer)
-  if (looksBinary(buffer, encoding)) {
-    return { path: filePath, content: '', encoding, eol: 'LF', revision: fileRevision(buffer), byteLength: actualByteLength, isBinary: true, isTooLarge: false }
+  const detectedEncoding = detectTextEncoding(buffer)
+  const binaryEncoding = forcedEncoding ?? detectedEncoding
+  if (looksBinary(buffer, binaryEncoding)) {
+    return { path: filePath, content: '', encoding: binaryEncoding, eol: 'LF', revision: fileRevision(buffer), byteLength: actualByteLength, isBinary: true, isTooLarge: false }
   }
-  const decoded = decodeText(buffer, encoding)
+  const decoded = forcedEncoding
+    ? decodeTextWithEncoding(buffer, forcedEncoding)
+    : decodeTextAuto(buffer)
+  const encoding = decoded.encoding
   return {
     path: filePath,
     // CodeMirror normalises line breaks to LF. Normalise at the process
     // boundary too so document baselines, drafts and watcher snapshots use
     // the same logical representation; `eol` retains the physical format.
-    content: normalizeLineEndings(decoded),
+    content: normalizeLineEndings(decoded.content),
     encoding,
-    eol: detectLineEnding(decoded),
+    eol: detectLineEnding(decoded.content),
     revision: fileRevision(buffer),
     byteLength: actualByteLength,
     isBinary: false,
-    isTooLarge: false
+    isTooLarge: false,
+    ...(forcedEncoding ? { encodingLocked: true } : {}),
+    ...(decoded.hadDecodingErrors ? { encodingIssue: 'invalid-bytes' as const } : {}),
+    ...(!decoded.hadDecodingErrors && decoded.uncertain ? { encodingIssue: 'uncertain' as const } : {})
   }
 }
 
@@ -741,17 +733,28 @@ async function saveFile(
 ): Promise<SaveResult> {
   const validated = validWriteOptions(options)
   const expectedRevision = expectedFileRevision(options?.expectedRevision)
-  const result = await saveFileBytes(filePath, encodeText(content, validated), expectedRevision)
+  const result = await saveFileBytes(
+    filePath,
+    encodeText(content, validated),
+    expectedRevision,
+    validated.expectedEncoding,
+    validated.protectedSourcePath
+  )
   return result.saved ? { ...result, eol: validated.eol } : result
 }
 
 async function saveFileBytes(
   filePath: string,
   bytes: Buffer,
-  expectedRevision: string | null | undefined
+  expectedRevision: string | null | undefined,
+  expectedEncoding?: TextEncoding,
+  protectedSourcePath?: string
 ): Promise<SaveResult> {
   return withSerializedFileSave(filePath, async () => {
     const writePath = await fileWriteTarget(filePath)
+    if (protectedSourcePath && await pathsShareFileIdentity(writePath, protectedSourcePath)) {
+      return { saved: false, path: filePath, reason: 'protected-source' }
+    }
     const nextRevision = fileRevision(bytes)
     let checkedRevision: string | null | undefined
     let current: OpenedFile | null = null
@@ -765,7 +768,7 @@ async function saveFileBytes(
           return { saved: true, path: filePath, revision: nextRevision }
         }
         if (currentRevision !== null) {
-          try { current = await readFile(writePath) }
+          try { current = await readFile(writePath, expectedEncoding) }
           catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
         }
         return { saved: false, path: filePath, reason: 'conflict', conflict: current }
@@ -789,7 +792,7 @@ async function saveFileBytes(
         saved: false,
         path: filePath,
         reason: 'hardlink',
-        conflict: current ?? await readFile(writePath)
+        conflict: current ?? await readFile(writePath, expectedEncoding)
       }
     }
 
@@ -813,7 +816,7 @@ async function saveFileBytes(
         let latest: OpenedFile | null = null
         if (latestRevision !== checkedRevision) {
           if (latestRevision !== null) {
-            try { latest = await readFile(writePath) }
+            try { latest = await readFile(writePath, expectedEncoding) }
             catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
           }
           return { saved: false, path: filePath, reason: 'conflict', conflict: latest }
@@ -826,19 +829,22 @@ async function saveFileBytes(
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
           let conflict: OpenedFile | null = null
-          try { conflict = await readFile(writePath) } catch { /* Broken links remain a missing-target conflict. */ }
+          try { conflict = await readFile(writePath, expectedEncoding) } catch { /* Broken links remain a missing-target conflict. */ }
           return { saved: false, path: filePath, reason: 'conflict', conflict }
         }
       }
       const latestWritePath = await fileWriteTarget(filePath)
       if (path.resolve(latestWritePath) !== path.resolve(writePath)) {
         let conflict: OpenedFile | null = null
-        try { conflict = await readFile(filePath) } catch { /* The link/path became unavailable. */ }
+        try { conflict = await readFile(filePath, expectedEncoding) } catch { /* The link/path became unavailable. */ }
         return { saved: false, path: filePath, reason: 'conflict', conflict }
+      }
+      if (protectedSourcePath && await pathsShareFileIdentity(latestWritePath, protectedSourcePath)) {
+        return { saved: false, path: filePath, reason: 'protected-source' }
       }
       try {
         if ((await fs.stat(writePath)).nlink > 1) {
-          return { saved: false, path: filePath, reason: 'hardlink', conflict: await readFile(writePath) }
+          return { saved: false, path: filePath, reason: 'hardlink', conflict: await readFile(writePath, expectedEncoding) }
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -943,6 +949,18 @@ async function fileWriteTarget(file: string): Promise<string> {
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     return path.resolve(file)
+  }
+}
+
+/** Compare resolved paths and, where present, their underlying file identity. */
+async function pathsShareFileIdentity(left: string, right: string): Promise<boolean> {
+  const [leftTarget, rightTarget] = await Promise.all([fileWriteTarget(left), fileWriteTarget(right)])
+  if (path.resolve(leftTarget) === path.resolve(rightTarget)) return true
+  try {
+    const [leftStat, rightStat] = await Promise.all([fs.stat(leftTarget), fs.stat(rightTarget)])
+    return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino
+  } catch {
+    return false
   }
 }
 
@@ -1228,6 +1246,7 @@ function sanitizeSession(value: unknown, rejectOversizedText = false): Session {
           const draft = recoveryText(file.draft)
           const recoveryContent = recoveryText(file.recoveryContent)
           const views = sanitizeSessionViewStates(file.views)
+          const diskEncoding = isTextEncoding(file.diskEncoding) ? file.diskEncoding : undefined
           return {
             path: typeof file.path === 'string' && path.isAbsolute(file.path) ? file.path : null,
             name: typeof file.name === 'string' ? file.name.slice(0, 255) : 'Untitled',
@@ -1240,7 +1259,10 @@ function sanitizeSession(value: unknown, rejectOversizedText = false): Session {
             ...(file.baseRevision === null || (typeof file.baseRevision === 'string' && /^sha256:[a-f0-9]{64}$/.test(file.baseRevision))
               ? { baseRevision: file.baseRevision }
               : {}),
-            ...(file.encoding === 'utf8' || file.encoding === 'utf8bom' || file.encoding === 'utf16le' || file.encoding === 'utf16be' ? { encoding: file.encoding } : {}),
+            ...(isTextEncoding(file.encoding) ? { encoding: file.encoding } : {}),
+            ...(diskEncoding ? { diskEncoding } : {}),
+            ...(file.encodingLocked === true && diskEncoding ? { encodingLocked: true } : {}),
+            ...(file.encodingIssue === 'invalid-bytes' || file.encodingIssue === 'uncertain' ? { encodingIssue: file.encodingIssue } : {}),
             ...(file.eol === 'LF' || file.eol === 'CRLF' || file.eol === 'CR' ? { eol: file.eol } : {}),
             ...(file.eolOverride === 'LF' || file.eolOverride === 'CRLF' || file.eolOverride === 'CR' ? { eolOverride: file.eolOverride } : {}),
             ...(Array.isArray(file.bookmarks)
@@ -1463,7 +1485,7 @@ function workspaceRoots(request: WorkspaceSearchRequest): string[] {
   return [...new Set(roots)]
 }
 
-async function searchWorkspace(request: WorkspaceSearchRequest): Promise<WorkspaceMatch[]> {
+async function searchWorkspace(request: WorkspaceSearchRequest, requireCertainEncoding = false): Promise<WorkspaceMatch[]> {
   const re = makeSearchRegExp(request)
   const limit = Math.max(1, Math.min(request.maxResults ?? MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS))
   const results: WorkspaceMatch[] = []
@@ -1481,7 +1503,9 @@ async function searchWorkspace(request: WorkspaceSearchRequest): Promise<Workspa
         const stat = await fs.stat(file)
         if (stat.size > MAX_SEARCH_FILE_BYTES) continue
         const opened = await readFile(file)
-        if (opened.isBinary || opened.isTooLarge) continue
+        if (opened.isBinary || opened.isTooLarge
+          || opened.encodingIssue === 'invalid-bytes'
+          || (requireCertainEncoding && opened.encodingIssue !== undefined)) continue
         const content = opened.content
         re.lastIndex = 0
         let match: RegExpExecArray | null
@@ -1525,7 +1549,10 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
         const stat = await fs.stat(file)
         if (stat.size > MAX_SEARCH_FILE_BYTES) continue
         const opened = await readFile(file)
-        if (opened.isBinary || opened.isTooLarge) continue
+        // Never let a bulk write act on bytes whose interpretation was only a
+        // heuristic or contained replacements. The user must first confirm an
+        // encoding in a normal editor tab.
+        if (opened.isBinary || opened.isTooLarge || opened.encodingIssue !== undefined) continue
         let count = 0
         const next = opened.content.replace(re, (...args: unknown[]) => {
           count += 1
@@ -1556,7 +1583,9 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
 }
 
 async function previewWorkspaceReplace(request: WorkspaceReplaceRequest): Promise<WorkspaceReplacePreview> {
-  const matches = await searchWorkspace(request)
+  // Keep the preview consistent with the write pass: uncertain decodes are
+  // searchable, but they are never eligible for an unattended replacement.
+  const matches = await searchWorkspace(request, true)
   return {
     files: new Set(matches.map((match) => match.path)).size,
     replacements: matches.length,
@@ -1652,7 +1681,7 @@ async function indexWorkspaceSymbols(root: string): Promise<WorkspaceSymbol[]> {
       const stat = await fs.stat(file)
       if (stat.size > MAX_SEARCH_FILE_BYTES) continue
       const opened = await readFile(file)
-      if (opened.isBinary || opened.isTooLarge) continue
+      if (opened.isBinary || opened.isTooLarge || opened.encodingIssue === 'invalid-bytes') continue
       symbols.push(...extractWorkspaceSymbols(file, opened.content).slice(0, 500))
     } catch {
       // Ignore transient workspace files.
@@ -1670,7 +1699,7 @@ async function indexWorkspaceWords(root: string): Promise<string[]> {
       const stat = await fs.stat(file)
       if (stat.size > MAX_SEARCH_FILE_BYTES) continue
       const opened = await readFile(file)
-      if (opened.isBinary || opened.isTooLarge) continue
+      if (opened.isBinary || opened.isTooLarge || opened.encodingIssue === 'invalid-bytes') continue
       for (const word of opened.content.match(/[A-Za-z_$][\w$]{1,80}/g) ?? []) {
         words.add(word)
         if (words.size >= 20_000) break
@@ -3306,22 +3335,44 @@ async function interactiveLanguageServerRequest(
 
 /** Register all file-system IPC handlers. Every handler validates its caller and input. */
 export function registerFileHandlers(): void {
-  ipcMain.handle(IPC.fileOpen, async (event): Promise<OpenedFile | null> => {
+  ipcMain.handle(IPC.fileOpen, async (event, options?: unknown): Promise<OpenedFile | null> => {
     assertTrustedSender(event)
+    if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options))) {
+      throw new Error('Invalid file read options.')
+    }
+    const requestedEncoding = (options as Partial<FileReadOptions> | null)?.encoding
+    if (requestedEncoding !== undefined && !isTextEncoding(requestedEncoding)) throw new Error('Unsupported text encoding.')
+    if (requestedEncoding === undefined && options !== undefined) throw new Error('Invalid file read options.')
     const win = BrowserWindow.fromWebContents(event.sender)
     const result = await dialog.showOpenDialog(win!, { properties: ['openFile'], title: 'Open File' })
     if (result.canceled || result.filePaths.length === 0) return null
     grantFile(event.sender.id, result.filePaths[0])
     await rememberRecentFile(result.filePaths[0])
-    return readFile(result.filePaths[0])
+    return readFile(result.filePaths[0], requestedEncoding)
   })
 
-  ipcMain.handle(IPC.fileOpenPath, async (event, filePath: unknown): Promise<OpenedFile> => {
+  ipcMain.handle(IPC.fileOpenPath, async (event, filePath: unknown, options?: unknown): Promise<OpenedFile> => {
     assertTrustedSender(event)
     assertAbsolutePath(filePath)
     assertGrantedFile(event, filePath)
     await rememberRecentFile(filePath)
-    return readFile(filePath)
+    if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options))) {
+      throw new Error('Invalid file read options.')
+    }
+    const requestedEncoding = (options as Partial<FileReadOptions> | null)?.encoding
+    if (requestedEncoding !== undefined && !isTextEncoding(requestedEncoding)) throw new Error('Unsupported text encoding.')
+    if (requestedEncoding === undefined && options !== undefined) throw new Error('Invalid file read options.')
+    return readFile(filePath, requestedEncoding)
+  })
+
+  ipcMain.handle(IPC.fileReopenWithEncoding, async (event, filePath: unknown, options: unknown): Promise<OpenedFile> => {
+    assertTrustedSender(event)
+    assertAbsolutePath(filePath)
+    assertGrantedFile(event, filePath)
+    if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('Invalid file read options.')
+    const encoding = (options as Partial<FileReadOptions>).encoding
+    if (!isTextEncoding(encoding)) throw new Error('Unsupported text encoding.')
+    return readFile(filePath, encoding)
   })
 
   ipcMain.handle(IPC.dropOpen, async (event, candidates: unknown): Promise<DroppedPaths> => {
@@ -3453,6 +3504,9 @@ export function registerFileHandlers(): void {
       if (filePath === null) return saveAs(event, content, undefined, options)
       assertAbsolutePath(filePath)
       assertGrantedFile(event, filePath)
+      if (options?.protectedSourcePath !== undefined) {
+        throw new Error('Protected source paths are valid only for Save As.')
+      }
       const configured = await editorConfigWriteOptions(event, filePath, options)
       return saveFile(filePath, content, { ...configured, expectedRevision: options?.expectedRevision })
     }
@@ -4080,12 +4134,22 @@ export function registerFileHandlers(): void {
 }
 
 function validWriteOptions(options?: FileWriteOptions): FileWriteOptions {
+  if (options !== undefined) {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('Invalid file write options.')
+    if (!isTextEncoding(options.encoding)) throw new Error('Unsupported text encoding.')
+    if (options.eol !== 'LF' && options.eol !== 'CRLF' && options.eol !== 'CR') throw new Error('Unsupported line ending.')
+    if (options.expectedEncoding !== undefined && !isTextEncoding(options.expectedEncoding)) {
+      throw new Error('Unsupported expected text encoding.')
+    }
+    if (options.protectedSourcePath !== undefined && (typeof options.protectedSourcePath !== 'string' || !path.isAbsolute(options.protectedSourcePath))) {
+      throw new Error('Invalid protected source path.')
+    }
+  }
   return {
-    encoding:
-      options?.encoding === 'utf8bom' || options?.encoding === 'utf16le' || options?.encoding === 'utf16be'
-        ? options.encoding
-        : 'utf8',
-    eol: options?.eol === 'CRLF' || options?.eol === 'CR' ? options.eol : 'LF'
+    encoding: isTextEncoding(options?.encoding) ? options.encoding : 'utf8',
+    eol: options?.eol === 'CRLF' || options?.eol === 'CR' ? options.eol : 'LF',
+    ...(isTextEncoding(options?.expectedEncoding) ? { expectedEncoding: options.expectedEncoding } : {}),
+    ...(options?.protectedSourcePath ? { protectedSourcePath: options.protectedSourcePath } : {})
   }
 }
 
@@ -4126,12 +4190,19 @@ async function saveAs(
   // native dialog. Config lookup must not widen this optimistic-save window.
   const expectedRevision = await readRawFileRevision(result.filePath)
   const validated = await editorConfigWriteOptions(event, result.filePath, options, true)
+  if (validated.protectedSourcePath) {
+    assertGrantedFile(event, validated.protectedSourcePath)
+    if (await pathsShareFileIdentity(result.filePath, validated.protectedSourcePath)) {
+      return { saved: false, path: result.filePath, reason: 'protected-source' }
+    }
+  }
   // Capture the selected target after the dialog returns, then use the same
   // optimistic checks as a normal save. A change after the user's overwrite
   // confirmation must not be silently replaced.
   return saveFile(result.filePath, content, {
     encoding: validated.encoding,
     eol: validated.eol,
-    expectedRevision
+    expectedRevision,
+    ...(validated.protectedSourcePath ? { protectedSourcePath: validated.protectedSourcePath } : {})
   })
 }

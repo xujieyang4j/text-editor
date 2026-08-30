@@ -66,7 +66,10 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   exceed 80 columns, richer Markdown hanging prefixes and block-comment leaders are not supported, and
   each command is undoable in one step
 - **File tree sidebar** — starts collapsed (`Ctrl/Cmd+B` to show), opens a folder as a
-  workspace, and lazily expands directories
+  workspace, lazily expands directories, and can reveal the active saved file via
+  *View: Reveal Active File in Sidebar*. That explicit command auto-shows the sidebar,
+  exits distraction-free mode, expands parent folders, and highlights the current item
+  without changing file contents
 - **Find & replace**, **text undo/redo**, **multi-cursor**, rectangular selection, bracket matching,
   and multi-selection case conversion. *Edit → Swap Case* (Command Palette: *Edit: Swap Case*)
   toggles each Unicode character that has case (titlecase becomes lowercase), leaves uncased characters unchanged, processes every
@@ -98,12 +101,14 @@ Runs on **Linux, Windows, and macOS** from a single codebase.
   without rewriting or marking a file dirty merely because it was opened; an explicit status-bar EOL
   choice takes precedence.
 - **Font zoom** (`Ctrl/Cmd+=` / `-` / `0`), dark/light theme, word-wrap, collapsible sidebar
-- **Clickable encoding & line endings** in the status bar: choose `UTF-8`, `UTF-8 BOM`,
-  `UTF-16 LE`, or `UTF-16 BE`, and `LF`, `CRLF`, or `CR`. A choice sets the target for
-  the next Save, Save All, or Auto Save and marks the document unsaved; saving also
-  normalizes mixed line endings to the selected style. On open, BOM detection distinguishes the
-  four Unicode formats: a UTF-8 BOM selects UTF-8 BOM, UTF-16 BOMs select LE or BE, and no
-  BOM falls back to UTF-8; the editor does not guess legacy encodings from content
+- **Complete encoding workflow** in the status bar: choose either the next-save encoding or
+  reopen the file from its original bytes. Supported formats are `UTF-8`, `UTF-8 BOM`, UTF-16
+  LE/BE with or without BOM, `GB18030`, `GBK`, `Big5`, `Shift-JIS`, `Windows-1252`, and
+  `ISO-8859-1`, plus `LF`, `CRLF`, and `CR` line endings. BOMs and strict UTF-8 are detected
+  automatically; ambiguous legacy encodings remain an explicit choice. *Open File with Encoding…*
+  can open such a file directly. A lossy legacy-encoding save is rejected instead of silently
+  replacing characters with question marks. Files containing invalid or only heuristically decoded
+  bytes cannot overwrite their source (including through Save As aliases) until an encoding is confirmed
 - **Native application menu** with standard keyboard accelerators on every platform
 - **Accessibility foundation** — visible keyboard focus, semantic dialogs and result regions,
   screen-reader status announcements, focus restoration, reduced-motion and forced-color support
@@ -202,6 +207,10 @@ numeric `indent_size` differs from `tab_width`, the configured `tab_width` deter
 
 ## Packaging installers
 
+End users should download verified builds from [GitHub Releases](https://github.com/xujieyang4j/text-editor/releases).
+Releases contain signed Windows x64 installer/portable builds, notarized macOS builds for Apple Silicon
+and Intel, Linux x64 AppImage/deb packages, and `SHA256SUMS.txt`.
+
 Produces installers under `release/<version>/`:
 
 ```bash
@@ -210,6 +219,10 @@ npm run dist:win     # Windows: NSIS installer + portable .exe
 npm run dist:mac     # macOS: .dmg + .zip
 npm run dist:linux   # Linux: AppImage + .deb
 ```
+
+These `dist:*` commands are local build helpers, not the official release path. Tagged GitHub
+Releases are produced only by the release workflow, which requires and verifies Windows signing
+and macOS Developer ID signing plus notarization.
 
 > electron-builder builds for the host OS by default. Producing macOS artifacts requires macOS;
 > Windows/Linux can be cross-built from most hosts (Windows targets may need Wine on Linux).
@@ -247,6 +260,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Wrap paragraph at 80 columns | `Alt+Q`          |
 | Zoom in/out/reset   | `Ctrl/Cmd+=` / `-` / `0`    |
 | Toggle sidebar      | `Ctrl/Cmd+B`                |
+| Reveal active file in sidebar | Command Palette / View menu |
 | Toggle word wrap    | `Alt+Z`                     |
 | Toggle theme        | `Ctrl/Cmd+K`                |
 

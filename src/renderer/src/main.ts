@@ -10,7 +10,7 @@ import { incrementalChanges, revertIncrementalChange, type IncrementalChange } f
 import { JsonView } from './jsonView.js'
 import { OutlinePanel } from './outlinePanel.js'
 import { parseLosslessJson, stringifyLosslessJson } from '../../shared/losslessJson.js'
-import { jsonStringUtf8ByteLength, textStatistics, type TextStatistics } from '../../shared/text.js'
+import { SUPPORTED_TEXT_ENCODINGS, jsonStringUtf8ByteLength, textEncodingLabel, textEncodingNeedsExplicitRead, textStatistics, type TextStatistics } from '../../shared/text.js'
 import { resolveEditorConfigIndentation } from '../../shared/editorConfig.js'
 import { BuildPanel } from './buildPanel.js'
 import { TerminalPanel } from './terminalPanel.js'
@@ -46,6 +46,7 @@ import {
   type Session,
   type SessionFile,
   type OpenedFile,
+  type TextEncoding,
   type ProjectSettings,
   type PluginManifest,
   type LanguageServerResult,
@@ -94,15 +95,30 @@ function samePhysicalText(left: PhysicalTextSnapshot, right: PhysicalTextSnapsho
   return left.content === right.content && left.encoding === right.encoding && left.eol === right.eol
 }
 
-/** Keep encoding labels consistent between the status bar and selection palette. */
-function encodingLabel(encoding: Doc['encoding']): string {
-  switch (encoding) {
-    case 'utf8': return 'UTF-8'
-    case 'utf8bom': return 'UTF-8 BOM'
-    case 'utf16le': return 'UTF-16 LE'
-    case 'utf16be': return 'UTF-16 BE'
-  }
+function normalizeWorkspacePath(path: string): string {
+  const withForwardSlashes = path.replaceAll('\\', '/')
+  const prefix = withForwardSlashes.startsWith('//')
+    ? '//'
+    : withForwardSlashes.startsWith('/')
+      ? '/'
+      : ''
+  const body = prefix ? withForwardSlashes.slice(prefix.length) : withForwardSlashes
+  let normalized = `${prefix}${body.replace(/\/+/g, '/')}`
+  if (normalized.length > prefix.length && normalized.endsWith('/')) normalized = normalized.replace(/\/+$/, '')
+  if (/^[A-Za-z]:$/.test(normalized)) normalized = `${normalized}/`
+  return /^[A-Za-z]:/.test(normalized) || normalized.startsWith('//') ? normalized.toLowerCase() : (normalized || '/')
 }
+
+function containsWorkspacePath(root: string, filePath: string): boolean {
+  const normalizedRoot = normalizeWorkspacePath(root)
+  const normalizedPath = normalizeWorkspacePath(filePath)
+  if (normalizedRoot === normalizedPath) return true
+  const boundary = normalizedRoot.endsWith('/') ? normalizedRoot : `${normalizedRoot}/`
+  return normalizedPath.startsWith(boundary)
+}
+
+/** Keep encoding labels consistent between the status bar and selection palette. */
+const encodingLabel = textEncodingLabel
 
 interface EditorGroup {
   id: number
@@ -158,14 +174,18 @@ class App {
   private plugins: PluginManifest[] = []
   private extensionHost = new ExtensionHost()
   private extensionCommands = new Map<string, { plugin: PluginManifest; title: string; run: () => void }>()
-  /** Recently-closed file paths, for Reopen Closed Tab (LIFO). */
-  private closedStack: string[] = []
+  /** Recently-closed files, including explicit decoding choices (LIFO). */
+  private closedStack: Array<{ path: string; encoding?: TextEncoding }> = []
   /** Debounce handle for session persistence. */
   private saveSessionTimer: number | null = null
   private autoSaveTimer: number | null = null
   private autoSaveInFlight = new Set<string>()
+  private manualSaveInFlight = new Set<string>()
+  private encodingReopenInFlight = new Set<string>()
   /** Invalidates late language-loader completions after a tab changes. */
   private languageActivation = 0
+  /** Prevent stale async sidebar-reveal completions from reporting the wrong file/root. */
+  private revealActiveFileGeneration = 0
   /** Commands executed while recording become the replayable macro. */
   private recordingMacro = false
   private lastMacro: MenuEvent[] = []
@@ -354,7 +374,7 @@ class App {
     }
     bindStatusCommand(this.statusLanguage, 'select-language')
     bindStatusCommand(this.statusEol, 'select-line-ending')
-    bindStatusCommand(this.statusEncoding, 'select-encoding')
+    bindStatusCommand(this.statusEncoding, 'encoding-actions')
 
     // Floating browser icon (shown only for HTML docs) → open in browser.
     this.browserBtn.addEventListener('click', () => this.run('open-in-browser'))
@@ -500,7 +520,11 @@ class App {
         // For file-backed buffers, re-read the current on-disk text so a clean
         // buffer reflects external edits; the draft (if any) is layered on top.
         // Untitled buffers have no path, so disk content is empty.
-        const opened = sf.path ? await window.editor.openPath(sf.path) : null
+        const opened = sf.path
+          ? await window.editor.openPath(sf.path, sf.encodingLocked && sf.diskEncoding
+            ? { encoding: sf.diskEncoding }
+            : undefined)
+          : null
         if (opened?.isBinary || opened?.isTooLarge) {
           if (sf.draft === undefined && sf.formatDirty !== true) continue
           const recovered = createFromSession('', {
@@ -520,7 +544,9 @@ class App {
         const restored = createFromSession(opened?.content ?? '', sf, {
           encoding: opened?.encoding ?? 'utf8',
           eol: opened?.eol ?? 'LF',
-          revision: opened?.revision ?? null
+          revision: opened?.revision ?? null,
+          encodingLocked: opened?.encodingLocked,
+          encodingIssue: opened?.encodingIssue
         })
         this.docs.push(restored)
         restoredBySessionIndex[sessionIndex] = restored
@@ -682,6 +708,9 @@ class App {
         break
       case 'open-file':
         void this.openViaDialog()
+        break
+      case 'open-file-with-encoding':
+        this.pickOpenEncoding()
         break
       case 'open-folder':
         void this.openFolder()
@@ -986,6 +1015,9 @@ class App {
       case 'toggle-sidebar':
         this.toggleSidebar()
         break
+      case 'reveal-active-file-in-sidebar':
+        void this.revealActiveFileInSidebar()
+        break
       case 'toggle-word-wrap':
         this.settings.wordWrap = !this.settings.wordWrap
         this.applyUserSettings(this.settings)
@@ -1048,6 +1080,12 @@ class App {
         break
       case 'select-encoding':
         this.pickEncoding()
+        break
+      case 'encoding-actions':
+        this.pickEncodingAction()
+        break
+      case 'reopen-with-encoding':
+        this.pickReopenEncoding()
         break
       case 'toggle-comment':
         this.editor.toggleComment()
@@ -1723,6 +1761,9 @@ class App {
       if (doc?.externalChange) {
         throw new Error(`Resolve the external change for ${baseName(filePath)} before renaming.`)
       }
+      if (doc?.encodingIssue !== undefined) {
+        throw new Error(`Reopen ${baseName(filePath)} with the correct encoding before renaming.`)
+      }
       let content: string
       let encoding: Doc['encoding'] = 'utf8'
       let eol: Doc['eol'] = 'LF'
@@ -1735,7 +1776,9 @@ class App {
         revision = doc.diskRevision
       } else {
         const opened = await window.editor.openPath(filePath)
-        if (opened.isBinary || opened.isTooLarge) throw new Error(`Cannot rename inside non-text file ${baseName(filePath)}.`)
+        if (opened.isBinary || opened.isTooLarge || opened.encodingIssue !== undefined) {
+          throw new Error(`Cannot rename inside ${baseName(filePath)} until it is opened with the correct encoding.`)
+        }
         content = opened.content
         encoding = opened.encoding
         eol = opened.eol
@@ -1768,6 +1811,7 @@ class App {
       const result = await window.editor.save(filePath, next, {
         encoding,
         eol,
+        ...(doc?.encodingLocked ? { expectedEncoding: doc.savedEncoding } : {}),
         respectEditorConfigEol: doc?.eolOverride === undefined,
         expectedRevision: revision
       })
@@ -1883,6 +1927,7 @@ class App {
     // File-name based actions (HTML browser / Markdown preview) must appear
     // immediately. Language support is lazy-loaded and must not delay or block
     // the toolbar when a language chunk is slow or fails to load.
+    this.tree.setActivePath(this.workspaceRootForPath(doc.path) ? doc.path : null)
     this.syncEditorChrome()
     this.syncOutline(true)
 
@@ -2187,6 +2232,8 @@ class App {
       ? {
           content: current.content,
           encoding: current.encoding,
+          encodingLocked: current.encodingLocked,
+          encodingIssue: current.encodingIssue,
           eol: current.eol,
           revision: current.revision,
           ...(unavailable ? { unavailable } : {}),
@@ -2238,6 +2285,8 @@ class App {
     comparison.languageLocked = true
     comparison.encoding = doc.externalChange.encoding
     comparison.savedEncoding = doc.externalChange.encoding
+    comparison.encodingLocked = doc.externalChange.encodingLocked === true
+    comparison.encodingIssue = doc.externalChange.encodingIssue
     comparison.eol = doc.externalChange.eol
     comparison.savedEol = doc.externalChange.eol
     this.addDoc(comparison)
@@ -2254,12 +2303,26 @@ class App {
     doc.savedContent = doc.externalChange.content
     doc.encoding = doc.externalChange.encoding
     doc.savedEncoding = doc.externalChange.encoding
+    doc.encodingLocked = doc.externalChange.encodingLocked === true
+    doc.encodingIssue = doc.externalChange.encodingIssue
     reconcileReloadedDocumentEol(doc, doc.externalChange.eol)
     doc.diskRevision = doc.externalChange.revision
     doc.editorState = undefined
+    doc.groupStates.clear()
+    doc.viewStates.clear()
     doc.externalChange = undefined
-    if (this.activeId === doc.id) void this.activate(doc.id)
+    for (const group of this.groups) {
+      if (group.renderedDocId !== doc.id) continue
+      group.editor.setDocument(doc.content)
+      this.applyDocumentFormatting(doc, group.editor)
+      this.refreshIncrementalDiff(doc, group.editor)
+    }
+    if (this.activeId === doc.id) {
+      this.syncEditorChrome()
+      this.syncOutline(true)
+    }
     this.renderTabs()
+    this.updateStatus()
     this.hideExternalConflict()
     this.scheduleSessionSave()
   }
@@ -2271,11 +2334,19 @@ class App {
       this.notify('Save the local version to a new path before resolving this conflict.')
       return
     }
+    if (doc.encodingIssue || doc.externalChange.encodingIssue) {
+      this.notify(this.settings.locale === 'zh-CN'
+        ? '磁盘版本的编码无法安全确认。请以正确编码重新打开，或将本地版本另存为新文件。'
+        : 'The disk version has an unsafe or uncertain encoding. Reopen it with the correct encoding, or save the local version to a new file.')
+      return
+    }
     // The user has acknowledged this disk version. Adopt it as the baseline
     // while preserving the local current value, which remains dirty relative
     // to the acknowledged bytes and can now be saved without repeat prompts.
     doc.savedContent = doc.externalChange.content
     doc.savedEncoding = doc.externalChange.encoding
+    doc.encodingLocked = doc.externalChange.encodingLocked === true
+    doc.encodingIssue = doc.externalChange.encodingIssue
     doc.savedEol = doc.externalChange.eol
     doc.diskRevision = doc.externalChange.revision
     doc.externalChange = undefined
@@ -2414,13 +2485,21 @@ class App {
   }
 
   /** Open a file chosen from the native dialog. */
-  private async openViaDialog(): Promise<void> {
+  private async openViaDialog(encoding?: TextEncoding): Promise<void> {
     try {
-      const file = await window.editor.openFile()
+      const file = await window.editor.openFile(encoding ? { encoding } : undefined)
       if (file) await this.openLoadedFile(file)
     } catch (error) {
-      this.showError('The selected file could not be opened.', error)
+      this.showError(this.settings.locale === 'zh-CN' ? '无法打开所选文件。' : 'The selected file could not be opened.', error)
     }
+  }
+
+  private pickOpenEncoding(): void {
+    this.palette.open({
+      placeholder: this.settings.locale === 'zh-CN' ? '选择打开文件的编码…' : 'Select encoding for opening the file…',
+      items: SUPPORTED_TEXT_ENCODINGS.map((value) => ({ label: encodingLabel(value), value })),
+      onAccept: (item) => { void this.openViaDialog(item.value as TextEncoding) }
+    })
   }
 
   /** Open a file by path (from the file tree or Goto Anything). */
@@ -2472,6 +2551,70 @@ class App {
     } catch (error) {
       this.showError(this.settings.locale === 'zh-CN' ? '无法复制文件路径。' : 'The file path could not be copied.', error)
     }
+  }
+
+  private async revealActiveFileInSidebar(): Promise<void> {
+    const doc = this.active
+    if (!doc) return
+    if (!doc.path) {
+      this.notify(this.settings.locale === 'zh-CN'
+        ? '未命名标签没有可在侧栏中显示的文件。'
+        : 'Untitled tabs cannot be revealed in the sidebar.')
+      return
+    }
+    if (this.folders.length === 0) {
+      this.notify(this.settings.locale === 'zh-CN'
+        ? '请先打开工作区文件夹。'
+        : 'Open a workspace folder first.')
+      return
+    }
+    const root = this.workspaceRootForPath(doc.path)
+    if (!root) {
+      this.notify(this.settings.locale === 'zh-CN'
+        ? '当前文件不在工作区中，无法在侧栏中显示。'
+        : 'The active file is outside the current workspace and cannot be revealed in the sidebar.')
+      return
+    }
+
+    const generation = ++this.revealActiveFileGeneration
+    const requestedDocId = doc.id
+    const requestedPath = doc.path
+    const requestedRoot = root
+
+    if (this.settings.distractionFree) {
+      this.settings.distractionFree = false
+      this.applyUserSettings(this.settings)
+    }
+    if (this.sidebar.classList.contains('hidden')) this.setSidebarVisible(true)
+
+    let revealed = false
+    try {
+      revealed = await this.tree.revealPath(requestedPath, requestedRoot)
+    } catch (error) {
+      if (generation !== this.revealActiveFileGeneration) return
+      const current = this.active
+      if (!current || current.id !== requestedDocId || current.path !== requestedPath) return
+      if (this.workspaceRootForPath(requestedPath) !== requestedRoot) return
+      this.notify(this.settings.locale === 'zh-CN'
+        ? '无法在侧栏中显示当前文件。'
+        : 'The active file could not be revealed in the sidebar.')
+      console.error('The active file could not be revealed in the sidebar.', error)
+      return
+    }
+
+    if (generation !== this.revealActiveFileGeneration) return
+    const current = this.active
+    if (!current || current.id !== requestedDocId || current.path !== requestedPath) return
+    if (this.workspaceRootForPath(requestedPath) !== requestedRoot) return
+    if (!revealed) {
+      this.notify(this.settings.locale === 'zh-CN'
+        ? '无法在侧栏中显示当前文件。'
+        : 'The active file could not be revealed in the sidebar.')
+      return
+    }
+    this.notify(this.settings.locale === 'zh-CN'
+      ? '已在侧栏中显示活动文件。'
+      : 'Revealed the active file in the sidebar.')
   }
 
   private currentLocation(): NavigationLocation | null {
@@ -2690,7 +2833,26 @@ class App {
       this.showError(`“${baseName(file.path)}” is ${mb} MB and exceeds the safe editor limit.`)
       return null
     }
-    return await this.openLoaded(file.path, file.content, file.encoding, file.eol, file.revision, generation)
+    const opened = await this.openLoaded(
+      file.path,
+      file.content,
+      file.encoding,
+      file.eol,
+      file.revision,
+      generation,
+      file.encodingLocked === true,
+      file.encodingIssue
+    )
+    if (opened && file.encodingIssue === 'invalid-bytes') {
+      this.notify(this.settings.locale === 'zh-CN'
+        ? `文件无法按 ${encodingLabel(file.encoding)} 无损解码；请以正确编码重新打开，覆盖保存已禁用。`
+        : `The file cannot be decoded losslessly as ${encodingLabel(file.encoding)}. Reopen with the correct encoding before overwriting it.`)
+    } else if (opened && file.encodingIssue === 'uncertain') {
+      this.notify(this.settings.locale === 'zh-CN'
+        ? `已推测为 ${encodingLabel(file.encoding)}；如显示异常，请以其他编码重新打开。`
+        : `Detected ${encodingLabel(file.encoding)} heuristically; reopen with another encoding if the text looks wrong.`)
+    }
+    return opened
   }
 
   /** Create (or focus) a tab for an already-loaded file. */
@@ -2700,7 +2862,9 @@ class App {
     encoding: Doc['encoding'] = 'utf8',
     eol: Doc['eol'] = 'LF',
     revision: string | null = null,
-    generation = this.beginNavigationIntent()
+    generation = this.beginNavigationIntent(),
+    encodingLocked = false,
+    encodingIssue?: OpenedFile['encodingIssue']
   ): Promise<Doc | null> {
     if (generation !== this.navigationGeneration) return null
     const existing = this.docs.find((d) => d.path === path)
@@ -2726,7 +2890,7 @@ class App {
       ? currentDoc
       : null
     if (!placeholder) {
-      const opened = createFromFile(path, content, encoding, eol, revision)
+      const opened = createFromFile(path, content, encoding, eol, revision, encodingLocked, encodingIssue)
       this.docs.push(opened)
       currentGroup.docIds.push(opened.id)
       await this.activate(opened.id, this.activeGroup, generation)
@@ -2734,7 +2898,7 @@ class App {
       this.scheduleSessionSave()
       return this.activeId === opened.id ? opened : null
     }
-    const opened = createFromFile(path, content, encoding, eol, revision)
+    const opened = createFromFile(path, content, encoding, eol, revision, encodingLocked, encodingIssue)
     const group = currentGroup
     const index = group.docIds.indexOf(placeholder.id)
     this.docs.push(opened)
@@ -2790,6 +2954,7 @@ class App {
     }
     this.folder = root
     this.folders = [root]
+    this.tree.setActivePath(null)
     await this.loadProject(root)
     this.workspaceName.textContent = baseName(root).toUpperCase()
     await this.renderProjectRoots()
@@ -2869,6 +3034,7 @@ class App {
       })))
       if (roots.length === 1) this.tree.render(roots[0].children, true)
       else this.tree.render(roots.map((root) => ({ name: root.name, path: root.path, isDirectory: true, children: root.children })), true)
+      this.tree.setActivePath(this.workspaceRootForPath(this.active?.path ?? null) ? this.active?.path ?? null : null)
     } catch (error) {
       this.showError('Project folders could not be rendered.', error)
     }
@@ -2939,6 +3105,7 @@ class App {
       } else {
         this.workspaceName.textContent = this.t('noFolder')
         this.setSidebarVisible(false)
+        this.tree.setActivePath(null)
       }
       this.scheduleSessionSave()
       this.statusSelection.textContent = this.settings.locale === 'zh-CN'
@@ -3427,7 +3594,9 @@ class App {
     const request = ++this.externalChangeGeneration
     this.externalChangeRequests.set(changedPath, request)
     try {
-      const opened = await window.editor.openPath(changedPath)
+      const opened = await window.editor.openPath(changedPath, initialDoc.encodingLocked
+        ? { encoding: initialDoc.savedEncoding }
+        : undefined)
       if (this.externalChangeRequests.get(changedPath) !== request) return
       const doc = this.docs.find((candidate) => candidate.id === docId && candidate.path === changedPath)
       if (!doc) return
@@ -3444,7 +3613,7 @@ class App {
       if (samePhysicalText(opened, savedSnapshot)) return
       if (isDirty(doc)) {
         if (doc.externalChange && samePhysicalText(doc.externalChange, opened)) return
-        doc.externalChange = { content: opened.content, encoding: opened.encoding, eol: opened.eol, revision: opened.revision }
+        doc.externalChange = { content: opened.content, encoding: opened.encoding, eol: opened.eol, revision: opened.revision, encodingLocked: opened.encodingLocked, encodingIssue: opened.encodingIssue }
         this.renderTabs()
         if (this.activeId === doc.id) this.showExternalConflict(doc)
         return
@@ -3453,15 +3622,31 @@ class App {
       doc.savedContent = opened.content
       doc.encoding = opened.encoding
       doc.savedEncoding = opened.encoding
+      doc.encodingLocked = opened.encodingLocked === true
+      doc.encodingIssue = opened.encodingIssue
       reconcileReloadedDocumentEol(doc, opened.eol)
       doc.diskRevision = opened.revision
       doc.editorState = undefined
+      doc.groupStates.clear()
+      doc.viewStates.clear()
       doc.externalChange = undefined
       for (const group of this.groups) {
-        if (group.renderedDocId === doc.id) this.applyDocumentFormatting(doc, group.editor)
+        if (group.renderedDocId !== doc.id) continue
+        group.editor.setDocument(doc.content)
+        this.applyDocumentFormatting(doc, group.editor)
+        this.refreshIncrementalDiff(doc, group.editor)
       }
-      if (this.activeId === doc.id) await this.activate(doc.id)
+      if (this.activeId === doc.id) {
+        this.syncEditorChrome()
+        this.syncOutline(true)
+      }
       this.renderTabs()
+      this.updateStatus()
+      if (this.activeId === doc.id && opened.encodingIssue === 'invalid-bytes') {
+        this.notify(this.settings.locale === 'zh-CN'
+          ? `磁盘文件无法按 ${encodingLabel(opened.encoding)} 无损解码；请以正确编码重新打开，覆盖保存已禁用。`
+          : `The disk file cannot be decoded losslessly as ${encodingLabel(opened.encoding)}. Reopen with the correct encoding before saving.`)
+      }
       this.scheduleSessionSave()
     } catch {
       // A delete/rename is reflected by the tree. Keep any already-open buffer.
@@ -3586,15 +3771,43 @@ class App {
   private async save(forceDialog: boolean): Promise<void> {
     const doc = this.active
     if (!doc) return
+    if (this.encodingReopenInFlight.has(doc.id)) {
+      this.showError(this.settings.locale === 'zh-CN'
+        ? '正在以指定编码重新打开该文档，请稍后再保存。'
+        : 'This document is being reopened with an encoding. Try saving again shortly.')
+      return
+    }
+    if (this.manualSaveInFlight.has(doc.id)) return
+    this.manualSaveInFlight.add(doc.id)
+    try {
+      await this.saveDocument(doc, forceDialog)
+    } finally {
+      this.manualSaveInFlight.delete(doc.id)
+    }
+  }
+
+  private async saveDocument(doc: Doc, forceDialog: boolean): Promise<void> {
     const originalPath = doc.path
     const savedSnapshot = this.editor.getContent()
     const savedEncodingSnapshot = doc.encoding
     const eolOverrideSnapshot = doc.eolOverride
     const promptedForDestination = forceDialog || originalPath === null
     const savedEolSnapshot = doc.eolOverride ?? doc.eol
+    if (doc.encodingIssue && !forceDialog) {
+      this.showError(doc.encodingIssue === 'invalid-bytes'
+        ? (this.settings.locale === 'zh-CN'
+            ? '当前内容由无效字节替换后显示。请先使用“以编码重新打开”选择正确编码；如需保留当前显示内容，请使用“另存为”。'
+            : 'This view contains replacement characters from invalid bytes. Reopen with the correct encoding, or use Save As to preserve the displayed text in a new file.')
+        : (this.settings.locale === 'zh-CN'
+            ? '当前编码是根据字节特征推测的。请先选择保存编码或以编码重新打开，再覆盖原文件。'
+            : 'The current encoding was inferred from byte patterns. Confirm a save encoding or reopen with an encoding before overwriting the file.'))
+      return
+    }
     const writeOptions = {
       encoding: savedEncodingSnapshot,
       eol: savedEolSnapshot,
+      ...(doc.encodingLocked ? { expectedEncoding: doc.savedEncoding } : {}),
+      ...(forceDialog && doc.encodingIssue && originalPath ? { protectedSourcePath: originalPath } : {}),
       ...(doc.eolOverride === undefined ? { respectEditorConfigEol: true } : {})
     }
     if (promptedForDestination) this.beginNavigationIntent()
@@ -3616,6 +3829,10 @@ class App {
     if (!result.saved || !result.path) {
       if (result.reason === 'hardlink' && promptedForDestination) {
         this.showError('The selected destination has multiple hard links. Choose a different path.')
+      } else if (result.reason === 'protected-source') {
+        this.showError(this.settings.locale === 'zh-CN'
+          ? '当前解码存在风险，不能通过“另存为”覆盖原文件或它的链接。请选择不同的新文件。'
+          : 'This decode is unsafe, so Save As cannot overwrite the source file or one of its aliases. Choose a different new file.')
       } else if (result.reason === 'conflict' && promptedForDestination) {
         this.showError('The selected destination changed before it could be saved. Review it and try Save As again.')
       } else if ((result.reason === 'conflict' || result.reason === 'hardlink') &&
@@ -3639,11 +3856,16 @@ class App {
     }
     if (promptedForDestination) {
       this.clearDocumentEditorConfig(doc)
+      // A new file has no prior byte-decoding contract; future automatic reads
+      // can safely detect BOM/UTF unless the chosen encoding is ambiguous.
+      doc.encodingLocked = textEncodingNeedsExplicitRead(savedEncodingSnapshot)
     }
     // Mark only the exact snapshot written to disk as saved. Edits made while
     // the async write was in flight remain dirty and cannot be silently lost.
     doc.savedContent = savedSnapshot
     doc.savedEncoding = savedEncodingSnapshot
+    doc.encodingLocked = textEncodingNeedsExplicitRead(savedEncodingSnapshot)
+    doc.encodingIssue = undefined
     reconcileSavedDocumentEol(doc, result.eol ?? savedEolSnapshot, eolOverrideSnapshot)
     doc.diskRevision = result.revision ?? doc.diskRevision
     doc.requiresSave = false
@@ -3723,7 +3945,7 @@ class App {
 
   /** Never prompts for a destination: untitled files remain protected hot-exit drafts. */
   private async autoSaveDirtyDocuments(): Promise<void> {
-    for (const doc of this.docs.filter((item) => !!item.path && isDirty(item) && !item.externalChange && !this.autoSaveInFlight.has(item.id))) {
+    for (const doc of this.docs.filter((item) => !!item.path && isDirty(item) && !item.encodingIssue && !item.externalChange && !this.autoSaveInFlight.has(item.id) && !this.encodingReopenInFlight.has(item.id))) {
       this.autoSaveInFlight.add(doc.id)
       const snapshot = doc.content
       const encodingSnapshot = doc.encoding
@@ -3735,6 +3957,7 @@ class App {
         const result = await window.editor.save(pathSnapshot, snapshot, {
           encoding: encodingSnapshot,
           eol: eolSnapshot,
+          ...(doc.encodingLocked ? { expectedEncoding: doc.savedEncoding } : {}),
           respectEditorConfigEol: doc.eolOverride === undefined,
           expectedRevision: doc.diskRevision
         })
@@ -3742,6 +3965,8 @@ class App {
           this.invalidateExternalChangeRead(pathSnapshot)
           doc.savedContent = snapshot
           doc.savedEncoding = encodingSnapshot
+          doc.encodingLocked = textEncodingNeedsExplicitRead(encodingSnapshot)
+          doc.encodingIssue = undefined
           reconcileSavedDocumentEol(doc, result.eol ?? eolSnapshot, eolOverrideSnapshot)
           doc.diskRevision = result.revision ?? doc.diskRevision
           doc.requiresSave = false
@@ -3809,7 +4034,10 @@ class App {
       doc.groupStates.set(group.id, group.editor.getState())
       doc.viewStates.set(group.id, group.editor.getViewState(group.id))
     }
-    if (rememberClosed && doc.path && !this.closedStack.includes(doc.path)) this.closedStack.push(doc.path)
+    if (rememberClosed && doc.path) {
+      this.closedStack = this.closedStack.filter((entry) => entry.path !== doc.path)
+      this.closedStack.push({ path: doc.path, ...(doc.encodingLocked ? { encoding: doc.savedEncoding } : {}) })
+    }
     this.selectedTabIds.delete(id)
 
     const index = group.docIds.indexOf(id)
@@ -3841,11 +4069,16 @@ class App {
 
   /** Reopen the most recently closed file (Ctrl/Cmd+Shift+T). */
   private async reopenClosed(): Promise<void> {
-    const path = this.closedStack[this.closedStack.length - 1]
-    if (!path) return
+    const closed = this.closedStack[this.closedStack.length - 1]
+    if (!closed) return
     const before = this.docs.length
-    await this.openPath(path)
-    if (this.docs.length > before || this.docs.some((doc) => doc.path === path)) this.closedStack.pop()
+    try {
+      const file = await window.editor.openPath(closed.path, closed.encoding ? { encoding: closed.encoding } : undefined)
+      await this.openLoadedFile(file)
+      if (this.docs.length > before || this.docs.some((doc) => doc.path === closed.path)) this.closedStack.pop()
+    } catch (error) {
+      this.showError(`Could not reopen “${baseName(closed.path)}”.`, error)
+    }
   }
 
   /** Toggle pinning for the active tab; pinned documents lead every tab row. */
@@ -4091,12 +4324,33 @@ class App {
     })
   }
 
-  /** Choose the Unicode encoding used the next time the active document is saved. */
+  /** Choose whether the encoding button changes save bytes or reinterprets disk bytes. */
+  private pickEncodingAction(): void {
+    const doc = this.active
+    if (!doc) return
+    this.palette.open({
+      placeholder: this.t('encodingActionPickerPlaceholder'),
+      items: [
+        {
+          label: this.settings.locale === 'zh-CN' ? '选择保存编码…' : 'Select Encoding for Save…',
+          detail: this.settings.locale === 'zh-CN' ? '设置下次保存时使用的编码' : 'Choose the encoding used for the next save',
+          value: 'save'
+        },
+        {
+          label: this.settings.locale === 'zh-CN' ? '以编码重新打开…' : 'Reopen with Encoding…',
+          detail: this.settings.locale === 'zh-CN' ? '从磁盘重新读取当前文件' : 'Re-read the current file from disk',
+          value: 'reopen'
+        }
+      ],
+      onAccept: (item) => item.value === 'reopen' ? this.pickReopenEncoding() : this.pickEncoding()
+    })
+  }
+
+  /** Choose the encoding used the next time the active document is saved. */
   private pickEncoding(): void {
     const doc = this.active
     if (!doc) return
-    const values: Doc['encoding'][] = ['utf8', 'utf8bom', 'utf16le', 'utf16be']
-    const ordered = [doc.encoding, ...values.filter((value) => value !== doc.encoding)]
+    const ordered = [doc.encoding, ...SUPPORTED_TEXT_ENCODINGS.filter((value) => value !== doc.encoding)]
     this.palette.open({
       placeholder: this.t('encodingPickerPlaceholder'),
       items: ordered.map((value) => ({
@@ -4106,6 +4360,130 @@ class App {
       })),
       onAccept: (item) => this.setDocumentEncoding(item.value as Doc['encoding'])
     })
+  }
+
+  /** Re-read the active file's raw bytes with an explicit character encoding. */
+  private pickReopenEncoding(): void {
+    const doc = this.active
+    if (!doc?.path) {
+      this.notify(this.settings.locale === 'zh-CN' ? '未命名文档无法从磁盘重新打开。' : 'An untitled document cannot be reopened from disk.')
+      return
+    }
+    const ordered = [doc.savedEncoding, ...SUPPORTED_TEXT_ENCODINGS.filter((value) => value !== doc.savedEncoding)]
+    this.palette.open({
+      placeholder: this.t('reopenEncodingPickerPlaceholder'),
+      items: [
+        {
+          label: this.settings.locale === 'zh-CN' ? '自动检测' : 'Auto Detect',
+          hint: doc.encodingLocked ? undefined : this.t('current'),
+          value: null
+        },
+        ...ordered.map((value) => ({
+          label: encodingLabel(value),
+          hint: doc.encodingLocked && value === doc.savedEncoding ? this.t('current') : undefined,
+          value
+        }))
+      ],
+      onAccept: (item) => { void this.reopenWithEncoding(item.value as TextEncoding | null) }
+    })
+  }
+
+  private async reopenWithEncoding(encoding: TextEncoding | null): Promise<void> {
+    const doc = this.active
+    if (!doc?.path) return
+    const selectedLabel = encoding ? encodingLabel(encoding) : (this.settings.locale === 'zh-CN' ? '自动检测' : 'auto detection')
+    if (this.autoSaveInFlight.has(doc.id) || this.manualSaveInFlight.has(doc.id)) {
+      this.showError(this.settings.locale === 'zh-CN' ? '保存正在进行，请稍后重试。' : 'A save is in progress. Try again shortly.')
+      return
+    }
+    if (this.encodingReopenInFlight.has(doc.id)) {
+      this.showError(this.settings.locale === 'zh-CN' ? '该文档正在重新打开，请稍后重试。' : 'This document is already being reopened. Try again shortly.')
+      return
+    }
+
+    doc.content = this.editor.getContent()
+    const destructive = isDirty(doc) || doc.externalChange !== undefined
+    if (destructive) {
+      const question = this.settings.locale === 'zh-CN'
+        ? `使用${selectedLabel}从磁盘重新打开“${doc.name}”？所有未保存文本及待保存的编码/换行符选择都将丢失。`
+        : `Reopen “${doc.name}” from disk using ${selectedLabel}? All unsaved text and pending encoding/line-ending choices will be lost.`
+      if (!window.confirm(question)) return
+    }
+
+    const requestedId = doc.id
+    const requestedPath = doc.path
+    const contentBeforeRead = doc.content
+    const encodingBeforeRead = doc.encoding
+    const eolBeforeRead = doc.eolOverride ?? doc.eol
+    const revisionBeforeRead = doc.diskRevision
+    const externalChangeBeforeRead = doc.externalChange
+    let opened: OpenedFile | undefined
+    this.encodingReopenInFlight.add(doc.id)
+    try {
+      opened = encoding
+        ? await window.editor.reopenWithEncoding(requestedPath, { encoding })
+        : await window.editor.openPath(requestedPath)
+    } catch (error) {
+      this.showError(this.settings.locale === 'zh-CN' ? `无法使用${selectedLabel}重新打开“${doc.name}”。` : `Could not reopen “${doc.name}” using ${selectedLabel}.`, error)
+    } finally {
+      this.encodingReopenInFlight.delete(doc.id)
+    }
+    if (!opened) return
+
+    const current = this.docs.find((candidate) => candidate.id === requestedId && candidate.path === requestedPath)
+    if (!current) return
+    const renderedChanged = this.groups.some((group) => group.renderedDocId === current.id && group.editor.getContent() !== contentBeforeRead)
+    if (renderedChanged || current.content !== contentBeforeRead
+      || current.encoding !== encodingBeforeRead || (current.eolOverride ?? current.eol) !== eolBeforeRead
+      || current.diskRevision !== revisionBeforeRead || current.externalChange !== externalChangeBeforeRead
+      || this.autoSaveInFlight.has(current.id)) {
+      this.notify(this.settings.locale === 'zh-CN' ? '读取期间文档发生变化，请重试。' : 'The document changed while it was being read. Try again.')
+      return
+    }
+    if (opened.isBinary || opened.isTooLarge) {
+      this.showError(opened.isBinary
+        ? (this.settings.locale === 'zh-CN' ? '该文件按所选编码仍像二进制文件。' : 'The file still looks binary with that encoding.')
+        : (this.settings.locale === 'zh-CN' ? '该文件超过安全编辑大小限制。' : 'The file exceeds the safe editing limit.'))
+      return
+    }
+
+    current.content = opened.content
+    current.savedContent = opened.content
+    current.encoding = opened.encoding
+    current.savedEncoding = opened.encoding
+    current.encodingLocked = opened.encodingLocked === true
+    current.encodingIssue = opened.encodingIssue
+    current.eol = opened.eol
+    current.savedEol = opened.eol
+    current.eolOverride = undefined
+    current.diskRevision = opened.revision
+    current.requiresSave = false
+    current.externalChange = undefined
+    current.editorState = undefined
+    current.groupStates.clear()
+    current.viewStates.clear()
+    current.diagnostics = []
+    this.lspDocumentVersion.delete(requestedPath)
+    for (const group of this.groups) {
+      if (group.renderedDocId !== current.id) continue
+      group.editor.setDocument(current.content)
+      this.applyDocumentFormatting(current, group.editor)
+      this.refreshIncrementalDiff(current, group.editor)
+      group.editor.setDiagnostics([])
+    }
+    this.invalidateExternalChangeRead(requestedPath)
+    this.hideExternalConflict()
+    this.renderTabs()
+    this.updateStatus()
+    this.scheduleSessionSave()
+    this.scheduleLanguageServerSync(current)
+    this.notify(opened.encodingIssue === 'invalid-bytes'
+      ? (this.settings.locale === 'zh-CN'
+          ? `已使用${selectedLabel}打开，但检测到不能无损往返的字节；保存已禁用。`
+          : `Reopened using ${selectedLabel}, but some bytes cannot round-trip; saving is disabled.`)
+      : (this.settings.locale === 'zh-CN'
+          ? `已使用${selectedLabel}重新打开“${current.name}”（${encodingLabel(opened.encoding)}）。`
+          : `Reopened “${current.name}” using ${selectedLabel} (${encodingLabel(opened.encoding)}).`))
   }
 
   private expandSnippetTrigger(): boolean {
@@ -4142,8 +4520,12 @@ class App {
 
   private setDocumentEncoding(encoding: Doc['encoding']): void {
     const doc = this.active
-    if (!doc || doc.encoding === encoding) return
+    if (!doc) return
+    const changed = doc.encoding !== encoding || !doc.encodingLocked || doc.encodingIssue === 'uncertain'
+    if (!changed) return
     doc.encoding = encoding
+    doc.encodingLocked = true
+    if (doc.encodingIssue === 'uncertain') doc.encodingIssue = undefined
     this.renderTabs()
     this.updateStatus()
     this.scheduleSessionSave()
@@ -4713,8 +5095,8 @@ class App {
   private workspaceRootForPath(filePath: string | null): string | null {
     if (!filePath) return null
     return [...this.folders]
-      .sort((a, b) => b.length - a.length)
-      .find((root) => filePath === root || filePath.startsWith(`${root}/`) || filePath.startsWith(`${root}\\`)) ?? null
+      .filter((root) => containsWorkspacePath(root, filePath))
+      .sort((a, b) => normalizeWorkspacePath(b).length - normalizeWorkspacePath(a).length || b.length - a.length)[0] ?? null
   }
 
   /** Compute palette rows for a Goto Anything query based on its mode prefix. */
@@ -4903,6 +5285,9 @@ class App {
         language: d.language,
         languageLocked: d.languageLocked,
         encoding: d.encoding,
+        diskEncoding: d.savedEncoding,
+        ...(d.encodingLocked ? { encodingLocked: true } : {}),
+        ...(d.encodingIssue ? { encodingIssue: d.encodingIssue } : {}),
         eol: d.eol,
         ...(d.eolOverride ? { eolOverride: d.eolOverride } : {}),
         formatDirty,
@@ -5123,10 +5508,15 @@ class App {
     this.statusEol.setAttribute('aria-label', doc
       ? `${this.t('lineEndingAriaLabel')}${this.statusEol.textContent}${doc.editorConfig?.endOfLine && doc.eolOverride === undefined ? ' (EditorConfig)' : ''}`
       : this.t('lineEndingPickerPlaceholder'))
-    this.statusEncoding.textContent = doc ? encodingLabel(doc.encoding) : '—'
+    this.statusEncoding.textContent = doc ? `${encodingLabel(doc.encoding)}${doc.encodingIssue ? ' ⚠' : ''}` : '—'
+    this.statusEncoding.title = doc?.encodingIssue === 'invalid-bytes'
+      ? (this.settings.locale === 'zh-CN' ? '检测到无效字节，请以正确编码重新打开' : 'Invalid bytes detected; reopen with the correct encoding')
+      : doc?.encodingIssue === 'uncertain'
+        ? (this.settings.locale === 'zh-CN' ? '编码由字节特征推测' : 'Encoding was inferred from byte patterns')
+        : (doc?.encodingLocked ? (this.settings.locale === 'zh-CN' ? '已锁定显式编码' : 'Explicit encoding locked') : '')
     this.statusEncoding.setAttribute('aria-label', doc
       ? `${this.t('encodingAriaLabel')}${this.statusEncoding.textContent}`
-      : this.t('encodingPickerPlaceholder'))
+      : this.t('encodingActionPickerPlaceholder'))
     this.updatePositionStatus(this.editor.view.state)
   }
 

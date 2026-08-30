@@ -891,6 +891,20 @@ assert.equal(restoredFile.savedEncoding, 'utf16be')
 assert.equal(restoredFile.savedEol, 'CRLF')
 assert.equal(restoredFile.diskRevision, null)
 assert.equal(isDirty(restoredFile), false)
+for (const encoding of ['utf16le-nobom', 'utf16be-nobom']) {
+  const automaticallyDetectedUtf16 = createFromFile(
+    `/tmp/automatic-${encoding}.txt`,
+    'automatically decoded text',
+    encoding,
+    'LF',
+    null,
+    undefined,
+    'uncertain'
+  )
+  assert.equal(automaticallyDetectedUtf16.encodingLocked, false)
+  assert.equal(automaticallyDetectedUtf16.encodingIssue, 'uncertain')
+  assert.equal(isDirty(automaticallyDetectedUtf16), false)
+}
 restoredFile.editorConfig = { endOfLine: 'LF', sources: ['/tmp/.editorconfig'], truncated: false }
 assert.equal(effectiveDocumentEol(restoredFile), 'LF')
 assert.equal(isDirty(restoredFile), false)
@@ -976,6 +990,62 @@ assert.equal(cleanSessionFile.eol, 'CR')
 assert.equal(cleanSessionFile.savedEncoding, 'utf8bom')
 assert.equal(cleanSessionFile.savedEol, 'CR')
 assert.equal(isDirty(cleanSessionFile), false)
+const lockedLegacySessionFile = createFromSession('磁盘文本', {
+  path: '/tmp/legacy.txt',
+  name: 'legacy.txt',
+  language: 'Plain Text',
+  languageLocked: false,
+  encoding: 'gbk',
+  diskEncoding: 'gbk',
+  encodingLocked: true,
+  eol: 'CRLF'
+}, { encoding: 'gbk', eol: 'CRLF', revision: 'sha256:' + 'c'.repeat(64), encodingLocked: true })
+assert.equal(lockedLegacySessionFile.encoding, 'gbk')
+assert.equal(lockedLegacySessionFile.savedEncoding, 'gbk')
+assert.equal(lockedLegacySessionFile.encodingLocked, true)
+assert.equal(isDirty(lockedLegacySessionFile), false)
+const incompleteLockedSessionFile = createFromSession('current disk text', {
+  path: '/tmp/incomplete-lock.txt',
+  name: 'incomplete-lock.txt',
+  language: 'Plain Text',
+  languageLocked: false,
+  encoding: 'gbk',
+  encodingLocked: true,
+  eol: 'LF'
+}, { encoding: 'utf8', eol: 'LF', revision: 'sha256:' + 'f'.repeat(64) })
+assert.equal(incompleteLockedSessionFile.encoding, 'utf8')
+assert.equal(incompleteLockedSessionFile.savedEncoding, 'utf8')
+assert.equal(incompleteLockedSessionFile.encodingLocked, false)
+assert.equal(isDirty(incompleteLockedSessionFile), false)
+const repairedEncodingSessionFile = createFromSession('fixed disk text', {
+  path: '/tmp/repaired.txt',
+  name: 'repaired.txt',
+  language: 'Plain Text',
+  languageLocked: false,
+  encoding: 'utf8',
+  encodingIssue: 'invalid-bytes',
+  eol: 'LF'
+}, { encoding: 'utf8', eol: 'LF', revision: 'sha256:' + 'd'.repeat(64) })
+assert.equal(repairedEncodingSessionFile.encodingIssue, undefined)
+assert.equal(Object.hasOwn(repairedEncodingSessionFile, 'encodingIssue'), false)
+const refreshedEncodingSessionFile = createFromSession('freshly detected disk text', {
+  path: '/tmp/refreshed-encoding.txt',
+  name: 'refreshed-encoding.txt',
+  language: 'Plain Text',
+  languageLocked: false,
+  encoding: 'utf8',
+  encodingIssue: 'invalid-bytes',
+  eol: 'LF'
+}, {
+  encoding: 'utf16le-nobom',
+  encodingIssue: 'uncertain',
+  eol: 'LF',
+  revision: 'sha256:' + 'e'.repeat(64)
+})
+assert.equal(refreshedEncodingSessionFile.encoding, 'utf16le-nobom')
+assert.equal(refreshedEncodingSessionFile.encodingIssue, 'uncertain')
+assert.equal(refreshedEncodingSessionFile.encodingLocked, false)
+assert.equal(isDirty(refreshedEncodingSessionFile), false)
 const textOnlyDraft = createFromSession('new disk text', {
   path: '/tmp/text-only.txt',
   name: 'text-only.txt',

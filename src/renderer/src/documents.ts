@@ -23,6 +23,10 @@ export interface Doc {
   encoding: import('../../shared/ipc.js').TextEncoding
   /** Encoding last written to / read from disk, used to compute the dirty flag. */
   savedEncoding: import('../../shared/ipc.js').TextEncoding
+  /** Re-read this path with the chosen encoding instead of automatic detection. */
+  encodingLocked: boolean
+  /** Automatic decoding could not prove a clean interpretation of the raw bytes. */
+  encodingIssue?: import('../../shared/ipc.js').OpenedFile['encodingIssue']
   /** Physical newline convention to use for the next save. */
   eol: import('../../shared/ipc.js').LineEnding
   /** Newline convention last written to / read from disk, used to compute the dirty flag. */
@@ -47,6 +51,8 @@ export interface Doc {
   externalChange?: {
     content: string
     encoding: import('../../shared/ipc.js').TextEncoding
+    encodingLocked?: boolean
+    encodingIssue?: import('../../shared/ipc.js').OpenedFile['encodingIssue']
     eol: import('../../shared/ipc.js').LineEnding
     revision: string | null
     unavailable?: 'missing' | 'binary' | 'too-large' | 'hardlink'
@@ -90,6 +96,7 @@ export function createUntitled(existingNames: readonly string[] = []): Doc {
     languageLocked: false,
     encoding: 'utf8',
     savedEncoding: 'utf8',
+    encodingLocked: false,
     eol: 'LF',
     savedEol: 'LF',
     diskRevision: null,
@@ -106,7 +113,9 @@ export function createFromFile(
   content: string,
   encoding: import('../../shared/ipc.js').TextEncoding = 'utf8',
   eol: import('../../shared/ipc.js').LineEnding = 'LF',
-  revision: string | null = null
+  revision: string | null = null,
+  encodingLocked = false,
+  encodingIssue?: import('../../shared/ipc.js').OpenedFile['encodingIssue']
 ): Doc {
   documentCounter += 1
   return {
@@ -120,6 +129,8 @@ export function createFromFile(
     languageLocked: false,
     encoding,
     savedEncoding: encoding,
+    encodingLocked,
+    ...(encodingIssue ? { encodingIssue } : {}),
     eol,
     savedEol: eol,
     diskRevision: revision,
@@ -155,6 +166,9 @@ export function createFromSession(
     formatDirty?: boolean
     baseRevision?: string | null
     encoding?: import('../../shared/ipc.js').TextEncoding
+    diskEncoding?: import('../../shared/ipc.js').TextEncoding
+    encodingLocked?: boolean
+    encodingIssue?: import('../../shared/ipc.js').OpenedFile['encodingIssue']
     eol?: import('../../shared/ipc.js').LineEnding
     eolOverride?: import('../../shared/ipc.js').LineEnding
     bookmarks?: number[]
@@ -164,6 +178,8 @@ export function createFromSession(
     encoding: import('../../shared/ipc.js').TextEncoding
     eol: import('../../shared/ipc.js').LineEnding
     revision?: string | null
+    encodingLocked?: boolean
+    encodingIssue?: import('../../shared/ipc.js').OpenedFile['encodingIssue']
   }
 ): Doc {
   documentCounter += 1
@@ -176,8 +192,13 @@ export function createFromSession(
   // real file it is the freshly detected disk format; for an untitled or
   // recovered buffer it is the explicit empty-disk baseline (utf8/LF).
   const diskEncoding = diskFormat.encoding
+  // A lock is valid only when the exact on-disk decoding was persisted. Do
+  // not infer it from `encoding`, which may instead be a pending save target.
+  const explicitDiskEncoding = sf.encodingLocked === true && sf.diskEncoding !== undefined
+    ? sf.diskEncoding
+    : undefined
   const diskEol = diskFormat.eol
-  const encoding = hasFormatIntent ? (sf.encoding ?? diskEncoding) : diskEncoding
+  const encoding = hasFormatIntent ? (sf.encoding ?? diskEncoding) : (explicitDiskEncoding ?? diskEncoding)
   const eol = hasFormatIntent ? (sf.eolOverride ?? sf.eol ?? diskEol) : diskEol
   // New sessions identify an explicit EOL choice directly. Older sessions
   // encoded it only as a format-dirty `eol`, which remains migratable.
@@ -200,7 +221,11 @@ export function createFromSession(
     language: sf.language,
     languageLocked: sf.languageLocked,
     encoding,
-    savedEncoding: diskEncoding,
+    savedEncoding: explicitDiskEncoding ?? diskEncoding,
+    encodingLocked: explicitDiskEncoding !== undefined || diskFormat.encodingLocked === true,
+    ...((hasDraft || sf.formatDirty === true ? sf.encodingIssue : diskFormat.encodingIssue)
+      ? { encodingIssue: (hasDraft || sf.formatDirty === true ? sf.encodingIssue : diskFormat.encodingIssue) }
+      : {}),
     eol,
     savedEol: diskEol,
     ...(eolOverride ? { eolOverride } : {}),
@@ -210,7 +235,7 @@ export function createFromSession(
     groupStates: new Map(),
     viewStates: new Map((sf.views ?? []).map((view) => [view.group, view])),
     ...(diskChangedWhileClosed
-      ? { externalChange: { content: diskContent, encoding: diskEncoding, eol: diskEol, revision: diskRevision } }
+      ? { externalChange: { content: diskContent, encoding: explicitDiskEncoding ?? diskEncoding, encodingLocked: explicitDiskEncoding !== undefined || diskFormat.encodingLocked === true, encodingIssue: diskFormat.encodingIssue, eol: diskEol, revision: diskRevision } }
       : {})
   }
 }

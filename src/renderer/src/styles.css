@@ -11,6 +11,8 @@
   --dirty: #e5c07b;
   --tab-active-bg: #1e1e1e;
   --tab-inactive-bg: #2d2d2d;
+  --tree-active-bg: color-mix(in srgb, var(--accent) 58%, var(--bg-elevated));
+  --tree-active-text: var(--accent-text);
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial,
     sans-serif;
   --font-mono: 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
@@ -29,6 +31,8 @@
   --dirty: #9a6700;
   --tab-active-bg: #ffffff;
   --tab-inactive-bg: #eaeef2;
+  --tree-active-bg: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+  --tree-active-text: var(--text);
 }
 
 :root[data-color-scheme='solarized-dark'] {
@@ -44,6 +48,8 @@
   --dirty: #b58900;
   --tab-active-bg: #002b36;
   --tab-inactive-bg: #073642;
+  --tree-active-bg: color-mix(in srgb, var(--accent) 32%, var(--bg-elevated));
+  --tree-active-text: #fdf6e3;
 }
 
 :root[data-color-scheme='dracula'] {
@@ -59,6 +65,8 @@
   --dirty: #f1fa8c;
   --tab-active-bg: #282a36;
   --tab-inactive-bg: #343746;
+  --tree-active-bg: color-mix(in srgb, var(--accent) 42%, var(--bg-elevated));
+  --tree-active-text: #1d1e26;
 }
 
 * {
@@ -407,6 +415,15 @@ body.distraction-free .layout-root {
 
 .tree-row:hover {
   background: rgba(255, 255, 255, 0.06);
+}
+
+.tree-row[aria-current='location'] {
+  background: var(--tree-active-bg);
+  color: var(--tree-active-text);
+}
+
+.tree-row[aria-current='location'] .tree-twisty {
+  color: inherit;
 }
 
 .tree-twisty {
@@ -1786,11 +1803,20 @@ body.distraction-free .layout-root {
     --accent-text: HighlightText;
     --focus-ring: Highlight;
     --dirty: MarkText;
+    --tree-active-bg: Highlight;
+    --tree-active-text: HighlightText;
   }
 
   .tab.active, .palette-item.active, .outline-item.active .outline-symbol,
   .find-results-match.active, .workspace-search-result:focus, .build-problem:focus,
   .git-change-item.selected {
     border: 1px solid Highlight;
+  }
+
+  .tree-row[aria-current='location'] {
+    forced-color-adjust: none;
+    border: 1px solid Highlight;
+    background: Highlight;
+    color: HighlightText;
   }
 }

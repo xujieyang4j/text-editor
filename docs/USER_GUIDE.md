@@ -65,6 +65,12 @@ npm run build
 
 **Package installers** → output under `release/<version>/`:
 
+End users should download signed builds from
+[GitHub Releases](https://github.com/xujieyang4j/text-editor/releases): Windows x64 provides setup and
+portable executables, macOS provides notarized DMG/ZIP files for Apple Silicon (`arm64`) and Intel
+(`x64`), and Linux x64 provides AppImage/deb packages. Compare a download with `SHA256SUMS.txt`;
+`release-manifest.json` records each file's size, SHA-256 digest, tag, and source commit.
+
 ```bash
 npm run dist:win     # Windows: NSIS installer + portable .exe
 npm run dist:mac     # macOS: .dmg + .zip (must build on macOS)
@@ -91,7 +97,8 @@ npm run dist:linux   # Linux: AppImage + .deb
 - **Tab bar** — one tab per open document. A `●` marks unsaved changes; `×` closes the tab; pinned tabs receive an accent marker.
 - **Editor** — the CodeMirror text area, with an optional minimap on the right.
 - **Status bar** — cursor position and selection length, plus clickable language, encoding, and
-  line-ending fields. Click the encoding or line-ending field to choose the next-save format.
+  line-ending fields. The encoding field can choose a next-save encoding or reopen the current file
+  from its original bytes.
 - **Keyboard and assistive technology** — interactive panels expose named regions and keyboard-operable
   results, restore focus when closed, and honour reduced-motion and forced-color system settings.
 
@@ -106,6 +113,7 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Open folder (workspace) | `Ctrl/Cmd+Shift+O` — populates the sidebar |
 | Drag files/folders into the window | files open as tabs; the first folder replaces the workspace and later folders are added as roots |
 | Remove a workspace root | *Project: Remove Folder from Project…* — keeps its open tabs but revokes the folder's workspace access |
+| Reveal active file in sidebar | *View: Reveal Active File in Sidebar* — auto-shows the sidebar, exits distraction-free mode, expands parent folders, and highlights the active saved file without opening or modifying it |
 | Save | `Ctrl/Cmd+S` (untitled files prompt for a path) |
 | Save As | `Ctrl/Cmd+Shift+S` |
 | Save All | `Ctrl/Cmd+Alt+S` |
@@ -115,16 +123,20 @@ npm run dist:linux   # Linux: AppImage + .deb
 | Switch to tab N | `Ctrl/Cmd+1` … `Ctrl/Cmd+9` |
 | Next / previous tab | `Ctrl/Cmd+Alt+→` / `Ctrl/Cmd+Alt+←` |
 
-The status bar's encoding menu offers **UTF-8**, **UTF-8 BOM**, **UTF-16 LE**, and
-**UTF-16 BE**; its line-ending menu offers **LF**, **CRLF**, and **CR**. Selecting either
-value sets the target for the next save and marks the document unsaved—it does not rewrite the
-file immediately. The target is written by **Save**, **Save All**, or a configured **Auto Save**.
-When a file containing mixed line endings is saved, all line endings are normalized to the selected
-style.
+The status-bar encoding button offers two actions: choose the encoding for the next save, or reopen
+the current file from its original bytes with an explicit encoding. Supported formats are **UTF-8**,
+**UTF-8 BOM**, UTF-16 LE/BE with or without BOM, **GB18030**, **GBK**, **Big5**, **Shift-JIS**,
+**Windows-1252**, and **ISO-8859-1**. The line-ending menu offers **LF**, **CRLF**, and **CR**.
+Changing the save encoding marks the document unsaved but does not rewrite it until Save, Save All,
+or Auto Save. Reopening replaces the current buffer from disk and asks before discarding unsaved work.
 
-On open, BOM detection distinguishes these four Unicode formats: a UTF-8 BOM selects **UTF-8
-BOM**, UTF-16 BOMs select **UTF-16 LE** or **UTF-16 BE**, and no BOM falls back to
-**UTF-8**. The editor does not guess legacy or other encodings from the file contents.
+BOMs and valid UTF-8 are detected automatically; BOM-less UTF-16 is detected only when its byte
+pattern is clear. Ambiguous legacy encodings are never guessed—use *Reopen with Encoding*. Saving
+to a legacy encoding is rejected if any character cannot be represented without loss. Use
+*File: Open File with Encoding…* when a legacy or BOM-less UTF-16 file is not open yet.
+If decoding produced replacement characters or remains heuristic, normal Save is blocked. Save As may
+export the displayed text to a genuinely different file, but cannot overwrite the source through the same
+path, a symbolic link, or a hard-link alias.
 
 In the file tree, click a folder to expand/collapse it (loaded on demand), and click a file to
 open it. Opening a file that's already open just focuses its tab.
@@ -452,6 +464,12 @@ The **View: Toggle Outline** command adds a filtered outline of functions, class
 headings for the active document to the sidebar. It is local to the open buffer and does not start
 a language server.
 
+The **View: Reveal Active File in Sidebar** command is explicit navigation, not a content edit. It
+shows the sidebar if needed, exits distraction-free mode through the normal settings flow, expands
+the tree to the active saved file, and updates the current-file highlight without moving keyboard
+focus to the tree. Untitled tabs and saved files outside the current workspace roots report a status
+message instead of modifying the file tree selection or file contents.
+
 The Git panel shows the current branch, configured upstream, and locally cached ahead/behind counts.
 Its expandable remote details are read only from local Git configuration, so refreshing the panel does
 not contact the network. User names, passwords, and tokens embedded in remote URLs are removed before
@@ -564,6 +582,7 @@ settings as `session.json` for the legacy window or `session-<id>.json` per wind
 | Wrap paragraph at 80 columns / Unwrap paragraph | `Alt+Q` / Command Palette | `Alt+Q` / Command Palette |
 | Zoom in / out / reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | `Cmd+=` / `Cmd+-` / `Cmd+0` |
 | Toggle sidebar / wrap / theme | `Ctrl+B` / `Alt+Z` / `Ctrl+K` | `Cmd+B` / `Alt+Z` / `Cmd+K` |
+| Reveal active file in sidebar | View menu / Command Palette | View menu / Command Palette |
 
 <a id="en-trouble"></a>
 
@@ -653,6 +672,11 @@ npm run build
 
 **打包安装程序** → 产物在 `release/<版本号>/`：
 
+普通用户应从 [GitHub Releases](https://github.com/xujieyang4j/text-editor/releases) 下载签名产物：
+Windows x64 提供安装版和便携版，macOS 提供 Apple Silicon (`arm64`) 与 Intel (`x64`) 的已公证
+DMG/ZIP，Linux x64 提供 AppImage/deb。可用 `SHA256SUMS.txt` 核对下载完整性，
+`release-manifest.json` 会记录各文件大小、SHA-256、tag 和源码提交。
+
 ```bash
 npm run dist:win     # Windows：NSIS 安装程序 + 便携版
 npm run dist:mac     # macOS：.dmg + .zip（必须在 macOS 上打）
@@ -679,7 +703,7 @@ npm run dist:linux   # Linux：AppImage + .deb
 - **标签栏** —— 每个打开的文档一个标签；`●` 表示未保存，`×` 关闭；固定标签带强调色。
 - **编辑区** —— CodeMirror 文本区，右侧可选 Minimap。
 - **状态栏** —— 光标位置、选中长度，以及可点击的语言、编码和换行符字段。点击编码或
-  换行符字段，可以选择下次保存使用的格式。
+  换行符字段，可以选择下次保存使用的格式；编码字段也能从原始磁盘字节重新打开当前文件。
 - **键盘与辅助技术** —— 面板和结果区域具有明确语义，结果可用键盘操作；关闭面板后恢复焦点，
   并遵循系统的减少动效和强制色设置。
 
@@ -701,14 +725,17 @@ npm run dist:linux   # Linux：AppImage + .deb
 | 切到第 N 个标签 | `Ctrl/Cmd+1` … `Ctrl/Cmd+9` |
 | 下一个 / 上一个标签 | `Ctrl/Cmd+Alt+→` / `Ctrl/Cmd+Alt+←` |
 
-状态栏编码菜单可选 **UTF-8**、**UTF-8 BOM**、**UTF-16 LE** 和 **UTF-16 BE**，换行符
-菜单可选 **LF**、**CRLF** 和 **CR**。选择任一项只会设置下次保存的目标格式，并将文档标记为
-未保存，不会立即重写文件；执行**保存**、**全部保存**或已配置的**自动保存**时才会写入磁盘。
-如果文件中混用了多种换行符，保存时会将它们统一为所选格式。
+状态栏编码按钮提供两种操作：选择下次保存编码，或从原始磁盘字节按指定编码重新打开。支持
+**UTF-8**、**UTF-8 BOM**、带/不带 BOM 的 UTF-16 LE/BE、**GB18030**、**GBK**、
+**Big5**、**Shift-JIS**、**Windows-1252** 与 **ISO-8859-1**；换行符可选 **LF**、
+**CRLF** 和 **CR**。选择保存编码只会标记为未保存，直到保存时才写盘；重新打开会替换当前缓冲区，
+存在未保存内容时会先确认。
 
-打开文件时，编辑器基于 BOM 区分这四种 Unicode 格式：UTF-8 BOM 选择 **UTF-8 BOM**，
-UTF-16 BOM 选择 **UTF-16 LE** 或 **UTF-16 BE**，没有 BOM 则按 **UTF-8** 读取。
-编辑器不会根据文件内容猜测旧式编码或其他编码。
+编辑器自动识别 BOM 和有效 UTF-8，只在字节特征明确时识别无 BOM UTF-16。传统编码存在歧义，
+因此不会自动猜测，请使用“以编码重新打开”；尚未打开的文件可使用“以编码打开文件…”。若传统编码
+不能无损表示某些字符，保存会被拒绝。
+若解码产生了替代字符或仍属于启发式推测，普通保存会被阻止。“另存为”可以把当前显示文本导出到
+真正不同的新文件，但不能通过同一路径、符号链接或硬链接别名覆盖源文件。
 
 文件树中点文件夹展开/折叠（按需加载），点文件打开。打开已开的文件只会聚焦它的标签。
 
@@ -1076,7 +1103,8 @@ npm run dev:mac
 只修复、不启动时可用 `npm run fix:mac`。此命令只用于本地开发；正式分发的 macOS 安装包应使用
 Developer ID 签名与 Apple 公证。
 
-或到 **系统设置 → 隐私与安全性 → 仍要打开** 放行。
+如果从官方 GitHub Release 下载的签名、公证版本仍出现这类提示，请停止运行并报告问题；不要用
+上述开发修复命令处理正式分发包。
 
 **无显示器的 Linux：缺 `libgbm.so.1` / core dump。** Electron 需要显示服务与 GPU 库。安装后配
 虚拟显示，或直接在有桌面的机器上运行：

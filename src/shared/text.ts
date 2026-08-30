@@ -1,5 +1,58 @@
 import type { LineEnding, TextEncoding } from './ipc.js'
 
+/**
+ * Canonical encoding identifiers accepted at IPC and persistence boundaries.
+ * Keep this module data-only with respect to legacy codecs so renderer bundles
+ * never pull in `iconv-lite`.
+ */
+export const SUPPORTED_TEXT_ENCODINGS = [
+  'utf8',
+  'utf8bom',
+  'utf16le',
+  'utf16be',
+  'utf16le-nobom',
+  'utf16be-nobom',
+  'gb18030',
+  'gbk',
+  'big5',
+  'shiftjis',
+  'windows1252',
+  'iso88591'
+] as const
+
+/** Stable, user-facing names for the canonical encoding identifiers. */
+export const TEXT_ENCODING_LABELS: Readonly<Record<TextEncoding, string>> = {
+  utf8: 'UTF-8',
+  utf8bom: 'UTF-8 BOM',
+  utf16le: 'UTF-16 LE',
+  utf16be: 'UTF-16 BE',
+  'utf16le-nobom': 'UTF-16 LE (no BOM)',
+  'utf16be-nobom': 'UTF-16 BE (no BOM)',
+  gb18030: 'GB18030',
+  gbk: 'GBK',
+  big5: 'Big5',
+  shiftjis: 'Shift JIS',
+  windows1252: 'Windows-1252',
+  iso88591: 'ISO-8859-1'
+}
+
+/** Reject aliases and unknown values before they enter document/session state. */
+export function isTextEncoding(value: unknown): value is TextEncoding {
+  return typeof value === 'string'
+    && (SUPPORTED_TEXT_ENCODINGS as readonly string[]).includes(value)
+}
+
+export function textEncodingLabel(encoding: TextEncoding): string {
+  return TEXT_ENCODING_LABELS[encoding]
+}
+
+/** Encodings whose byte stream cannot be identified reliably without stored user intent. */
+export function textEncodingNeedsExplicitRead(encoding: TextEncoding): boolean {
+  return encoding === 'utf16le-nobom' || encoding === 'utf16be-nobom'
+    || encoding === 'gb18030' || encoding === 'gbk' || encoding === 'big5'
+    || encoding === 'shiftjis' || encoding === 'windows1252' || encoding === 'iso88591'
+}
+
 /** Unicode-aware statistics for a document or a selected text range. */
 export interface TextStatistics {
   lines: number
@@ -72,15 +125,21 @@ export function applyLineEnding(text: string, eol: LineEnding): string {
   return text.replace(/\r\n|\r|\n/g, lineBreak)
 }
 
-/** Encode the built-in set of portable text encodings, including their BOMs. */
+/**
+ * Encode the dependency-free Unicode formats, preserving the original helper
+ * signature. Legacy encodings deliberately live in main/textEncoding.ts so
+ * importing shared text helpers from the renderer cannot bundle iconv-lite.
+ */
 export function encodeText(content: string, encoding: TextEncoding, eol: LineEnding): Buffer {
   const normalized = applyLineEnding(content, eol)
+  if (encoding === 'utf8') return Buffer.from(normalized, 'utf8')
   if (encoding === 'utf8bom') return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(normalized, 'utf8')])
   if (encoding === 'utf16le') return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(normalized, 'utf16le')])
-  if (encoding === 'utf16be') {
+  if (encoding === 'utf16le-nobom') return Buffer.from(normalized, 'utf16le')
+  if (encoding === 'utf16be' || encoding === 'utf16be-nobom') {
     const body = Buffer.from(normalized, 'utf16le')
     body.swap16()
-    return Buffer.concat([Buffer.from([0xfe, 0xff]), body])
+    return encoding === 'utf16be' ? Buffer.concat([Buffer.from([0xfe, 0xff]), body]) : body
   }
-  return Buffer.from(normalized, 'utf8')
+  throw new Error(`${textEncodingLabel(encoding)} must be encoded by the main-process text codec.`)
 }

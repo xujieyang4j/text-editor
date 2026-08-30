@@ -13,6 +13,7 @@ import {
   type Session,
   type MenuEvent,
   type FileWriteOptions,
+  type FileReadOptions,
   type WorkspaceMatch,
   type WorkspaceSearchRequest,
   type WorkspaceReplaceRequest,
@@ -61,11 +62,15 @@ import {
  */
 const api = {
   /** Show the open-file dialog. Resolves null if the user cancels. */
-  openFile: (): Promise<OpenedFile | null> => ipcRenderer.invoke(IPC.fileOpen),
+  openFile: (options?: FileReadOptions): Promise<OpenedFile | null> => ipcRenderer.invoke(IPC.fileOpen, options),
 
   /** Read a file by absolute path (e.g. from the file tree). */
-  openPath: (filePath: string): Promise<OpenedFile> =>
-    ipcRenderer.invoke(IPC.fileOpenPath, filePath),
+  openPath: (filePath: string, options?: FileReadOptions): Promise<OpenedFile> =>
+    ipcRenderer.invoke(IPC.fileOpenPath, filePath, options),
+
+  /** Re-read an authorised file's original bytes using an explicit encoding. */
+  reopenWithEncoding: (filePath: string, options: FileReadOptions): Promise<OpenedFile> =>
+    ipcRenderer.invoke(IPC.fileReopenWithEncoding, filePath, options),
 
   /** Resolve OS-backed drag files here; the renderer never receives Node APIs. */
   openDroppedFiles: (files: File[]): Promise<DroppedPaths> => {
