@@ -189,6 +189,8 @@ expect(project, /MobileRecentStore\.swift in Sources/,
 expect(fileAccess, /NSFileCoordinator/, "File Provider I/O must be coordinated")
 expect(fileAccess, /startAccessingSecurityScopedResource/, "security-scoped access is required")
 expect(fileAccess, /MobileSavePreflight\.validate/, "writes must reject stale source revisions")
+expect(fileAccess, /func writeVerified\([\s\S]*guard Int64\(data\.count\)[\s\S]*return try withSecurityScope\(reference\.url\)/,
+  "verified writes must return the security-scoped operation result")
 expect(fileAccess, /guard installed == data/, "writes must be read-back verified")
 expect(fileAccess, /handle\.read\(upToCount: requested\)/,
   "provider reads must enforce the mobile byte limit before loading a whole file")

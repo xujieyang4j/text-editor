@@ -109,7 +109,7 @@ actor MobileFileAccess {
         guard Int64(data.count) <= MobileTextCodec.defaultMaximumByteCount else {
             throw MobileFileAccessError.fileTooLarge
         }
-        try withSecurityScope(reference.url) {
+        return try withSecurityScope(reference.url) {
             let coordinator = NSFileCoordinator(filePresenter: nil)
             var coordinationError: NSError?
             var operationError: Error?
