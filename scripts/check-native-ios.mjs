@@ -344,7 +344,9 @@ const forbidden = [
   [/import WebKit/, "WebKit must not be the primary iOS editor"],
   [/SwiftUI\.TextEditor|\bTextEditor\s*\(/, "SwiftUI.TextEditor must not replace the TextKit surface"],
   [/Process\s*\(/, "iOS must not launch local processes"],
-  [/NSTask/, "iOS must not launch local tasks"]
+  [/NSTask/, "iOS must not launch local tasks"],
+  [/\?\?\s*\(?\s*(?:try|await)\b/,
+    "try or await must cover the complete nil-coalescing expression"]
 ]
 for (const path of await filesUnder(join(iosRoot, "Sources"), ".swift")) {
   const source = await readFile(path, "utf8")

@@ -261,11 +261,13 @@ struct FindBar: View {
                 let scan = try MobileFindCore.scan(
                     text, query: query, shouldCancel: shouldCancel
                 )
-                let match = scan.matches.first { $0.range == selection }
-                    ?? try MobileFindCore.match(
-                        in: text, query: query, selection: selection,
-                        direction: .next, shouldCancel: shouldCancel
-                    )
+                let match = try (
+                    scan.matches.first { $0.range == selection }
+                        ?? MobileFindCore.match(
+                            in: text, query: query, selection: selection,
+                            direction: .next, shouldCancel: shouldCancel
+                        )
+                )
                 guard let match else { return .none }
                 let result = try MobileFindCore.replacing(
                     match, in: text, query: query,
