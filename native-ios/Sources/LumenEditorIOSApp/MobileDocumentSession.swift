@@ -66,7 +66,7 @@ final class MobileDocumentSession: ObservableObject, Identifiable {
 
     func draftSnapshot(date: Date = Date()) -> MobileDraftSnapshot {
         if checkpointGeneration < UInt64.max { checkpointGeneration += 1 }
-        MobileDraftSnapshot(
+        return MobileDraftSnapshot(
             id: id,
             displayName: displayName,
             content: content,

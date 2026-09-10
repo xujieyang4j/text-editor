@@ -249,6 +249,8 @@ expect(workspace, /canReplaceDocumentContent[\s\S]*replacementRejection[\s\S]*wo
   "growing edits must enforce capacity while non-growing edits remain available")
 expect(documentSession, /didSet \{ contentUTF16UnitCount = content\.utf16\.count \}/,
   "document sessions must cache UTF-16 length when content changes")
+expect(documentSession, /func draftSnapshot\([\s\S]*checkpointGeneration \+= 1[\s\S]*return MobileDraftSnapshot\(/,
+  "draft snapshots must return the generation-advanced value")
 expect(workspace, /currentUTF16UnitCount: document\.contentUTF16UnitCount[\s\S]*utf16UnitCount: document\.contentUTF16UnitCount/,
   "per-keystroke workspace checks must use cached document lengths")
 expect(editorScreen, /utf16_units[\s\S]*document\.contentUTF16UnitCount/,
