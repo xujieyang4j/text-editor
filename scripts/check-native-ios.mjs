@@ -217,6 +217,8 @@ expect(workspace, /if document.externalChange != nil/,
   "a conflict arriving during a save must keep the document dirty")
 expect(workspace, /try await drafts\.checkpoint\(recoverySnapshot\)/,
   "the private recovery draft must be durable before a provider write begins")
+expect(workspace, /func exportData\([\s\S]{0,240}try await drafts\.checkpoint\(document\.draftSnapshot\(\)\)[\s\S]{0,120}return try await files\.encode\(/,
+  "exports must return the encoded data after checkpointing recovery")
 expect(workspace, /preserveLocalCopyAndReload/,
   "conflicts must support preserving local work before reload")
 expect(workspace, /try await drafts\.checkpoint\(localCopy\.draftSnapshot\(\)\)/,

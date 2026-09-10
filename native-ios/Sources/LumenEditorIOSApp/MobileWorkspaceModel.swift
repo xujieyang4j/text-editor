@@ -360,7 +360,7 @@ final class MobileWorkspaceModel: ObservableObject {
 
     func exportData(for document: MobileDocumentSession) async throws -> Data {
         try await drafts.checkpoint(document.draftSnapshot())
-        try await files.encode(
+        return try await files.encode(
             document.content, encoding: document.encoding, lineEnding: document.lineEnding
         )
     }
