@@ -6,6 +6,11 @@ export interface FindResultsCallbacks {
   onOpenMatch: (match: WorkspaceMatch) => void
 }
 
+export type FindResultsSubject =
+  | { kind: 'definitions'; query?: string; generatedLineText?: 'definition' }
+  | { kind: 'references'; query?: string; generatedLineText?: 'reference' }
+  | { kind: 'replace-preview'; query: string }
+
 /**
  * A persistent, Sublime-style Find Results buffer. It intentionally lives in
  * its own readonly tab so search output survives closing the search overlay.
@@ -20,7 +25,7 @@ export class FindResultsView {
   private matches: WorkspaceMatch[] = []
   private activeIndex = -1
   private locale: UiLocale = 'zh-CN'
-  private query = ''
+  private subject: string | FindResultsSubject = ''
   private previouslyFocused: HTMLElement | null = null
 
   constructor(private readonly callbacks: FindResultsCallbacks) {
@@ -57,8 +62,8 @@ export class FindResultsView {
 
   get element(): HTMLElement { return this.root }
 
-  setResults(query: string, matches: WorkspaceMatch[]): void {
-    this.query = query
+  setResults(subject: string | FindResultsSubject, matches: WorkspaceMatch[]): void {
+    this.subject = subject
     this.matches = matches
     this.activeIndex = matches.length > 0 ? 0 : -1
     this.updateHeader()
@@ -98,6 +103,7 @@ export class FindResultsView {
   setLocale(locale: UiLocale): void {
     this.locale = locale
     this.updateHeader()
+    this.render()
   }
 
   move(delta: number): WorkspaceMatch | null {
@@ -126,7 +132,7 @@ export class FindResultsView {
       item.className = `find-results-match${index === this.activeIndex ? ' active' : ''}`
       item.tabIndex = 0
       item.setAttribute('role', 'button')
-      item.textContent = `  ${baseName(match.path)}:${match.line}:${match.column}  ${match.lineText}`
+      item.textContent = `  ${baseName(match.path)}:${match.line}:${match.column}  ${this.renderedLineText(match)}`
       const openMatch = (): void => {
         this.activeIndex = index
         this.render()
@@ -145,13 +151,44 @@ export class FindResultsView {
   }
 
   private updateHeader(): void {
+    const subject = this.renderedSubject()
     this.titleLabel.textContent = translate(this.locale, 'findResults')
-    this.titleDetail.textContent = this.query ? ` — “${this.query}” (${this.matches.length})` : ''
-    this.summary.textContent = this.query
+    this.titleDetail.textContent = subject ? ` — “${subject}” (${this.matches.length})` : ''
+    this.summary.textContent = subject
       ? this.locale === 'zh-CN'
-        ? `查询“${this.query}”：${this.matches.length} 个结果`
-        : `${this.matches.length} result${this.matches.length === 1 ? '' : 's'} for “${this.query}”`
+        ? `查询“${subject}”：${this.matches.length} 个结果`
+        : `${this.matches.length} result${this.matches.length === 1 ? '' : 's'} for “${subject}”`
       : ''
+  }
+
+  private renderedSubject(): string {
+    if (typeof this.subject === 'string') return this.subject
+    if (this.subject.kind === 'definitions') {
+      const label = this.locale === 'zh-CN' ? '定义' : 'Definitions'
+      return this.subject.query === undefined
+        ? label
+        : this.locale === 'zh-CN' ? `${label}：${this.subject.query}` : `${label}: ${this.subject.query}`
+    }
+    if (this.subject.kind === 'references') {
+      const label = this.locale === 'zh-CN' ? '引用' : 'References'
+      return this.subject.query === undefined
+        ? label
+        : this.locale === 'zh-CN' ? `${label}：${this.subject.query}` : `${label}: ${this.subject.query}`
+    }
+    return this.locale === 'zh-CN'
+      ? `替换预览：${this.subject.query}`
+      : `Replace Preview: ${this.subject.query}`
+  }
+
+  private renderedLineText(match: WorkspaceMatch): string {
+    if (typeof this.subject === 'string') return match.lineText
+    if (this.subject.kind === 'definitions' && this.subject.generatedLineText === 'definition') {
+      return this.locale === 'zh-CN' ? '定义' : 'Definition'
+    }
+    if (this.subject.kind === 'references' && this.subject.generatedLineText === 'reference') {
+      return this.locale === 'zh-CN' ? '引用' : 'Reference'
+    }
+    return match.lineText
   }
 
   private focusActiveResult(): void {

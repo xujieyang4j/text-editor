@@ -1,0 +1,54 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LumenEditor.Windows.Core", "src\LumenEditor.Windows.Core\LumenEditor.Windows.Core.csproj", "{E5A4C0A1-9E40-4C88-A55D-D1D1C93E5F01}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LumenEditor.Windows.App", "src\LumenEditor.Windows.App\LumenEditor.Windows.App.csproj", "{92B5B23A-09CA-449C-AEA0-46AD65B46B02}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LumenEditor.Windows.Core.Tests", "tests\LumenEditor.Windows.Core.Tests\LumenEditor.Windows.Core.Tests.csproj", "{746CC402-A2B1-4E67-BF2A-708796566703}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LumenEditor.Windows.Worker", "src\LumenEditor.Windows.Worker\LumenEditor.Windows.Worker.csproj", "{D52C9227-58B3-4C03-AD7B-183481A38954}"
+EndProject
+Global
+  GlobalSection(SolutionConfigurationPlatforms) = preSolution
+    Debug|Any CPU = Debug|Any CPU
+    Debug|linux = Debug|linux
+    Release|Any CPU = Release|Any CPU
+    Release|linux = Release|linux
+  EndGlobalSection
+  GlobalSection(ProjectConfigurationPlatforms) = postSolution
+    {E5A4C0A1-9E40-4C88-A55D-D1D1C93E5F01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {E5A4C0A1-9E40-4C88-A55D-D1D1C93E5F01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {E5A4C0A1-9E40-4C88-A55D-D1D1C93E5F01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {E5A4C0A1-9E40-4C88-A55D-D1D1C93E5F01}.Release|Any CPU.Build.0 = Release|Any CPU
+    {E5A4C0A1-9E40-4C88-A55D-D1D1C93E5F01}.Debug|linux.ActiveCfg = Debug|Any CPU
+    {E5A4C0A1-9E40-4C88-A55D-D1D1C93E5F01}.Debug|linux.Build.0 = Debug|Any CPU
+    {E5A4C0A1-9E40-4C88-A55D-D1D1C93E5F01}.Release|linux.ActiveCfg = Release|Any CPU
+    {E5A4C0A1-9E40-4C88-A55D-D1D1C93E5F01}.Release|linux.Build.0 = Release|Any CPU
+    {92B5B23A-09CA-449C-AEA0-46AD65B46B02}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {92B5B23A-09CA-449C-AEA0-46AD65B46B02}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {92B5B23A-09CA-449C-AEA0-46AD65B46B02}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {92B5B23A-09CA-449C-AEA0-46AD65B46B02}.Release|Any CPU.Build.0 = Release|Any CPU
+    {92B5B23A-09CA-449C-AEA0-46AD65B46B02}.Debug|linux.ActiveCfg = Debug|Any CPU
+    {92B5B23A-09CA-449C-AEA0-46AD65B46B02}.Debug|linux.Build.0 = Debug|Any CPU
+    {92B5B23A-09CA-449C-AEA0-46AD65B46B02}.Release|linux.ActiveCfg = Release|Any CPU
+    {92B5B23A-09CA-449C-AEA0-46AD65B46B02}.Release|linux.Build.0 = Release|Any CPU
+    {746CC402-A2B1-4E67-BF2A-708796566703}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {746CC402-A2B1-4E67-BF2A-708796566703}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {746CC402-A2B1-4E67-BF2A-708796566703}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {746CC402-A2B1-4E67-BF2A-708796566703}.Release|Any CPU.Build.0 = Release|Any CPU
+    {746CC402-A2B1-4E67-BF2A-708796566703}.Debug|linux.ActiveCfg = Debug|Any CPU
+    {746CC402-A2B1-4E67-BF2A-708796566703}.Debug|linux.Build.0 = Debug|Any CPU
+    {746CC402-A2B1-4E67-BF2A-708796566703}.Release|linux.ActiveCfg = Release|Any CPU
+    {746CC402-A2B1-4E67-BF2A-708796566703}.Release|linux.Build.0 = Release|Any CPU
+    {D52C9227-58B3-4C03-AD7B-183481A38954}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {D52C9227-58B3-4C03-AD7B-183481A38954}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {D52C9227-58B3-4C03-AD7B-183481A38954}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {D52C9227-58B3-4C03-AD7B-183481A38954}.Release|Any CPU.Build.0 = Release|Any CPU
+    {D52C9227-58B3-4C03-AD7B-183481A38954}.Debug|linux.ActiveCfg = Debug|Any CPU
+    {D52C9227-58B3-4C03-AD7B-183481A38954}.Debug|linux.Build.0 = Debug|Any CPU
+    {D52C9227-58B3-4C03-AD7B-183481A38954}.Release|linux.ActiveCfg = Release|Any CPU
+    {D52C9227-58B3-4C03-AD7B-183481A38954}.Release|linux.Build.0 = Release|Any CPU
+  EndGlobalSection
+EndGlobal

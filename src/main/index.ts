@@ -3,9 +3,9 @@ import { promises as fs } from 'fs'
 import { createHash } from 'crypto'
 import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { authorizePathForRenderer, authorizeWorkspaceForRenderer, clearWindowSessionId, listWindowSessionIds, registerFileHandlers, setWindowSessionId } from './files.js'
+import { authorizePathForRenderer, authorizeWorkspaceForRenderer, clearWindowSessionId, getWindowLocale, listWindowSessionIds, readPersistedUiLocale, registerFileHandlers, setWindowLocale, setWindowSessionId } from './files.js'
 import { buildMenu } from './menu.js'
-import { IPC, type MenuEvent, type SaveResult } from '../shared/ipc.js'
+import { IPC, type MenuEvent, type SaveResult, type UiLocale } from '../shared/ipc.js'
 import { APP_NAME } from '../shared/i18n.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -33,6 +33,37 @@ let quitting = false
 const pendingOpenPaths: string[] = []
 const windowSessionIds = new Map<number, string>()
 let windowCounter = 0
+/** Locale assigned to newly-created windows before their renderer settings load. */
+let defaultWindowLocale: UiLocale = 'zh-CN'
+
+interface SessionCloseDialogLabels {
+  buttons: [string, string]
+  title: string
+  message: string
+  detail: string
+}
+
+const SESSION_CLOSE_DIALOG_LABELS: Record<UiLocale, SessionCloseDialogLabels> = {
+  'zh-CN': {
+    buttons: ['保持窗口打开', '仍然关闭'],
+    title: '无法确认会话恢复数据',
+    message: '编辑器无法确认所有未保存的工作都已加入会话恢复数据。',
+    detail: '请保持窗口打开并手动保存重要文件；或仍然关闭窗口，但未保存的更改可能会丢失。'
+  },
+  'en-US': {
+    buttons: ['Keep Window Open', 'Close Anyway'],
+    title: 'Session recovery could not be confirmed',
+    message: 'The editor could not confirm that all unsaved work was added to session recovery.',
+    detail: 'Keep the window open and save important files manually, or close anyway and risk losing unsaved changes.'
+  }
+}
+
+/** Keep the process-wide menu aligned with whichever editor window owns focus. */
+function buildMenuForFocusedWindow(): void {
+  const focusedWindow = BrowserWindow.getFocusedWindow()
+  if (!focusedWindow || focusedWindow.isDestroyed() || focusedWindow.webContents.isDestroyed()) return
+  buildMenu(getWindowLocale(focusedWindow.webContents))
+}
 
 function newSessionId(): string {
   windowCounter += 1
@@ -69,14 +100,15 @@ function flushWindowSession(win: BrowserWindow, afterFlush: () => void): void {
   if (pendingSessionFlushes.has(contents)) return
   const timeout = setTimeout(() => {
     if (!pendingSessionFlushes.has(contents) || win.isDestroyed()) return
+    const labels = SESSION_CLOSE_DIALOG_LABELS[getWindowLocale(contents)]
     void dialog.showMessageBox(win, {
       type: 'warning',
-      buttons: ['Keep Window Open', 'Close Anyway'],
+      buttons: labels.buttons,
       defaultId: 0,
       cancelId: 0,
-      title: 'Session recovery could not be confirmed',
-      message: 'The editor could not confirm that all unsaved work was added to session recovery.',
-      detail: 'Keep the window open and save important files manually, or close anyway and risk losing unsaved changes.'
+      title: labels.title,
+      message: labels.message,
+      detail: labels.detail
     }).then(({ response }) => {
       if (response === 1 && pendingSessionFlushes.delete(contents)) afterFlush()
       else if (response === 0) {
@@ -109,6 +141,66 @@ function allowAppNavigation(win: BrowserWindow): void {
   })
 }
 
+async function runIncidentDashboardSmoke(win: BrowserWindow): Promise<boolean> {
+  const isDashboard = await win.webContents.executeJavaScript(
+    "document.querySelector('.command-center') instanceof HTMLElement",
+    true
+  )
+  if (!isDashboard) return false
+  win.setSize(1440, 900)
+  win.show()
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  const screenshotPath = process.env['LUMEN_SMOKE_SCREENSHOT']
+    ? path.resolve(process.env['LUMEN_SMOKE_SCREENSHOT'])
+    : path.join(app.getPath('temp'), 'lumen-incident-dashboard-smoke.png')
+  await fs.writeFile(screenshotPath, (await win.webContents.capturePage()).toPNG())
+  const script = [
+    '(async () => {',
+    'const markers = document.querySelectorAll(".map-marker");',
+    'const selected = document.querySelector("[data-incident=\\"INC-0422-A\\"]");',
+    'if (!(selected instanceof HTMLButtonElement)) return { ok: false, reason: "missing marker" };',
+    'selected.click();',
+    'const title = document.querySelector("#incident-title")?.textContent;',
+    'const beforeClock = document.querySelector("#playback-clock")?.textContent;',
+    'const forward = document.querySelector("#step-forward");',
+    'if (!(forward instanceof HTMLButtonElement)) return { ok: false, reason: "missing timeline" };',
+    'forward.click();',
+    'const afterClock = document.querySelector("#playback-clock")?.textContent;',
+    'const p1 = document.querySelector("#severity-filters input[value=\\"P1\\"]");',
+    'if (!(p1 instanceof HTMLInputElement)) return { ok: false, reason: "missing filter" };',
+    'p1.click();',
+    'const filteredMarkers = document.querySelectorAll(".map-marker").length;',
+    'document.querySelector("#map-list-toggle")?.click();',
+    'document.querySelector("#sidebar-toggle")?.click();',
+    'document.querySelector("#simulation-toggle")?.click();',
+    'document.querySelector("#simulation-toggle")?.click();',
+    'await new Promise(resolve => window.setTimeout(resolve, 180));',
+    'return { ok: markers.length >= 3 && filteredMarkers < markers.length',
+    '  && title === "Database latency in EU Central" && beforeClock !== afterClock',
+    '  && document.querySelector("#map-event-list")?.hasAttribute("hidden") === false',
+    '  && document.querySelector("#sidebar")?.classList.contains("collapsed") === true,',
+    '  markers: markers.length, filteredMarkers, title, beforeClock, afterClock };',
+    '})()'
+  ].join('')
+  const result = await win.webContents.executeJavaScript(script, true) as {
+    ok?: boolean
+    reason?: string
+    markers?: number
+    filteredMarkers?: number
+    title?: string
+    beforeClock?: string
+    afterClock?: string
+  }
+  if (!result.ok) throw new Error('Incident dashboard smoke failed: ' + JSON.stringify(result))
+  console.log('[smoke] incident dashboard interactions passed; screenshot: ' + screenshotPath)
+  setTimeout(() => {
+    if (!win.isDestroyed()) win.destroy()
+    ;(process as NodeJS.Process & { reallyExit?: (code?: number) => never }).reallyExit?.(0)
+    process.exit(0)
+  }, 250)
+  return true
+}
+
 /** Create the main application window and load the renderer. */
 function createWindow(sessionId = newSessionId()): void {
   const win = new BrowserWindow({
@@ -132,6 +224,7 @@ function createWindow(sessionId = newSessionId()): void {
   allowAppNavigation(win)
   windowSessionIds.set(win.webContents.id, sessionId)
   setWindowSessionId(win.webContents.id, sessionId)
+  setWindowLocale(win.webContents, defaultWindowLocale)
 
   // A direct window close bypasses `before-quit` on some platform paths.
   // Flush the renderer session here and only then let Electron destroy it.
@@ -145,9 +238,15 @@ function createWindow(sessionId = newSessionId()): void {
   })
 
   win.on('ready-to-show', () => win.show())
+  win.on('focus', () => {
+    if (!win.webContents.isDestroyed()) buildMenu(getWindowLocale(win.webContents))
+  })
   win.on('closed', () => {
     windowSessionIds.delete(win.webContents.id)
     clearWindowSessionId(win.webContents.id)
+    // Electron may transfer focus only after the closed event has finished.
+    // Re-check on the next turn in addition to the receiving window's focus event.
+    setImmediate(buildMenuForFocusedWindow)
   })
   win.webContents.once('did-finish-load', () => {
     for (const filePath of pendingOpenPaths.splice(0)) {
@@ -164,6 +263,7 @@ function createWindow(sessionId = newSessionId()): void {
     })
     win.webContents.once('did-finish-load', async () => {
       try {
+        if (await runIncidentDashboardSmoke(win)) return
         const smokeRoot = process.cwd()
         authorizeWorkspaceForRenderer(win.webContents.id, smokeRoot)
         const revisionSmokePath = path.join(app.getPath('userData'), 'revision-smoke.txt')
@@ -457,7 +557,7 @@ function createWindow(sessionId = newSessionId()): void {
           await new Promise((resolve) => window.setTimeout(resolve, 80))
           const tabs = [...document.querySelectorAll('#tab-bar > .tab')]
           const freshUntitled = tabs.length === 1
-            && tabs[0].querySelector('.tab-label')?.textContent === 'Untitled-1'
+            && tabs[0].querySelector('.tab-label')?.textContent === '未命名-1'
             && document.querySelector('.cm-content')?.textContent === ''
           return { preservedAdjacentContent, adjacentContent, adjacentLabel, freshUntitled }
         })()`, true)
@@ -777,16 +877,43 @@ function createWindow(sessionId = newSessionId()): void {
               return {
                 ok: true,
                 value: input.value,
+                placeholder: input.placeholder,
                 matches: document.querySelectorAll('.cm-content .cm-searchMatch').length
               }
             }
             await new Promise((resolve) => window.setTimeout(resolve, 20))
           }
-          return { ok: false, value: '', matches: 0 }
+          return { ok: false, value: '', placeholder: '', matches: 0 }
         })()`, true)
-        if (!findPrepared.ok || findPrepared.value !== 'beta' || findPrepared.matches !== 2) {
+        if (!findPrepared.ok || findPrepared.value !== 'beta' || findPrepared.placeholder !== '查找' || findPrepared.matches !== 2) {
           throw new Error(`CodeMirror find panel was not prepared: ${JSON.stringify(findPrepared)}`)
         }
+        // A live locale change must rebuild CodeMirror-owned UI as well as
+        // application DOM, without losing the active query or its matches.
+        const waitForSearchLocale = async (command: 'set-ui-language-en' | 'set-ui-language-zh', expected: { find: string; next: string }): Promise<void> => {
+          win.webContents.send(IPC.menuEvent, command as MenuEvent)
+          const result = await win.webContents.executeJavaScript(`(async () => {
+            const deadline = Date.now() + 3_000
+            let observed = { find: '', next: '', value: '', matches: 0 }
+            while (Date.now() < deadline) {
+              const input = document.querySelector('.cm-panel.cm-search input[name="search"]')
+              const next = document.querySelector('.cm-panel.cm-search button[name="next"]')
+              observed = {
+                find: input instanceof HTMLInputElement ? input.placeholder : '',
+                next: next?.textContent?.trim() ?? '',
+                value: input instanceof HTMLInputElement ? input.value : '',
+                matches: document.querySelectorAll('.cm-content .cm-searchMatch').length
+              }
+              if (observed.find === ${JSON.stringify(expected.find)} && observed.next === ${JSON.stringify(expected.next)} &&
+                  observed.value === 'beta' && observed.matches === 2) return { ok: true, ...observed }
+              await new Promise((resolve) => window.setTimeout(resolve, 20))
+            }
+            return { ok: false, ...observed }
+          })()`, true)
+          if (!result.ok) throw new Error(`${command} did not relocalize the open CodeMirror search panel: ${JSON.stringify(result)}`)
+        }
+        await waitForSearchLocale('set-ui-language-en', { find: 'Find', next: 'next' })
+        await waitForSearchLocale('set-ui-language-zh', { find: '查找', next: '下一个' })
         const sendFindAndWaitForLine = async (command: 'find-next' | 'find-previous', expectedLine: number): Promise<void> => {
           win.webContents.send(IPC.menuEvent, command as MenuEvent)
           const result = await win.webContents.executeJavaScript(`(async () => {
@@ -939,7 +1066,7 @@ function createWindow(sessionId = newSessionId()): void {
             label: tab?.querySelector('.tab-label')?.textContent ?? ''
           }
         })()`, true)
-        if (!navigationDocument.docId || navigationDocument.label !== 'Untitled-1') {
+        if (!navigationDocument.docId || navigationDocument.label !== '未命名-1') {
           throw new Error(`Could not identify the untitled navigation smoke document: ${JSON.stringify(navigationDocument)}`)
         }
         const waitForEditorPosition = async (line: number, column: number): Promise<void> => {
@@ -1915,7 +2042,7 @@ app.on('open-file', (event, filePath) => {
   sendOpenPath(filePath)
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.platform === 'darwin' && !app.isPackaged) app.dock.setIcon(developmentIconPath)
   app.setAboutPanelOptions({
     applicationName: APP_NAME,
@@ -1932,9 +2059,15 @@ app.whenReady().then(() => {
     pendingSessionFlushes.get(event.sender)?.()
     pendingSessionFlushes.delete(event.sender)
   })
-  buildMenu('zh-CN')
-  ipcMain.handle(IPC.menuSetLocale, (_event, locale: unknown) => {
-    buildMenu(locale === 'en-US' ? 'en-US' : 'zh-CN')
+  defaultWindowLocale = await readPersistedUiLocale()
+  buildMenu(defaultWindowLocale)
+  ipcMain.handle(IPC.menuSetLocale, (event, locale: unknown) => {
+    // The application menu is process-wide, while dialogs and close prompts
+    // use the locale retained for the window that owns them.
+    const windowLocale = setWindowLocale(event.sender, locale)
+    defaultWindowLocale = windowLocale
+    const senderWindow = BrowserWindow.fromWebContents(event.sender)
+    if (senderWindow && BrowserWindow.getFocusedWindow() === senderWindow) buildMenu(windowLocale)
   })
   void listWindowSessionIds().then((sessions) => {
     if (sessions.length === 0) createWindow('legacy')

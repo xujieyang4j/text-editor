@@ -6,12 +6,18 @@ node_modules/
 out/
 out-test/
 dist/
+.build/
+native-windows/**/bin/
+native-windows/**/obj/
+native-windows/artifacts/
 release/
 release-assets/
 
 # Logs
 *.log
 npm-debug.log*
+__pycache__/
+*.py[cod]
 
 # Editor / OS
 .DS_Store
@@ -19,6 +25,9 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+DerivedData/
+*.xcuserstate
+**/xcuserdata/
 
 # Local-only git dir (this sandbox's real .git is read-only; see docs)
 .gitrepo/

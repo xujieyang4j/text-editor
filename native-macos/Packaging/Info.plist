@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleDisplayName</key>
+    <string>文本编辑器(徐洁阳) Native</string>
+    <key>CFBundleExecutable</key>
+    <string>LumenEditor</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.lumen.editor.native-preview</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>LumenEditorNative</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Text document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <!--
+              LaunchServices still consults this extension list when assembling
+              Finder's Open With menu. The UTI list below covers system-known
+              files, while these tags cover source extensions that macOS may
+              otherwise classify as dynamic public.data types. Keep this as an
+              Alternate handler so installation never takes over another app's
+              default association.
+            -->
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>txt</string><string>text</string><string>log</string>
+                <string>md</string><string>markdown</string><string>mdx</string>
+                <string>json</string><string>jsonc</string><string>geojson</string>
+                <string>yaml</string><string>yml</string><string>toml</string>
+                <string>xml</string><string>xsl</string><string>xsd</string><string>svg</string>
+                <string>html</string><string>htm</string><string>css</string>
+                <string>scss</string><string>sass</string><string>less</string>
+                <string>js</string><string>mjs</string><string>cjs</string><string>jsx</string>
+                <string>ts</string><string>mts</string><string>cts</string><string>tsx</string>
+                <string>vue</string><string>py</string><string>pyw</string>
+                <string>java</string><string>kt</string><string>kts</string><string>swift</string>
+                <string>c</string><string>h</string><string>cpp</string><string>cxx</string>
+                <string>cc</string><string>hpp</string><string>hxx</string><string>hh</string>
+                <string>cs</string><string>go</string><string>rs</string><string>php</string>
+                <string>phtml</string><string>rb</string><string>pl</string><string>pm</string>
+                <string>sh</string><string>bash</string><string>zsh</string><string>ksh</string>
+                <string>ps1</string><string>psm1</string><string>psd1</string><string>sql</string>
+                <string>proto</string><string>ini</string><string>properties</string><string>conf</string>
+                <string>cmake</string><string>gradle</string><string>groovy</string><string>lua</string>
+                <string>r</string><string>scala</string><string>scm</string><string>lisp</string>
+                <string>clj</string><string>cljs</string><string>fs</string><string>dart</string>
+                <string>diff</string><string>patch</string><string>tex</string><string>rst</string>
+            </array>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.lumen.editor.native.text-document</string>
+                <string>public.text</string>
+                <string>public.plain-text</string>
+                <string>public.source-code</string>
+                <string>public.json</string>
+                <string>net.daringfireball.markdown</string>
+            </array>
+        </dict>
+    </array>
+    <!--
+      Some extensions in the supported CodeMirror catalog have no system UTI
+      on a clean macOS installation. Declare a bounded editor-owned text UTI so
+      Finder reliably offers this app for them without claiming default-owner
+      status for any existing document type.
+    -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.lumen.editor.native.text-document</string>
+            <key>UTTypeDescription</key>
+            <string>Lumen Editor text and source document</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.plain-text</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>txt</string><string>text</string><string>log</string>
+                    <string>md</string><string>markdown</string><string>mdx</string>
+                    <string>json</string><string>jsonc</string><string>geojson</string>
+                    <string>yaml</string><string>yml</string><string>toml</string>
+                    <string>xml</string><string>xsl</string><string>xsd</string><string>svg</string>
+                    <string>html</string><string>htm</string><string>css</string>
+                    <string>scss</string><string>sass</string><string>less</string>
+                    <string>js</string><string>mjs</string><string>cjs</string><string>jsx</string>
+                    <string>ts</string><string>mts</string><string>cts</string><string>tsx</string>
+                    <string>vue</string><string>py</string><string>pyw</string>
+                    <string>java</string><string>kt</string><string>kts</string><string>swift</string>
+                    <string>c</string><string>h</string><string>cpp</string><string>cxx</string>
+                    <string>cc</string><string>hpp</string><string>hxx</string><string>hh</string>
+                    <string>cs</string><string>go</string><string>rs</string><string>php</string>
+                    <string>phtml</string><string>rb</string><string>pl</string><string>pm</string>
+                    <string>sh</string><string>bash</string><string>zsh</string><string>ksh</string>
+                    <string>ps1</string><string>psm1</string><string>psd1</string><string>sql</string>
+                    <string>proto</string><string>ini</string><string>properties</string><string>conf</string>
+                    <string>cmake</string><string>gradle</string><string>groovy</string><string>lua</string>
+                    <string>r</string><string>scala</string><string>scm</string><string>lisp</string>
+                    <string>clj</string><string>cljs</string><string>fs</string><string>dart</string>
+                    <string>diff</string><string>patch</string><string>tex</string><string>rst</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

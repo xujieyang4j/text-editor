@@ -24,6 +24,7 @@ export const IPC = {
   openInBrowser: 'shell:open-in-browser',
   settingsRead: 'settings:read',
   settingsWrite: 'settings:write',
+  /** Store this window's UI locale; it drives dialogs and the menu while focused. */
   menuSetLocale: 'menu:set-locale',
   settingsImportSublime: 'settings:import-sublime',
   sessionRead: 'session:read',
@@ -121,6 +122,16 @@ export interface OpenedFile {
   isBinary: boolean
   /** True when the file is intentionally not loaded because it exceeds the safe editor limit. */
   isTooLarge: boolean
+}
+
+/**
+ * Result of selecting one or more files through the native open dialog. A
+ * failed item is reported without discarding the other files selected in the
+ * same user gesture.
+ */
+export interface OpenFilesResult {
+  files: OpenedFile[]
+  failures: Array<{ path: string; message: string }>
 }
 
 /** Explicitly supported text encodings. BOM-bearing UTF encodings retain legacy IDs for session compatibility. */
@@ -242,6 +253,338 @@ export interface WorkspaceReplacePreview {
   files: number
   replacements: number
   matches: WorkspaceMatch[]
+}
+
+/**
+ * Upper bound for untrusted, presentation-oriented strings crossing the
+ * workspace IPC boundary. This accommodates long paths and useful context
+ * without allowing an individual field to grow without limit.
+ */
+export const MAX_WORKSPACE_IPC_STRING_LENGTH = 32 * 1024
+/** Keep result arrays aligned with the producer-side workspace search cap. */
+export const MAX_WORKSPACE_MATCHES = 5_000
+/** Cap aggregate match strings to keep structured cloning and rendering responsive. */
+export const MAX_WORKSPACE_MATCH_STRING_LENGTH = 16 * 1024
+export const MAX_WORKSPACE_MATCH_TOTAL_STRING_LENGTH = 8 * 1024 * 1024
+/** Undo identifiers are generated as short opaque tokens and accepted at this limit by main. */
+export const MAX_WORKSPACE_UNDO_TOKEN_LENGTH = 200
+
+/** Bound an optional renderer-supplied result limit even for NaN/infinities. */
+export function workspaceSearchResultLimit(value: unknown): number {
+  if (value === undefined) return MAX_WORKSPACE_MATCHES
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) return MAX_WORKSPACE_MATCHES
+  return Math.max(1, Math.min(value, MAX_WORKSPACE_MATCHES))
+}
+
+/** Stable application-owned failures produced by workspace find/replace. */
+export type WorkspaceOperationError =
+  | { kind: 'app'; code: 'missing-query' | 'invalid-regex' | 'undo-expired' | 'invalid-response' }
+  | { kind: 'app'; code: 'too-many-roots'; params: { maximum: number } }
+  | { kind: 'app'; code: 'undo-file-changed'; params: { path: string } }
+  /** OS, filesystem, and other unclassified details must remain verbatim. */
+  | { kind: 'verbatim'; message: string }
+
+/**
+ * Explicit result envelope for workspace operations. Electron otherwise turns
+ * thrown errors into an English-only string and discards custom error fields.
+ */
+export type WorkspaceOperationResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: WorkspaceOperationError }
+
+/** Wire response keeps successful payloads compatible with older preload clients. */
+export type WorkspaceOperationIpcResponse<T> =
+  | T
+  | WorkspaceOperationResult<T>
+
+export type WorkspaceSearchResult = WorkspaceOperationResult<WorkspaceMatch[]>
+export type WorkspaceReplaceApplyResult = WorkspaceOperationResult<WorkspaceReplaceResult>
+export type WorkspaceReplacePreviewResult = WorkspaceOperationResult<WorkspaceReplacePreview>
+export type WorkspaceReplaceUndoResult = WorkspaceOperationResult<WorkspaceReplaceResult>
+
+export type WorkspaceSearchPatternError = {
+  kind: 'app'
+  code: 'missing-query' | 'invalid-regex'
+}
+
+export type WorkspaceSearchPatternResult =
+  | { ok: true; value: RegExp }
+  | { ok: false; error: WorkspaceSearchPatternError }
+
+type UnknownRecord = Readonly<Record<string, unknown>>
+
+/**
+ * Read an ordinary record without invoking accessors, while rejecting extra
+ * own keys (including symbols). IPC data is expected to consist solely of
+ * enumerable data properties.
+ */
+function exactRecordValues(
+  value: unknown,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[] = []
+): UnknownRecord | null {
+  try {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) return null
+
+    const ownKeys = Reflect.ownKeys(value)
+    if (ownKeys.length < requiredKeys.length
+        || ownKeys.length > requiredKeys.length + optionalKeys.length) return null
+
+    const values = Object.create(null) as Record<string, unknown>
+    for (const key of ownKeys) {
+      if (typeof key !== 'string'
+          || (!requiredKeys.includes(key) && !optionalKeys.includes(key))) return null
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return null
+      values[key] = descriptor.value
+    }
+    if (!requiredKeys.every((key) => Object.hasOwn(values, key))) return null
+    return values
+  } catch {
+    return null
+  }
+}
+
+function hasOwnKey(value: unknown, key: string): boolean {
+  try {
+    return (typeof value === 'object' && value !== null)
+      || typeof value === 'function'
+      ? Reflect.ownKeys(value).includes(key)
+      : false
+  } catch {
+    // A value which cannot be inspected safely must never be accepted as a
+    // legacy bare success merely because its shape is inaccessible.
+    return true
+  }
+}
+
+function isBoundedWorkspaceString(
+  value: unknown,
+  maximum = MAX_WORKSPACE_IPC_STRING_LENGTH,
+  allowEmpty = true
+): value is string {
+  return typeof value === 'string'
+    && (allowEmpty || value.length > 0)
+    && value.length <= maximum
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isBoundedDenseArray<T>(
+  value: unknown,
+  maximum: number,
+  isItem: (item: unknown) => item is T
+): value is T[] {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return false
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    if (!lengthDescriptor || !('value' in lengthDescriptor)
+        || !isNonNegativeSafeInteger(lengthDescriptor.value)
+        || lengthDescriptor.value > maximum) return false
+
+    const length = lengthDescriptor.value
+    // A normal dense array owns exactly its indexed items plus `length`.
+    if (Reflect.ownKeys(value).length !== length + 1) return false
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable
+          || !isItem(descriptor.value)) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+function workspaceMatchStringLength(value: unknown): number | null {
+  const match = exactRecordValues(value, ['path', 'line', 'column', 'lineText', 'matchText'])
+  if (match === null
+      || !isBoundedWorkspaceString(match.path, MAX_WORKSPACE_IPC_STRING_LENGTH, false)
+      || !isPositiveSafeInteger(match.line)
+      || !isPositiveSafeInteger(match.column)
+      || !isBoundedWorkspaceString(match.lineText, MAX_WORKSPACE_MATCH_STRING_LENGTH)
+      || !isBoundedWorkspaceString(match.matchText, MAX_WORKSPACE_MATCH_STRING_LENGTH)) return null
+  return match.path.length + match.lineText.length + match.matchText.length
+}
+
+/** Strictly validate one renderer-facing workspace match. */
+export function isWorkspaceMatch(value: unknown): value is WorkspaceMatch {
+  return workspaceMatchStringLength(value) !== null
+}
+
+/** Strictly validate a bounded, dense workspace search result array. */
+export function isWorkspaceMatchArray(value: unknown): value is WorkspaceMatch[] {
+  let aggregateStringLength = 0
+  return isBoundedDenseArray(value, MAX_WORKSPACE_MATCHES, (item): item is WorkspaceMatch => {
+    const stringLength = workspaceMatchStringLength(item)
+    if (stringLength === null) return false
+    aggregateStringLength += stringLength
+    return aggregateStringLength <= MAX_WORKSPACE_MATCH_TOTAL_STRING_LENGTH
+  })
+}
+
+/** Strictly validate the result of applying or undoing a workspace replace. */
+export function isWorkspaceReplaceResult(value: unknown): value is WorkspaceReplaceResult {
+  const result = exactRecordValues(value, ['files', 'replacements'], ['undoToken'])
+  return result !== null
+    && isNonNegativeSafeInteger(result.files)
+    && isNonNegativeSafeInteger(result.replacements)
+    && (!Object.hasOwn(result, 'undoToken')
+      || isBoundedWorkspaceString(
+        result.undoToken, MAX_WORKSPACE_UNDO_TOKEN_LENGTH, false
+      ))
+}
+
+/** Strictly validate a workspace replace preview and all of its matches. */
+export function isWorkspaceReplacePreview(value: unknown): value is WorkspaceReplacePreview {
+  const preview = exactRecordValues(value, ['files', 'replacements', 'matches'])
+  return preview !== null
+    && isNonNegativeSafeInteger(preview.files)
+    && isNonNegativeSafeInteger(preview.replacements)
+    && isWorkspaceMatchArray(preview.matches)
+}
+
+/** Named success-payload validators for each workspace IPC API. */
+export function isWorkspaceSearchResultPayload(value: unknown): value is WorkspaceMatch[] {
+  return isWorkspaceMatchArray(value)
+}
+
+export function isWorkspaceReplaceApplyResultPayload(
+  value: unknown
+): value is WorkspaceReplaceResult {
+  return isWorkspaceReplaceResult(value) && value.files <= value.replacements
+}
+
+export function isWorkspaceReplacePreviewPayload(
+  value: unknown
+): value is WorkspaceReplacePreview {
+  return isWorkspaceReplacePreview(value)
+    && value.replacements === value.matches.length
+    && value.files === new Set(value.matches.map((match) => match.path)).size
+}
+
+export function isWorkspaceReplaceUndoResultPayload(
+  value: unknown
+): value is WorkspaceReplaceResult {
+  return isWorkspaceReplaceResult(value)
+    && value.replacements === 0
+    && !Object.hasOwn(value, 'undoToken')
+}
+
+/** Compile app-owned query syntax without relying on an English Error message. */
+export function compileWorkspaceSearchRegExp(
+  request: WorkspaceSearchRequest
+): WorkspaceSearchPatternResult {
+  const query = request.query.slice(0, 2_000)
+  if (!query) return { ok: false, error: { kind: 'app', code: 'missing-query' } }
+  const escaped = request.useRegex
+    ? query
+    : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const source = request.wholeWord ? `\\b(?:${escaped})\\b` : escaped
+  try {
+    return {
+      ok: true,
+      value: new RegExp(source, request.caseSensitive ? 'g' : 'gi')
+    }
+  } catch {
+    const error: WorkspaceSearchPatternError = { kind: 'app', code: 'invalid-regex' }
+    return { ok: false, error }
+  }
+}
+
+/** Preserve an unclassified OS/system error as data instead of Electron's rewritten exception. */
+export function verbatimWorkspaceOperationError(error: unknown): WorkspaceOperationError {
+  let message: string
+  try {
+    message = error instanceof Error ? String(error.message) : String(error)
+  } catch {
+    message = 'Unknown workspace operation error'
+  }
+  return {
+    kind: 'verbatim',
+    // Adjust the UTF-16 boundary so truncation never splits a surrogate pair.
+    // Within the limit, text is returned byte-for-byte unchanged.
+    message: truncateWorkspaceIpcString(message)
+  }
+}
+
+export function truncateWorkspaceIpcString(
+  value: string,
+  maximum = MAX_WORKSPACE_IPC_STRING_LENGTH
+): string {
+  const boundedMaximum = Number.isSafeInteger(maximum)
+    ? Math.max(0, maximum)
+    : MAX_WORKSPACE_IPC_STRING_LENGTH
+  if (value.length <= boundedMaximum) return value
+  let end = boundedMaximum
+  if (end === 0) return ''
+  const finalCodeUnit = value.charCodeAt(end - 1)
+  const followingCodeUnit = value.charCodeAt(end)
+  if (finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff
+      && followingCodeUnit >= 0xdc00 && followingCodeUnit <= 0xdfff) end -= 1
+  return value.slice(0, end)
+}
+
+/** Validate a presentation payload before treating an arbitrary failure as typed IPC data. */
+export function isWorkspaceOperationError(value: unknown): value is WorkspaceOperationError {
+  const base = exactRecordValues(value, ['kind'], ['code', 'params', 'message'])
+  if (base?.kind === 'verbatim') {
+    const candidate = exactRecordValues(value, ['kind', 'message'])
+    return candidate !== null && isBoundedWorkspaceString(candidate.message)
+  }
+  if (base?.kind !== 'app') return false
+  if (base.code === 'missing-query' || base.code === 'invalid-regex'
+      || base.code === 'undo-expired' || base.code === 'invalid-response') {
+    return exactRecordValues(value, ['kind', 'code']) !== null
+  }
+  if (base.code === 'too-many-roots') {
+    const candidate = exactRecordValues(value, ['kind', 'code', 'params'])
+    if (!candidate) return false
+    const params = exactRecordValues(candidate.params, ['maximum'])
+    return params !== null && isPositiveSafeInteger(params.maximum)
+  }
+  if (base.code === 'undo-file-changed') {
+    const candidate = exactRecordValues(value, ['kind', 'code', 'params'])
+    if (!candidate) return false
+    const params = exactRecordValues(candidate.params, ['path'])
+    return params !== null
+      && isBoundedWorkspaceString(params.path, MAX_WORKSPACE_IPC_STRING_LENGTH, false)
+  }
+  return false
+}
+
+/**
+ * Normalise both legacy bare successes and explicit result envelopes. Every
+ * success crosses the caller-supplied validator; malformed data becomes a
+ * stable application-owned error instead of being cast to T.
+ */
+export function normalizeWorkspaceOperationResult<T>(
+  response: unknown,
+  isSuccess: (value: unknown) => value is T
+): WorkspaceOperationResult<T> {
+  const envelope = exactRecordValues(response, ['ok'], ['value', 'error'])
+  if (envelope?.ok === true) {
+    const success = exactRecordValues(response, ['ok', 'value'])
+    if (success !== null && isSuccess(success.value)) {
+      return { ok: true, value: success.value }
+    }
+  } else if (envelope?.ok === false) {
+    const failure = exactRecordValues(response, ['ok', 'error'])
+    if (failure !== null && isWorkspaceOperationError(failure.error)) {
+      return { ok: false, error: failure.error }
+    }
+  } else if (!hasOwnKey(response, 'ok') && isSuccess(response)) {
+    return { ok: true, value: response }
+  }
+  return { ok: false, error: { kind: 'app', code: 'invalid-response' } }
 }
 
 /** Lightweight project-wide symbol entry, suitable for fast navigation. */
@@ -495,6 +838,8 @@ export interface SavedMacro {
  * Mirrors the subset of Sublime's Preferences that we support.
  */
 export interface Settings {
+  /** Shared Electron/native settings schema marker. */
+  formatVersion: number
   locale: UiLocale
   fontSize: number
   tabSize: number
@@ -530,6 +875,7 @@ export interface Settings {
 
 /** Built-in defaults, used when no settings file exists yet. */
 export const DEFAULT_SETTINGS: Settings = {
+  formatVersion: 2,
   locale: 'zh-CN',
   fontSize: 14,
   tabSize: 4,
@@ -542,7 +888,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showWhitespace: false,
   highlightTrailingWhitespace: true,
   rulers: [],
-  maxFileSizeMB: 20,
+  maxFileSizeMB: 200,
   buildCommand: '',
   colorScheme: 'dark',
   spellCheck: false,
@@ -725,6 +1071,37 @@ export interface LanguageServerDiagnosticEvent {
   diagnostics: LanguageToolResult['diagnostics']
 }
 
+/** Stable, application-owned lifecycle explanations that render in the active UI locale. */
+export type LanguageServerStatusReason =
+  | 'command-not-found'
+  | 'start-failed'
+  | 'input-not-writable'
+  | 'write-failed'
+  | 'encode-failed'
+  | 'input-queue-overflow'
+  | 'stdout-read-failed'
+  | 'protocol-error'
+  | 'input-closed-unexpectedly'
+  | 'unexpected-exit'
+  | 'unexpected-exit-code'
+  | 'unexpected-exit-signal'
+  | 'invalid-initialize-error-response'
+  | 'invalid-initialize-response'
+  | 'initialize-timeout'
+  | 'stopped'
+
+/** Bounded values interpolated into a localised lifecycle explanation. */
+export interface LanguageServerStatusReasonParams {
+  /** Executable name exactly as configured by the user. */
+  command?: string
+  /** Input queue limit in bytes. */
+  limit?: number
+  /** Process exit code. */
+  code?: number
+  /** Process signal name supplied by Node. */
+  signal?: string
+}
+
 /** Lifecycle state published by a persistent language-server process. */
 export interface LanguageServerStatusEvent {
   key: string
@@ -732,7 +1109,11 @@ export interface LanguageServerStatusEvent {
   command: string
   state: 'starting' | 'running' | 'stopping' | 'stopped' | 'error'
   pid?: number
+  /** Raw external detail (for example an LSP initialize error); never translate it. */
   message?: string
+  /** Application-owned explanation rendered by the receiver in its current locale. */
+  reason?: LanguageServerStatusReason
+  reasonParams?: LanguageServerStatusReasonParams
   capabilities?: unknown
 }
 

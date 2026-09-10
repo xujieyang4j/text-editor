@@ -1,4 +1,4 @@
-import type { PluginManifest, PluginPermission } from '../../shared/ipc.js'
+import type { PluginManifest, PluginPermission, UiLocale } from '../../shared/ipc.js'
 
 export interface ExtensionHostContext {
   getDocument: () => { text: string; language: string; selection: { from: number; to: number } }
@@ -20,6 +20,11 @@ interface HostMessage {
  */
 export class ExtensionHost {
   private workers = new Map<string, Worker>()
+  private locale: UiLocale = 'zh-CN'
+
+  setLocale(locale: UiLocale): void {
+    this.locale = locale
+  }
 
   async load(
     root: string,
@@ -46,7 +51,12 @@ export class ExtensionHost {
         context.notify(`${plugin.name}: ${message.text.slice(0, 500)}`)
       }
     })
-    worker.addEventListener('error', (event) => context.notify(`${plugin.name}: extension error — ${event.message}`))
+    worker.addEventListener('error', (event) => {
+      console.error(`${plugin.name}: extension error`, event.message)
+      context.notify(this.locale === 'zh-CN'
+        ? `${plugin.name}：扩展运行出错。详情已写入开发者控制台。`
+        : `${plugin.name}: extension error — ${event.message}`)
+    })
     worker.postMessage({ type: 'activate', context: this.safeContext(permissions, context) })
   }
 

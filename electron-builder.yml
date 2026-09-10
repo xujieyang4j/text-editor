@@ -12,22 +12,86 @@ publish: null
 # be scalar even though electron-builder's shared schema also permits arrays.
 fileAssociations:
   - { ext: txt, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: text, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: log, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: md, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: markdown, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: mdx, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: json, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: jsonc, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: geojson, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: yaml, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: yml, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: toml, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: xml, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: xsl, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: xsd, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: svg, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: js, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: mjs, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: cjs, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: jsx, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: ts, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: mts, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: cts, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: tsx, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: vue, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: html, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: htm, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: css, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: scss, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: sass, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: less, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: py, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: pyw, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: java, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: kt, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: kts, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: swift, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: c, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: cc, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: cpp, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: cxx, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: h, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: hpp, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: hxx, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: hh, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: cs, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: go, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: rs, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: php, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: phtml, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: rb, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: pl, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: pm, name: "文本编辑器(徐洁阳) 文档", role: Editor }
   - { ext: sh, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: bash, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: zsh, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: ksh, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: ps1, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: psm1, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: psd1, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: sql, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: proto, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: ini, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: properties, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: conf, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: cmake, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: gradle, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: groovy, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: lua, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: r, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: scala, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: scm, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: lisp, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: clj, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: cljs, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: fs, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: dart, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: diff, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: patch, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: tex, name: "文本编辑器(徐洁阳) 文档", role: Editor }
+  - { ext: rst, name: "文本编辑器(徐洁阳) 文档", role: Editor }
 win:
   icon: build/icon.png
   target:

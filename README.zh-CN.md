@@ -5,6 +5,30 @@
 一款基于 **Electron + TypeScript + CodeMirror 6** 的跨平台桌面文本编辑器，
 单一代码库即可在 **Linux、Windows、macOS** 上运行。
 
+仓库现已同时包含基于 SwiftUI/AppKit 的独立 **macOS 原生预览版**，入口见
+[`native-macos/`](./native-macos/README.md)。主要编辑流程已经接通，但在版本化的
+[功能对齐矩阵](./docs/NATIVE_MACOS_PARITY.md)与
+[签名真机验收清单](./docs/NATIVE_MACOS_ACCEPTANCE.md)全部完成前仍属于预览版；重要文件请继续使用
+Electron 正式版。
+
+原生 Windows 候选正式版采用 WinUI 3 / Windows App SDK，位于
+[`native-windows/`](./native-windows/)。文件激活/多选、带历史的查找替换、多窗格、工作区搜索与监听、
+无 shell 的 Build、深层 Git 工作流、ConPTY 终端、带补全和版本锁定诊断的持久 LSP、声明式插件以及
+169 项命令主路径已经接入；原生 RichEditBox 编辑面支持多光标结构化输入、行号、有界装饰/minimap、
+保留源码的折叠、四套配色，以及面向锁定的 143 语言目录的 CodeMirror/Lezer 解析级高亮、折叠、大纲和
+缩进，超大或不受支持的输入安全回退到有界原生分析。Markdown 使用受 CSP 限制的 WebView2 富预览。
+parser 与插件代码运行在独立的 self-contained worker 可执行文件中，x64/arm64 MSIX 构建、架构/内容校验
+及 Windows CI 进程/安装启动 smoke 也已接入；Core 门禁当前为 185/185。正式替代仍要求完成 Windows
+GUI、Explorer、无障碍、IME、升级与正式签名真机验收，详见
+[Windows 对等清单](./docs/NATIVE_WINDOWS_PARITY.md)。
+
+仓库还包含独立的 **iOS/iPadOS 17+ 原生预览版**，位于
+[`native-ios/`](./native-ios/README.md)。它采用 SwiftUI 外壳和 UIKit TextKit 2 编辑器，围绕手机上的
+系统文件入口、单编辑器、文档切换抽屉、IME、草稿恢复与 File Provider 安全写回设计，不复刻桌面三栏或
+本地 Terminal/Build。当前能力和真机发行缺口见
+[iOS 移动适配矩阵](./docs/NATIVE_IOS_PARITY.md)与
+[iOS 发行验收清单](./docs/NATIVE_IOS_ACCEPTANCE.md)。
+
 📖 **完整使用指南（中英双语）：** [`docs/USER_GUIDE.md`](./docs/USER_GUIDE.md)
 
 ## 功能特性
@@ -117,7 +141,7 @@ src/
 
 ## 环境要求
 
-- **Node.js** ≥ 18（开发环境为 v22）
+- **Node.js** ≥ 20（开发环境为 v22）
 - 首次 `npm install` 需联网下载 Electron 运行时二进制。网络受限时可设镜像：
   ```bash
   export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
@@ -142,6 +166,10 @@ npm run dev:mac
 `dev:mac` 会按需恢复 Electron、修复并验证当前项目的运行时，然后直接启动编辑器。它只处理
 `node_modules/electron/dist/Electron.app`，不会关闭 Gatekeeper，也不会修改系统级安全设置。
 若只想修复、不启动，仍可运行 `npm run fix:mac`。
+
+在 macOS 14 与 Xcode 15.3 或更高版本上构建原生预览版，请按
+[原生构建与测试说明](./native-macos/README.md#构建与测试)操作。原生版使用独立 bundle ID 和
+Application Support 目录，可以与 Electron 版并行安装，不会共享设置或恢复数据。
 
 > ⚠️ **请勿运行 `npm audit fix --force`。** 报告的漏洞全部位于构建/打包工具链，不会打包进最终
 > 应用，`--force` 只会把工具链升级到互不兼容的大版本、破坏环境。详见

@@ -123,6 +123,48 @@ const trailingWsConf = new Compartment()
 const rulerConf = new Compartment()
 const fontThemeConf = new Compartment()
 const spellCheckConf = new Compartment()
+const phrasesConf = new Compartment()
+
+/**
+ * CodeMirror owns a handful of labels outside our normal DOM, including its
+ * search/replace panel, fold gutter, completion list and accessibility
+ * announcements. Keep those phrases in the same locale as the application.
+ */
+const CODEMIRROR_ZH_PHRASES: Record<string, string> = {
+  Find: '查找',
+  Replace: '替换',
+  next: '下一个',
+  previous: '上一个',
+  all: '全部',
+  'match case': '区分大小写',
+  regexp: '正则表达式',
+  'by word': '全字匹配',
+  replace: '替换',
+  'replace all': '全部替换',
+  close: '关闭',
+  'current match': '当前匹配项',
+  'on line': '所在行',
+  'replaced match on line $': '已替换第 $ 行的匹配项',
+  'replaced $ matches': '已替换 $ 个匹配项',
+  'Go to line': '转到行',
+  go: '转到',
+  'Control character': '控制字符',
+  'Folded lines': '已折叠行',
+  'Unfolded lines': '已展开行',
+  to: '至',
+  'folded code': '已折叠代码',
+  unfold: '展开',
+  'Fold line': '折叠此行',
+  'Unfold line': '展开此行',
+  Diagnostics: '诊断',
+  'No diagnostics': '没有诊断信息',
+  'Selection deleted': '已删除选区',
+  Completions: '补全建议'
+}
+
+function codeMirrorPhrases(locale: Settings['locale']): Extension {
+  return locale === 'zh-CN' ? EditorState.phrases.of(CODEMIRROR_ZH_PHRASES) : []
+}
 
 const setIncrementalDiff = StateEffect.define<IncrementalChange[]>()
 
@@ -339,6 +381,7 @@ export class Editor {
         rulerConf.of(rulers(s.rulers)),
         fontThemeConf.of(fontTheme(s.fontSize)),
         spellCheckConf.of(EditorView.contentAttributes.of({ spellcheck: s.spellCheck ? 'true' : 'false' })),
+        phrasesConf.of(codeMirrorPhrases(s.locale)),
         incrementalDiffMarkers,
         lintGutter()
       ]
@@ -457,7 +500,8 @@ export class Editor {
         ),
         rulerConf.reconfigure(rulers(settings.rulers)),
         fontThemeConf.reconfigure(fontTheme(settings.fontSize)),
-        spellCheckConf.reconfigure(EditorView.contentAttributes.of({ spellcheck: settings.spellCheck ? 'true' : 'false' }))
+        spellCheckConf.reconfigure(EditorView.contentAttributes.of({ spellcheck: settings.spellCheck ? 'true' : 'false' })),
+        phrasesConf.reconfigure(codeMirrorPhrases(settings.locale))
       ]
     })
   }

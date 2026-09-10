@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <UseWinUI>true</UseWinUI>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType Condition="'$(LumenXamlStubBuild)' != 'true'">MSIX</WindowsPackageType>
+    <WindowsPackageType Condition="'$(LumenXamlStubBuild)' == 'true'">None</WindowsPackageType>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <WindowsAppSDKSelfContained Condition="'$(LumenXamlStubBuild)' != 'true'">true</WindowsAppSDKSelfContained>
+    <WindowsAppSDKSelfContained Condition="'$(LumenXamlStubBuild)' == 'true'">false</WindowsAppSDKSelfContained>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <AppxBundle>Never</AppxBundle>
+    <RootNamespace>LumenEditor.Windows.App</RootNamespace>
+    <Version>0.1.0</Version>
+    <LumenPackageManifest Condition="'$(LumenPackageManifest)' == ''">Packaging/Package.appxmanifest</LumenPackageManifest>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(LumenXamlStubBuild)' == 'true'">
+    <DefineConstants>$(DefineConstants);LUMEN_XAML_STUBS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250205002" />
+    <ProjectReference Include="../LumenEditor.Windows.Core/LumenEditor.Windows.Core.csproj" />
+    <Content Include="../../../native-macos/Sources/LumenEditorApp/Resources/CodeMirrorParserBundle.js">
+      <Link>Resources/CodeMirrorParserBundle.js</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="$(LumenWorkerPublishDir)/LumenEditor.Windows.Worker.exe"
+             Condition="'$(LumenWorkerPublishDir)' != '' and Exists('$(LumenWorkerPublishDir)/LumenEditor.Windows.Worker.exe')">
+      <Link>LumenEditor.Windows.Worker.exe</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup Condition="'$(LumenXamlStubBuild)' != 'true'">
+    <AppxManifest Include="$(LumenPackageManifest)">
+      <SubType>Designer</SubType>
+    </AppxManifest>
+    <Content Include="Assets/*.png" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(LumenXamlStubBuild)' == 'true'">
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Remove="MainWindow.xaml" />
+  </ItemGroup>
+</Project>

@@ -13,6 +13,15 @@ export interface GitPanelCallbacks {
   onBranch: (create: boolean) => void
 }
 
+type GitPreviewOperation = 'diff' | 'history' | 'blame'
+type GitPreviewState =
+  | { kind: 'empty' }
+  | { kind: 'diff', content: string }
+  | { kind: 'hunk', content: string }
+  | { kind: 'blame', content: string }
+  | { kind: 'history', entries: GitHistoryEntry[] }
+  | { kind: 'error', operation: GitPreviewOperation, message: string | null }
+
 /** Read-only Git changes sidebar with per-file diff preview. */
 export class GitPanel {
   private static nextPanelId = 0
@@ -31,6 +40,8 @@ export class GitPanel {
   private selected = new Set<string>()
   private locale: UiLocale = 'zh-CN'
   private status: GitStatus | null = null
+  private previewState: GitPreviewState = { kind: 'empty' }
+  private previewRequestId = 0
 
   constructor(private readonly callbacks: GitPanelCallbacks) {
     this.root = document.createElement('div')
@@ -70,7 +81,10 @@ export class GitPanel {
     this.hunkPicker.addEventListener('change', () => {
       const index = Number(this.hunkPicker.value)
       this.selectedHunk = Number.isInteger(index) ? (this.hunks[index] ?? null) : null
-      if (this.selectedHunk) this.diff.textContent = this.selectedHunk.patch || 'No textual diff is available.'
+      if (this.selectedHunk) {
+        this.previewState = { kind: 'hunk', content: this.selectedHunk.patch }
+        this.renderPreview()
+      }
     })
     const actions = document.createElement('div')
     actions.className = 'git-actions'
@@ -86,8 +100,8 @@ export class GitPanel {
     add('stage', translate(this.locale, 'stage'), () => this.callbacks.onAction('stage', [...this.selected]))
     add('unstage', translate(this.locale, 'unstage'), () => this.callbacks.onAction('unstage', [...this.selected]))
     add('discard', translate(this.locale, 'discard'), () => this.callbacks.onAction('discard', [...this.selected]))
-    add('stageHunk', `${translate(this.locale, 'stage')} Hunk`, () => { if (this.selectedHunk) this.callbacks.onHunkAction('stage-hunk', this.selectedHunk) })
-    add('discardHunk', `${translate(this.locale, 'discard')} Hunk`, () => { if (this.selectedHunk) this.callbacks.onHunkAction('discard-hunk', this.selectedHunk) })
+    add('stageHunk', '暂存区块', () => { if (this.selectedHunk) this.callbacks.onHunkAction('stage-hunk', this.selectedHunk) })
+    add('discardHunk', '丢弃区块', () => { if (this.selectedHunk) this.callbacks.onHunkAction('discard-hunk', this.selectedHunk) })
     add('history', translate(this.locale, 'history'), () => { if (this.activePath) void this.showHistory(this.activePath) })
     add('blame', translate(this.locale, 'blame'), () => { if (this.activePath) void this.showBlame(this.activePath) })
     add('commit', translate(this.locale, 'commit'), this.callbacks.onCommit)
@@ -100,6 +114,7 @@ export class GitPanel {
       this.toggle(false)
     })
     this.root.append(this.heading, this.trackingSummary, actions, this.list, this.hunkPicker, this.diff)
+    this.setLocale(this.locale)
   }
 
   get element(): HTMLElement { return this.root }
@@ -123,26 +138,35 @@ export class GitPanel {
     this.locale = locale
     this.renderRepositorySummary()
     this.list.setAttribute('aria-label', locale === 'zh-CN' ? 'Git 更改文件' : 'Git changed files')
-    this.diff.setAttribute('aria-label', locale === 'zh-CN' ? 'Git 差异预览' : 'Git diff preview')
     this.hunkPicker.setAttribute('aria-label', locale === 'zh-CN' ? '选择差异区块' : 'Select diff hunk')
+    this.hunkPicker.title = locale === 'zh-CN' ? '选择差异区块' : 'Select diff hunk'
     const labels: Record<string, string> = {
       stage: translate(locale, 'stage'), unstage: translate(locale, 'unstage'), discard: translate(locale, 'discard'),
-      stageHunk: `${translate(locale, 'stage')} Hunk`, discardHunk: `${translate(locale, 'discard')} Hunk`,
+      stageHunk: locale === 'zh-CN' ? '暂存区块' : 'Stage Hunk',
+      discardHunk: locale === 'zh-CN' ? '丢弃区块' : 'Discard Hunk',
       history: translate(locale, 'history'), blame: translate(locale, 'blame'), commit: translate(locale, 'commit'),
-      switch: locale === 'zh-CN' ? '切换分支' : 'Switch', branch: locale === 'zh-CN' ? '新建分支' : 'New Branch'
+      switch: locale === 'zh-CN' ? '切换分支' : 'Switch Branch', branch: locale === 'zh-CN' ? '新建分支' : 'New Branch'
     }
-    for (const [key, label] of Object.entries(labels)) this.actionButtons.get(key)!.textContent = label
+    for (const [key, label] of Object.entries(labels)) {
+      const button = this.actionButtons.get(key)!
+      button.textContent = label
+      button.title = label
+    }
+    this.renderHunkOptions()
+    this.renderPreview()
   }
 
   setStatus(status: GitStatus): void {
+    this.previewRequestId += 1
     this.status = status
     this.list.replaceChildren()
     this.selected.clear()
-    this.diff.textContent = ''
+    this.previewState = { kind: 'empty' }
     this.hunks = []
     this.selectedHunk = null
     this.hunkPicker.replaceChildren()
     this.hunkPicker.disabled = true
+    this.renderPreview()
     this.renderRepositorySummary()
     if (!status.available) return
     status.entries.forEach((entry, index) => {
@@ -261,50 +285,107 @@ export class GitPanel {
     return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : null
   }
 
+  private renderHunkOptions(): void {
+    const selectedIndex = this.selectedHunk ? this.hunks.indexOf(this.selectedHunk) : -1
+    this.hunkPicker.replaceChildren()
+    this.hunks.forEach((hunk, index) => {
+      const option = document.createElement('option')
+      option.value = String(index)
+      option.textContent = this.locale === 'zh-CN'
+        ? `区块 ${index + 1}：${hunk.header}`
+        : `Hunk ${index + 1}: ${hunk.header}`
+      this.hunkPicker.appendChild(option)
+    })
+    this.hunkPicker.disabled = this.hunks.length === 0
+    if (selectedIndex >= 0) this.hunkPicker.value = String(selectedIndex)
+  }
+
+  private renderPreview(): void {
+    const state = this.previewState
+    const previewType = state.kind === 'history'
+      ? (this.locale === 'zh-CN' ? 'Git 历史记录' : 'Git history')
+      : state.kind === 'blame'
+        ? (this.locale === 'zh-CN' ? 'Git 追溯结果' : 'Git blame')
+        : (this.locale === 'zh-CN' ? 'Git 差异预览' : 'Git diff preview')
+    this.diff.setAttribute('aria-label', previewType)
+    if (state.kind === 'empty') {
+      this.diff.textContent = ''
+    } else if (state.kind === 'diff' || state.kind === 'hunk') {
+      this.diff.textContent = state.content || (this.locale === 'zh-CN' ? '没有可用的文本差异。' : 'No textual diff is available.')
+    } else if (state.kind === 'blame') {
+      this.diff.textContent = state.content || (this.locale === 'zh-CN' ? '没有可用的追溯数据。' : 'No blame data is available.')
+    } else if (state.kind === 'history') {
+      this.diff.textContent = state.entries.length > 0
+        ? state.entries.map((entry) => `${entry.shortId}  ${entry.date}  ${entry.author}  ${entry.subject}`).join('\n')
+        : (this.locale === 'zh-CN' ? '此文件没有提交历史。' : 'No committed history for this file.')
+    } else if (state.kind === 'error') {
+      this.diff.textContent = this.locale === 'zh-CN'
+        ? this.previewError(state.operation)
+        : (state.message ?? this.previewError(state.operation))
+    }
+  }
+
+  private previewError(operation: GitPreviewOperation): string {
+    if (this.locale === 'zh-CN') {
+      if (operation === 'history') return '无法加载 Git 历史记录。'
+      if (operation === 'blame') return '无法加载 Git 追溯结果。'
+      return '无法加载差异。'
+    }
+    if (operation === 'history') return 'Could not load Git history.'
+    if (operation === 'blame') return 'Could not load Git blame.'
+    return 'Could not load diff.'
+  }
+
   private async showDiff(relativePath: string): Promise<void> {
+    const requestId = ++this.previewRequestId
     try {
       this.activePath = relativePath
       const result = await this.callbacks.onDiff(relativePath)
-      this.diff.textContent = result.diff || 'No textual diff is available.'
-      this.hunks = await this.callbacks.onHunks(relativePath)
-      this.hunkPicker.replaceChildren()
-      if (this.hunks.length === 0) {
-        this.hunkPicker.disabled = true
-        return
-      }
-      this.hunks.forEach((hunk, index) => {
-        const option = document.createElement('option')
-        option.value = String(index)
-        option.textContent = `Hunk ${index + 1}: ${hunk.header}`
-        this.hunkPicker.appendChild(option)
-      })
-      this.hunkPicker.disabled = false
-      this.hunkPicker.value = '0'
-      this.selectedHunk = this.hunks[0]
+      if (requestId !== this.previewRequestId || relativePath !== this.activePath) return
+      this.previewState = { kind: 'diff', content: result.diff }
+      this.renderPreview()
+      const hunks = await this.callbacks.onHunks(relativePath)
+      if (requestId !== this.previewRequestId || relativePath !== this.activePath) return
+      this.hunks = hunks
+      this.selectedHunk = hunks[0] ?? null
+      this.renderHunkOptions()
     } catch (error) {
-      this.diff.textContent = error instanceof Error ? error.message : 'Could not load diff.'
+      if (requestId !== this.previewRequestId || relativePath !== this.activePath) return
+      this.previewState = { kind: 'error', operation: 'diff', message: error instanceof Error ? error.message : null }
+      this.renderPreview()
       this.hunks = []
       this.selectedHunk = null
-      this.hunkPicker.disabled = true
+      this.renderHunkOptions()
     }
   }
 
   private async showHistory(relativePath: string): Promise<void> {
+    const requestId = ++this.previewRequestId
+    this.activePath = relativePath
     try {
       const entries = await this.callbacks.onHistory(relativePath)
-      this.diff.textContent = entries.length > 0
-        ? entries.map((entry) => `${entry.shortId}  ${entry.date}  ${entry.author}  ${entry.subject}`).join('\n')
-        : 'No committed history for this file.'
+      if (requestId !== this.previewRequestId || relativePath !== this.activePath) return
+      this.previewState = { kind: 'history', entries }
+      this.renderPreview()
     } catch (error) {
-      this.diff.textContent = error instanceof Error ? error.message : 'Could not load Git history.'
+      if (requestId !== this.previewRequestId || relativePath !== this.activePath) return
+      this.previewState = { kind: 'error', operation: 'history', message: error instanceof Error ? error.message : null }
+      this.renderPreview()
     }
   }
 
   private async showBlame(relativePath: string): Promise<void> {
+    const requestId = ++this.previewRequestId
+    this.activePath = relativePath
     try {
-      this.diff.textContent = (await this.callbacks.onBlame(relativePath)) || 'No blame data is available.'
+      const content = await this.callbacks.onBlame(relativePath)
+      if (requestId !== this.previewRequestId || relativePath !== this.activePath) return
+      this.previewState = { kind: 'blame', content }
+      this.renderPreview()
     } catch (error) {
-      this.diff.textContent = error instanceof Error ? error.message : 'Could not load Git blame.'
+      if (requestId !== this.previewRequestId || relativePath !== this.activePath) return
+      this.previewState = { kind: 'error', operation: 'blame', message: error instanceof Error ? error.message : null }
+      this.renderPreview()
     }
   }
 

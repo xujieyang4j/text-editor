@@ -1,6 +1,7 @@
 import type { WorkspaceMatch, WorkspaceReplaceRequest, WorkspaceSearchRequest, UiLocale } from '../../shared/ipc.js'
 import { translate } from '../../shared/i18n.js'
 import { baseName } from './documents.js'
+import type { FindResultsSubject } from './findResults.js'
 
 export interface WorkspaceSearchCallbacks {
   getRoot: () => string | null
@@ -11,10 +12,17 @@ export interface WorkspaceSearchCallbacks {
   openMatch: (match: WorkspaceMatch) => void
   notify: (message: string, error?: unknown) => void
   afterReplace: () => void
-  onResults: (query: string, matches: WorkspaceMatch[], focusResults?: boolean) => void
+  onResults: (subject: string | FindResultsSubject, matches: WorkspaceMatch[], focusResults?: boolean) => void
   onReplaceComplete: (undoToken: string | undefined, files: number, replacements: number) => void
   onHistory: (search: string, replacement?: string) => void
 }
+
+type SearchSummary =
+  | { kind: 'idle' }
+  | { kind: 'searching' }
+  | { kind: 'matches'; matches: number }
+  | { kind: 'preview'; files: number; replacements: number }
+  | { kind: 'replaced'; files: number; replacements: number }
 
 /**
  * A deliberately focused Find in Files panel. It keeps the familiar Sublime
@@ -45,6 +53,8 @@ export class WorkspaceSearchPanel {
   private replaceVisible = false
   private searchToken = 0
   private previewReady = false
+  private summaryState: SearchSummary = { kind: 'idle' }
+  private renderedMatches: WorkspaceMatch[] = []
   private previouslyFocused: HTMLElement | null = null
 
   constructor(private readonly callbacks: WorkspaceSearchCallbacks) {
@@ -123,7 +133,7 @@ export class WorkspaceSearchPanel {
 
   show(withReplace: boolean): void {
     if (!this.callbacks.getRoot()) {
-      this.callbacks.notify('Open a folder before searching across files.')
+      this.callbacks.notify(this.locale === 'zh-CN' ? '请先打开文件夹，再搜索文件。' : 'Open a folder before searching across files.')
       return
     }
     this.replaceVisible = withReplace
@@ -164,6 +174,8 @@ export class WorkspaceSearchPanel {
     this.replaceCheckboxLabel(this.caseLabel, this.caseSensitive, locale === 'zh-CN' ? '区分大小写' : 'Case')
     this.replaceCheckboxLabel(this.wordLabel, this.wholeWord, locale === 'zh-CN' ? '全词' : 'Word')
     this.replaceCheckboxLabel(this.regexLabel, this.regex, locale === 'zh-CN' ? '正则' : 'Regex')
+    this.renderSummary()
+    this.renderResults(this.renderedMatches)
   }
 
   private input(placeholder: string): HTMLInputElement {
@@ -239,32 +251,45 @@ export class WorkspaceSearchPanel {
   private async search(): Promise<void> {
     const request = this.request()
     if (!request) {
-      this.callbacks.notify('Enter a search term first.')
+      this.callbacks.notify(this.locale === 'zh-CN' ? '请先输入搜索内容。' : 'Enter a search term first.')
       return
     }
     const token = ++this.searchToken
-    this.summary.textContent = 'Searching…'
-    this.results.replaceChildren()
+    this.setSummary({ kind: 'searching' })
+    this.renderResults([])
     try {
       const matches = await window.editor.searchWorkspace(request)
       if (token !== this.searchToken) return
-      this.renderResults(matches)
+      if (!matches.ok) {
+        this.callbacks.notify(
+          this.locale === 'zh-CN' ? '在文件中查找未能完成。' : 'Find in Files could not complete.',
+          matches.error
+        )
+        return
+      }
+      this.renderResults(matches.value)
+      this.setSummary({ kind: 'matches', matches: matches.value.length })
       this.callbacks.onHistory(request.query)
-      this.callbacks.onResults(request.query, matches)
+      this.callbacks.onResults(request.query, matches.value)
       this.hide()
     } catch (error) {
-      if (token === this.searchToken) this.callbacks.notify('Find in Files could not complete.', error)
+      if (token === this.searchToken) {
+        this.callbacks.notify(this.locale === 'zh-CN' ? '在文件中查找未能完成。' : 'Find in Files could not complete.', error)
+      }
     }
   }
 
   private renderResults(matches: WorkspaceMatch[]): void {
-    this.summary.textContent = `${matches.length} match${matches.length === 1 ? '' : 'es'}`
+    this.renderedMatches = matches
     this.results.replaceChildren()
     for (const match of matches) {
       const item = document.createElement('li')
       item.className = 'workspace-search-result'
       item.tabIndex = 0
       item.setAttribute('role', 'button')
+      item.setAttribute('aria-label', this.locale === 'zh-CN'
+        ? `打开 ${baseName(match.path)} 第 ${match.line} 行，第 ${match.column} 列`
+        : `Open ${baseName(match.path)}, line ${match.line}, column ${match.column}`)
       const location = document.createElement('div')
       location.className = 'workspace-search-location'
       location.textContent = `${baseName(match.path)}:${match.line}:${match.column}`
@@ -294,29 +319,70 @@ export class WorkspaceSearchPanel {
     }
     const search = this.request()
     if (!search) {
-      this.callbacks.notify('Enter a search term first.')
+      this.callbacks.notify(this.locale === 'zh-CN' ? '请先输入搜索内容。' : 'Enter a search term first.')
       return
     }
     const request: WorkspaceReplaceRequest = { ...search, replacement: this.replacement.value }
     try {
       if (!this.previewReady) {
         const preview = await window.editor.previewWorkspaceReplace(request)
-        this.summary.textContent = `Preview: ${preview.replacements} replacement${preview.replacements === 1 ? '' : 's'} in ${preview.files} file${preview.files === 1 ? '' : 's'}. Click Replace All again to apply.`
-        this.renderResults(preview.matches)
-        this.callbacks.onResults(`Replace Preview: ${search.query}`, preview.matches, false)
+        if (!preview.ok) {
+          this.callbacks.notify(
+            this.locale === 'zh-CN' ? '在文件中替换未能完成。' : 'Replace in Files could not complete.',
+            preview.error
+          )
+          return
+        }
+        this.renderResults(preview.value.matches)
+        this.setSummary({ kind: 'preview', replacements: preview.value.replacements, files: preview.value.files })
+        this.callbacks.onResults({ kind: 'replace-preview', query: search.query }, preview.value.matches, false)
         this.previewReady = true
         return
       }
-      if (!window.confirm(`Apply the previewed replacements for “${search.query}”?`)) return
+      if (!window.confirm(this.locale === 'zh-CN'
+        ? `应用“${search.query}”的预览替换吗？`
+        : `Apply the previewed replacements for “${search.query}”?`)) return
       const result = await window.editor.replaceWorkspace(request)
-      this.summary.textContent = `Replaced ${result.replacements} match${result.replacements === 1 ? '' : 'es'} in ${result.files} file${result.files === 1 ? '' : 's'}.`
-      this.results.replaceChildren()
+      if (!result.ok) {
+        this.callbacks.notify(
+          this.locale === 'zh-CN' ? '在文件中替换未能完成。' : 'Replace in Files could not complete.',
+          result.error
+        )
+        return
+      }
+      this.setSummary({ kind: 'replaced', replacements: result.value.replacements, files: result.value.files })
+      this.renderResults([])
       this.previewReady = false
       this.callbacks.afterReplace()
-      this.callbacks.onReplaceComplete(result.undoToken, result.files, result.replacements)
+      this.callbacks.onReplaceComplete(result.value.undoToken, result.value.files, result.value.replacements)
       this.callbacks.onHistory(search.query, this.replacement.value)
     } catch (error) {
-      this.callbacks.notify('Replace in Files could not complete.', error)
+      this.callbacks.notify(this.locale === 'zh-CN' ? '在文件中替换未能完成。' : 'Replace in Files could not complete.', error)
+    }
+  }
+
+  private setSummary(state: SearchSummary): void {
+    this.summaryState = state
+    this.renderSummary()
+  }
+
+  private renderSummary(): void {
+    const state = this.summaryState
+    const zh = this.locale === 'zh-CN'
+    if (state.kind === 'idle') this.summary.textContent = ''
+    else if (state.kind === 'searching') this.summary.textContent = zh ? '正在搜索…' : 'Searching…'
+    else if (state.kind === 'matches') {
+      this.summary.textContent = zh
+        ? `${state.matches} 个匹配项`
+        : `${state.matches} match${state.matches === 1 ? '' : 'es'}`
+    } else if (state.kind === 'preview') {
+      this.summary.textContent = zh
+        ? `预览：${state.files} 个文件中有 ${state.replacements} 处替换。再次点击“全部替换”以应用。`
+        : `Preview: ${state.replacements} replacement${state.replacements === 1 ? '' : 's'} in ${state.files} file${state.files === 1 ? '' : 's'}. Click Replace All again to apply.`
+    } else {
+      this.summary.textContent = zh
+        ? `已替换 ${state.files} 个文件中的 ${state.replacements} 个匹配项。`
+        : `Replaced ${state.replacements} match${state.replacements === 1 ? '' : 'es'} in ${state.files} file${state.files === 1 ? '' : 's'}.`
     }
   }
 }

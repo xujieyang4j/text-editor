@@ -1,8 +1,28 @@
 import { app, Menu, shell, BrowserWindow, type MenuItemConstructorOptions } from 'electron'
 import { IPC, type MenuEvent, type UiLocale } from '../shared/ipc.js'
-import { commandLabel, translate } from '../shared/i18n.js'
+import { APP_NAME, commandLabel, translate } from '../shared/i18n.js'
 
 let activeLocale: UiLocale = 'zh-CN'
+
+/** Application-local labels for Electron role items. */
+export function nativeRoleLabels(locale: UiLocale, appName = APP_NAME): Record<string, string> {
+  const zh = locale === 'zh-CN'
+  return {
+    about: zh ? `关于 ${appName}` : `About ${appName}`,
+    services: zh ? '服务' : 'Services',
+    hide: zh ? `隐藏 ${appName}` : `Hide ${appName}`,
+    hideOthers: zh ? '隐藏其他' : 'Hide Others',
+    unhide: zh ? '全部显示' : 'Show All',
+    quitApp: zh ? `退出 ${appName}` : `Quit ${appName}`,
+    quit: zh ? '退出' : 'Quit',
+    closeWindow: zh ? '关闭窗口' : 'Close Window',
+    fullScreen: zh ? '切换全屏' : 'Toggle Full Screen',
+    devTools: zh ? '切换开发者工具' : 'Toggle Developer Tools',
+    minimize: zh ? '最小化' : 'Minimize',
+    zoom: zh ? '缩放' : 'Zoom',
+    bringAllToFront: zh ? '前置全部窗口' : 'Bring All to Front'
+  }
+}
 
 /** Send a menu-driven command to the focused window's renderer. */
 function emit(event: MenuEvent): void {
@@ -27,6 +47,7 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
   activeLocale = locale
   const isMac = process.platform === 'darwin'
   const t = (key: Parameters<typeof translate>[1]): string => translate(locale, key)
+  const roles = nativeRoleLabels(locale, app.name)
 
   const template: MenuItemConstructorOptions[] = [
     // macOS gets the standard app menu as the first item.
@@ -35,15 +56,15 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
           {
             label: app.name,
             submenu: [
-              { role: 'about' },
+              { role: 'about', label: roles.about },
               { type: 'separator' },
-              { role: 'services' },
+              { role: 'services', label: roles.services },
               { type: 'separator' },
-              { role: 'hide' },
-              { role: 'hideOthers' },
-              { role: 'unhide' },
+              { role: 'hide', label: roles.hide },
+              { role: 'hideOthers', label: roles.hideOthers },
+              { role: 'unhide', label: roles.unhide },
               { type: 'separator' },
-              { role: 'quit' }
+              { role: 'quit', label: roles.quitApp }
             ]
           }
         ] as MenuItemConstructorOptions[])
@@ -76,19 +97,21 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Close Tabs to the Right', 'close-tabs-to-right'),
         item('Close All Tabs', 'close-all-tabs'),
         item('Reopen Closed Tab', 'reopen-tab', 'CmdOrCtrl+Shift+T'),
-        isMac ? { role: 'close' } : { role: 'quit' }
+        isMac
+          ? { role: 'close', label: roles.closeWindow }
+          : { role: 'quit', label: roles.quit }
       ]
     },
     {
       label: t('edit'),
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
+        { role: 'undo', label: t('undo') },
+        { role: 'redo', label: t('redo') },
         { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
+        { role: 'cut', label: t('cut') },
+        { role: 'copy', label: t('copy') },
+        { role: 'paste', label: t('paste') },
+        { role: 'selectAll', label: t('selectAll') },
         { type: 'separator' },
         item('Toggle Comment', 'toggle-comment', 'CmdOrCtrl+/'),
         item('Toggle Block Comment', 'toggle-block-comment', 'CmdOrCtrl+Shift+/'),
@@ -226,8 +249,8 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
         item('Zoom Out', 'font-zoom-out', 'CmdOrCtrl+-'),
         item('Reset Zoom', 'font-zoom-reset', 'CmdOrCtrl+0'),
         { type: 'separator' },
-        { role: 'togglefullscreen' },
-        { role: 'toggleDevTools' }
+        { role: 'togglefullscreen', label: roles.fullScreen },
+        { role: 'toggleDevTools', label: roles.devTools }
       ]
     },
     {
@@ -289,18 +312,19 @@ export function buildMenu(locale: UiLocale = 'zh-CN'): void {
     {
       label: t('window'),
       submenu: [
-        { role: 'minimize' },
-        { role: 'zoom' },
+        { role: 'minimize', label: roles.minimize },
+        { role: 'zoom', label: roles.zoom },
         ...(isMac
           ? ([
               { type: 'separator' },
-              { role: 'front' }
+              { role: 'front', label: roles.bringAllToFront }
             ] as MenuItemConstructorOptions[])
-          : ([{ role: 'close' }] as MenuItemConstructorOptions[]))
+          : ([{ role: 'close', label: roles.closeWindow }] as MenuItemConstructorOptions[]))
       ]
     },
     {
       role: 'help',
+      label: t('help'),
       submenu: [
         {
           label: t('learnMore'),

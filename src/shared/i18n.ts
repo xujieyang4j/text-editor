@@ -1,4 +1,4 @@
-import type { MenuEvent, UiLocale } from './ipc.js'
+import type { MenuEvent, UiLocale, WorkspaceOperationError } from './ipc.js'
 
 export const APP_NAME = '文本编辑器(徐洁阳)'
 
@@ -57,6 +57,36 @@ export function makeTranslator(locale: UiLocale): (key: TranslationKey) => strin
   return (key) => translate(locale, key)
 }
 
+/** Resolve only application-owned workspace failures; external details stay byte-for-byte text. */
+export function workspaceOperationErrorMessage(
+  locale: UiLocale,
+  error: WorkspaceOperationError
+): string {
+  if (error.kind === 'verbatim') return error.message
+  switch (error.code) {
+  case 'missing-query':
+    return locale === 'zh-CN' ? '在文件中查找需要搜索词。' : 'Find in Files needs a search term.'
+  case 'invalid-regex':
+    return locale === 'zh-CN' ? '搜索正则表达式无效。' : 'The search regular expression is invalid.'
+  case 'too-many-roots':
+    return locale === 'zh-CN'
+      ? `工作区搜索最多支持 ${error.params.maximum} 个根目录。`
+      : `Workspace search supports at most ${error.params.maximum} roots.`
+  case 'undo-expired':
+    return locale === 'zh-CN'
+      ? '工作区替换撤销快照已过期。'
+      : 'The workspace replace undo snapshot has expired.'
+  case 'invalid-response':
+    return locale === 'zh-CN'
+      ? '工作区操作返回了无效响应。'
+      : 'The workspace operation returned an invalid response.'
+  case 'undo-file-changed':
+    return locale === 'zh-CN'
+      ? `无法撤销 ${error.params.path} 中的替换，因为该文件之后已更改。`
+      : `Cannot undo replacement in ${error.params.path} because the file changed afterwards.`
+  }
+}
+
 const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
   'new-file': '新建文件', 'new-window': '新建窗口', 'open-file': '打开文件…', 'open-file-with-encoding': '以编码打开文件…', 'open-folder': '打开文件夹…', 'open-recent-file': '打开最近文件…', 'open-recent-project': '打开最近项目…', 'copy-file-path': '复制文件路径', 'copy-relative-file-path': '复制相对文件路径',
   save: '保存', 'save-as': '另存为…', 'save-all': '全部保存', 'toggle-pin-tab': '固定/取消固定标签页', 'cycle-auto-save': '切换自动保存模式', 'close-tab': '关闭标签页', 'close-other-tabs': '关闭其他标签页', 'close-tabs-to-right': '关闭右侧标签页', 'close-all-tabs': '关闭全部标签页', 'reopen-tab': '重新打开已关闭标签页',
@@ -64,6 +94,7 @@ const COMMAND_ZH: Partial<Record<MenuEvent, string>> = {
   'goto-anything': '转到任意位置…', 'goto-symbol': '转到文件符号…', 'goto-project-symbol': '转到项目符号…', 'go-to-line': '转到行…', 'goto-matching-bracket': '转到匹配括号', 'navigate-back': '后退', 'navigate-forward': '前进',
   'toggle-comment': '切换行注释', 'toggle-block-comment': '切换块注释', 'move-line-up': '上移行', 'move-line-down': '下移行', 'copy-line-up': '向上复制行', 'copy-line-down': '向下复制行', 'duplicate-selection': '复制行/选区', 'delete-line': '删除行', 'delete-word-backward': '删除前一个单词', 'delete-word-forward': '删除后一个单词', 'delete-to-line-start': '删除至行首', 'delete-to-line-end': '删除至行尾', 'insert-blank-line-above': '在上方新建空行', 'insert-blank-line': '在下方新建空行', 'transpose-characters': '转置相邻字符', 'sort-lines': '升序排列行', 'sort-lines-descending': '降序排列行', 'reverse-lines': '反转行顺序', 'unique-lines': '删除重复行', 'remove-blank-lines': '删除空白行',
   'to-upper-case': '转为大写', 'to-lower-case': '转为小写', 'to-title-case': '转为标题格式', 'swap-case': '反转大小写', 'join-lines': '合并行', 'wrap-paragraph-80': '按 80 列重排段落', 'unwrap-paragraph': '取消段落换行', 'trim-trailing-whitespace': '删除行尾空白', 'ensure-single-final-newline': '确保文件末尾只有一个换行符', 'indent-selection': '增加缩进', 'outdent-selection': '减少缩进', 'reindent-selection': '自动重新缩进选区', 'convert-eol-lf': '将换行符转换为 LF', 'convert-eol-crlf': '将换行符转换为 CRLF', 'convert-eol-cr': '将换行符转换为 CR',
+  'convert-indent-spaces': '将缩进转换为空格', 'convert-indent-tabs': '将缩进转换为制表符',
   'add-cursor-above': '在上方添加光标', 'add-cursor-below': '在下方添加光标', 'undo-selection': '撤销选区更改', 'redo-selection': '重做选区更改', 'select-next-occurrence': '选择下一个匹配项', 'skip-current-occurrence': '跳过当前匹配项', 'remove-last-cursor': '移除最后一个光标', 'select-all-occurrences': '选择全部匹配项', 'add-cursors-line-starts': '在各行行首添加光标', 'add-cursors-line-ends': '在各行行尾添加光标', 'select-line': '选中整行', 'select-matching-bracket': '选中至匹配括号', 'select-parent-syntax': '选中外层语法结构', 'expand-selection': '扩展选区', 'shrink-selection': '缩小选区', 'split-selection-lines': '按行拆分选区',
   'next-tab': '下一个标签页', 'prev-tab': '上一个标签页', 'toggle-bookmark': '切换书签', 'next-bookmark': '下一个书签', 'prev-bookmark': '上一个书签', 'next-change': '下一个更改', 'prev-change': '上一个更改', 'revert-current-change': '还原当前更改',
   'toggle-sidebar': '切换侧边栏', 'reveal-active-file-in-sidebar': '在侧栏中显示活动文件', 'split-editor': '切换分屏编辑器', 'split-selected-tabs': '将选中标签拆分到分组', 'layout-single': '单栏布局', 'layout-columns2': '两栏布局', 'layout-columns3': '三栏布局', 'layout-grid4': '四宫格布局',

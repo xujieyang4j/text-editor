@@ -1,0 +1,189 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		200000000000000000000001 /* libLumenEditorMobileCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 300000000000000000000002 /* libLumenEditorMobileCore.a */; };
+		200000000000000000000002 /* libLumenEditorMobileCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 300000000000000000000002 /* libLumenEditorMobileCore.a */; };
+		200000000000000000000101 /* DocumentTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000101 /* DocumentTypes.swift */; };
+		200000000000000000000102 /* DraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000102 /* DraftStore.swift */; };
+		200000000000000000000103 /* MobileFindCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000103 /* MobileFindCore.swift */; };
+		200000000000000000000104 /* MobileOutline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000104 /* MobileOutline.swift */; };
+		200000000000000000000105 /* MobileTextCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000105 /* MobileTextCodec.swift */; };
+		200000000000000000000106 /* MobileRecentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000106 /* MobileRecentStore.swift */; };
+		200000000000000000000107 /* MobileEditingCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000107 /* MobileEditingCore.swift */; };
+		200000000000000000000201 /* DocumentSwitcherView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000201 /* DocumentSwitcherView.swift */; };
+		200000000000000000000202 /* EditorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000202 /* EditorScreen.swift */; };
+		200000000000000000000203 /* ExportTextDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000203 /* ExportTextDocument.swift */; };
+		200000000000000000000204 /* FindBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000204 /* FindBar.swift */; };
+		200000000000000000000205 /* LumenEditorIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000205 /* LumenEditorIOSApp.swift */; };
+		200000000000000000000206 /* MobileDocumentSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000206 /* MobileDocumentSession.swift */; };
+		200000000000000000000207 /* MobileEditorCommandCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000207 /* MobileEditorCommandCenter.swift */; };
+		200000000000000000000208 /* MobileFileAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000208 /* MobileFileAccess.swift */; };
+		200000000000000000000209 /* MobileSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000209 /* MobileSyntaxHighlighter.swift */; };
+		20000000000000000000020A /* MobileWorkspaceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30000000000000000000020A /* MobileWorkspaceModel.swift */; };
+		20000000000000000000020B /* NativeTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30000000000000000000020B /* NativeTextEditor.swift */; };
+		20000000000000000000020C /* OutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30000000000000000000020C /* OutlineView.swift */; };
+		20000000000000000000020D /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30000000000000000000020D /* RootView.swift */; };
+		20000000000000000000020E /* SystemDocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30000000000000000000020E /* SystemDocumentPicker.swift */; };
+		20000000000000000000020F /* MobileFilePresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30000000000000000000020F /* MobileFilePresenter.swift */; };
+		200000000000000000000210 /* SystemShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000210 /* SystemShareSheet.swift */; };
+		200000000000000000000301 /* MobileFindCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000301 /* MobileFindCoreTests.swift */; };
+		200000000000000000000302 /* MobilePersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000302 /* MobilePersistenceTests.swift */; };
+		200000000000000000000303 /* MobileTextCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000303 /* MobileTextCodecTests.swift */; };
+		200000000000000000000305 /* MobileEditingCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000305 /* MobileEditingCoreTests.swift */; };
+		200000000000000000000304 /* LumenEditorIOSUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000304 /* LumenEditorIOSUITests.swift */; };
+		200000000000000000000401 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000401 /* Localizable.strings */; };
+		200000000000000000000402 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000404 /* PrivacyInfo.xcprivacy */; };
+		200000000000000000000403 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000406 /* Assets.xcassets */; };
+		200000000000000000000404 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000407 /* InfoPlist.strings */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		400000000000000000000001 = {isa = PBXContainerItemProxy; containerPortal = 500000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = 100000000000000000000002; remoteInfo = LumenEditorMobileCore; };
+		400000000000000000000002 = {isa = PBXContainerItemProxy; containerPortal = 500000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = 100000000000000000000002; remoteInfo = LumenEditorMobileCore; };
+		400000000000000000000003 = {isa = PBXContainerItemProxy; containerPortal = 500000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = 100000000000000000000001; remoteInfo = LumenEditorIOS; };
+		400000000000000000000004 = {isa = PBXContainerItemProxy; containerPortal = 500000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = 100000000000000000000001; remoteInfo = LumenEditorIOS; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		300000000000000000000001 /* Lumen Editor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Lumen Editor.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		300000000000000000000002 /* libLumenEditorMobileCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libLumenEditorMobileCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		300000000000000000000003 /* LumenEditorMobileCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LumenEditorMobileCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		300000000000000000000004 /* LumenEditorIOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LumenEditorIOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		300000000000000000000101 /* DocumentTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentTypes.swift; sourceTree = "<group>"; };
+		300000000000000000000102 /* DraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStore.swift; sourceTree = "<group>"; };
+		300000000000000000000103 /* MobileFindCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileFindCore.swift; sourceTree = "<group>"; };
+		300000000000000000000104 /* MobileOutline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileOutline.swift; sourceTree = "<group>"; };
+		300000000000000000000105 /* MobileTextCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileTextCodec.swift; sourceTree = "<group>"; };
+		300000000000000000000106 /* MobileRecentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRecentStore.swift; sourceTree = "<group>"; };
+		300000000000000000000107 /* MobileEditingCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileEditingCore.swift; sourceTree = "<group>"; };
+		300000000000000000000201 /* DocumentSwitcherView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSwitcherView.swift; sourceTree = "<group>"; };
+		300000000000000000000202 /* EditorScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorScreen.swift; sourceTree = "<group>"; };
+		300000000000000000000203 /* ExportTextDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportTextDocument.swift; sourceTree = "<group>"; };
+		300000000000000000000204 /* FindBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindBar.swift; sourceTree = "<group>"; };
+		300000000000000000000205 /* LumenEditorIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LumenEditorIOSApp.swift; sourceTree = "<group>"; };
+		300000000000000000000206 /* MobileDocumentSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDocumentSession.swift; sourceTree = "<group>"; };
+		300000000000000000000207 /* MobileEditorCommandCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileEditorCommandCenter.swift; sourceTree = "<group>"; };
+		300000000000000000000208 /* MobileFileAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileFileAccess.swift; sourceTree = "<group>"; };
+		300000000000000000000209 /* MobileSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSyntaxHighlighter.swift; sourceTree = "<group>"; };
+		30000000000000000000020A /* MobileWorkspaceModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileWorkspaceModel.swift; sourceTree = "<group>"; };
+		30000000000000000000020B /* NativeTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTextEditor.swift; sourceTree = "<group>"; };
+		30000000000000000000020C /* OutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineView.swift; sourceTree = "<group>"; };
+		30000000000000000000020D /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		30000000000000000000020E /* SystemDocumentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemDocumentPicker.swift; sourceTree = "<group>"; };
+		30000000000000000000020F /* MobileFilePresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileFilePresenter.swift; sourceTree = "<group>"; };
+		300000000000000000000210 /* SystemShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemShareSheet.swift; sourceTree = "<group>"; };
+		300000000000000000000301 /* MobileFindCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileFindCoreTests.swift; sourceTree = "<group>"; };
+		300000000000000000000302 /* MobilePersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobilePersistenceTests.swift; sourceTree = "<group>"; };
+		300000000000000000000303 /* MobileTextCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileTextCodecTests.swift; sourceTree = "<group>"; };
+		300000000000000000000305 /* MobileEditingCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileEditingCoreTests.swift; sourceTree = "<group>"; };
+		300000000000000000000304 /* LumenEditorIOSUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LumenEditorIOSUITests.swift; sourceTree = "<group>"; };
+		300000000000000000000402 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
+		300000000000000000000403 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		300000000000000000000404 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		300000000000000000000405 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		300000000000000000000406 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		300000000000000000000408 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
+		300000000000000000000409 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		600000000000000000000001 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (200000000000000000000001 /* libLumenEditorMobileCore.a in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000002 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000003 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (200000000000000000000002 /* libLumenEditorMobileCore.a in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000004 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		700000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				700000000000000000000002 /* Sources */,
+				700000000000000000000005 /* Tests */,
+				700000000000000000000007 /* Resources */,
+				300000000000000000000405 /* Info.plist */,
+				700000000000000000000006 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		700000000000000000000002 /* Sources */ = {isa = PBXGroup; children = (700000000000000000000003 /* LumenEditorMobileCore */, 700000000000000000000004 /* LumenEditorIOSApp */,); path = Sources; sourceTree = "<group>"; };
+		700000000000000000000003 /* LumenEditorMobileCore */ = {isa = PBXGroup; children = (300000000000000000000101, 300000000000000000000102, 300000000000000000000103, 300000000000000000000104, 300000000000000000000105, 300000000000000000000106, 300000000000000000000107,); path = LumenEditorMobileCore; sourceTree = "<group>"; };
+		700000000000000000000004 /* LumenEditorIOSApp */ = {isa = PBXGroup; children = (300000000000000000000201, 300000000000000000000202, 300000000000000000000203, 300000000000000000000204, 300000000000000000000205, 300000000000000000000206, 300000000000000000000207, 300000000000000000000208, 300000000000000000000209, 30000000000000000000020A, 30000000000000000000020B, 30000000000000000000020C, 30000000000000000000020D, 30000000000000000000020E, 30000000000000000000020F, 300000000000000000000210,); path = LumenEditorIOSApp; sourceTree = "<group>"; };
+		700000000000000000000005 /* Tests */ = {isa = PBXGroup; children = (700000000000000000000008 /* LumenEditorMobileCoreTests */, 700000000000000000000009 /* LumenEditorIOSUITests */,); path = Tests; sourceTree = "<group>"; };
+		700000000000000000000006 /* Products */ = {isa = PBXGroup; children = (300000000000000000000001, 300000000000000000000002, 300000000000000000000003, 300000000000000000000004,); name = Products; sourceTree = "<group>"; };
+		700000000000000000000007 /* Resources */ = {isa = PBXGroup; children = (300000000000000000000401 /* Localizable.strings */, 300000000000000000000407 /* InfoPlist.strings */, 300000000000000000000404 /* PrivacyInfo.xcprivacy */, 300000000000000000000406 /* Assets.xcassets */,); path = Resources; sourceTree = "<group>"; };
+		700000000000000000000008 /* LumenEditorMobileCoreTests */ = {isa = PBXGroup; children = (300000000000000000000301, 300000000000000000000302, 300000000000000000000303, 300000000000000000000305,); path = LumenEditorMobileCoreTests; sourceTree = "<group>"; };
+		700000000000000000000009 /* LumenEditorIOSUITests */ = {isa = PBXGroup; children = (300000000000000000000304,); path = LumenEditorIOSUITests; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		100000000000000000000001 /* LumenEditorIOS */ = {
+			isa = PBXNativeTarget; buildConfigurationList = 800000000000000000000002; buildPhases = (900000000000000000000001, 600000000000000000000001, 900000000000000000000002,); buildRules = (); dependencies = (A00000000000000000000001,); name = LumenEditorIOS; productName = "Lumen Editor"; productReference = 300000000000000000000001; productType = "com.apple.product-type.application";
+		};
+		100000000000000000000002 /* LumenEditorMobileCore */ = {
+			isa = PBXNativeTarget; buildConfigurationList = 800000000000000000000003; buildPhases = (900000000000000000000003, 600000000000000000000002,); buildRules = (); dependencies = (); name = LumenEditorMobileCore; productName = LumenEditorMobileCore; productReference = 300000000000000000000002; productType = "com.apple.product-type.library.static";
+		};
+		100000000000000000000003 /* LumenEditorMobileCoreTests */ = {
+			isa = PBXNativeTarget; buildConfigurationList = 800000000000000000000004; buildPhases = (900000000000000000000004, 600000000000000000000003,); buildRules = (); dependencies = (A00000000000000000000002, A00000000000000000000004,); name = LumenEditorMobileCoreTests; productName = LumenEditorMobileCoreTests; productReference = 300000000000000000000003; productType = "com.apple.product-type.bundle.unit-test";
+		};
+		100000000000000000000004 /* LumenEditorIOSUITests */ = {
+			isa = PBXNativeTarget; buildConfigurationList = 800000000000000000000005; buildPhases = (900000000000000000000005, 600000000000000000000004,); buildRules = (); dependencies = (A00000000000000000000003,); name = LumenEditorIOSUITests; productName = LumenEditorIOSUITests; productReference = 300000000000000000000004; productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		500000000000000000000001 /* Project object */ = {
+			isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = {100000000000000000000001 = {CreatedOnToolsVersion = 16.0; }; 100000000000000000000002 = {CreatedOnToolsVersion = 16.0; }; 100000000000000000000003 = {CreatedOnToolsVersion = 16.0; TestTargetID = 100000000000000000000001; }; 100000000000000000000004 = {CreatedOnToolsVersion = 16.0; TestTargetID = 100000000000000000000001; };};}; buildConfigurationList = 800000000000000000000001; compatibilityVersion = "Xcode 15.0"; developmentRegion = "zh-Hans"; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base,); mainGroup = 700000000000000000000001; productRefGroup = 700000000000000000000006; projectDirPath = ""; projectRoot = ""; targets = (100000000000000000000001, 100000000000000000000002, 100000000000000000000003, 100000000000000000000004,);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		900000000000000000000002 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (200000000000000000000401, 200000000000000000000402, 200000000000000000000403, 200000000000000000000404,); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		900000000000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (200000000000000000000201, 200000000000000000000202, 200000000000000000000203, 200000000000000000000204, 200000000000000000000205, 200000000000000000000206, 200000000000000000000207, 200000000000000000000208, 200000000000000000000209, 20000000000000000000020A, 20000000000000000000020B, 20000000000000000000020C, 20000000000000000000020D, 20000000000000000000020E, 20000000000000000000020F, 200000000000000000000210,); runOnlyForDeploymentPostprocessing = 0; };
+		900000000000000000000003 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (200000000000000000000101, 200000000000000000000102, 200000000000000000000103, 200000000000000000000104, 200000000000000000000105, 200000000000000000000106, 200000000000000000000107,); runOnlyForDeploymentPostprocessing = 0; };
+		900000000000000000000004 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (200000000000000000000301, 200000000000000000000302, 200000000000000000000303, 200000000000000000000305,); runOnlyForDeploymentPostprocessing = 0; };
+		900000000000000000000005 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (200000000000000000000304,); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A00000000000000000000001 = {isa = PBXTargetDependency; target = 100000000000000000000002; targetProxy = 400000000000000000000001; };
+		A00000000000000000000002 = {isa = PBXTargetDependency; target = 100000000000000000000002; targetProxy = 400000000000000000000002; };
+		A00000000000000000000003 = {isa = PBXTargetDependency; target = 100000000000000000000001; targetProxy = 400000000000000000000003; };
+		A00000000000000000000004 = {isa = PBXTargetDependency; target = 100000000000000000000001; targetProxy = 400000000000000000000004; };
+/* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		300000000000000000000401 /* Localizable.strings */ = {isa = PBXVariantGroup; children = (300000000000000000000402 /* zh-Hans */, 300000000000000000000403 /* en */,); name = Localizable.strings; sourceTree = "<group>"; };
+		300000000000000000000407 /* InfoPlist.strings */ = {isa = PBXVariantGroup; children = (300000000000000000000408 /* zh-Hans */, 300000000000000000000409 /* en */,); name = InfoPlist.strings; sourceTree = "<group>"; };
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		B00000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_OPTIMIZATION_LEVEL = 0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; ONLY_ACTIVE_ARCH = YES; SDKROOT = iphoneos; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 5.0; }; name = Debug; };
+		B00000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; ENABLE_NS_ASSERTIONS = NO; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 5.0; VALIDATE_PRODUCT = YES; }; name = Release; };
+		B00000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_ASSET_PATHS = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = com.lumen.editor.native-preview.ios; PRODUCT_NAME = "Lumen Editor"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+		B00000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_ASSET_PATHS = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = com.lumen.editor.native-preview.ios; PRODUCT_NAME = "Lumen Editor"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+		B00000000000000000000005 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {DEFINES_MODULE = YES; PRODUCT_MODULE_NAME = LumenEditorMobileCore; PRODUCT_NAME = LumenEditorMobileCore; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; }; name = Debug; };
+		B00000000000000000000006 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {DEFINES_MODULE = YES; PRODUCT_MODULE_NAME = LumenEditorMobileCore; PRODUCT_NAME = LumenEditorMobileCore; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; }; name = Release; };
+		B00000000000000000000007 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.lumen.editor.native-preview.ios.core-tests; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Lumen Editor.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Lumen Editor"; }; name = Debug; };
+		B00000000000000000000008 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.lumen.editor.native-preview.ios.core-tests; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Lumen Editor.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Lumen Editor"; }; name = Release; };
+		B00000000000000000000009 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.lumen.editor.native-preview.ios.ui-tests; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; TARGETED_DEVICE_FAMILY = "1,2"; TEST_TARGET_NAME = LumenEditorIOS; }; name = Debug; };
+		B0000000000000000000000A /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.lumen.editor.native-preview.ios.ui-tests; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; TARGETED_DEVICE_FAMILY = "1,2"; TEST_TARGET_NAME = LumenEditorIOS; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		800000000000000000000001 = {isa = XCConfigurationList; buildConfigurations = (B00000000000000000000001, B00000000000000000000002,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000002 = {isa = XCConfigurationList; buildConfigurations = (B00000000000000000000003, B00000000000000000000004,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000003 = {isa = XCConfigurationList; buildConfigurations = (B00000000000000000000005, B00000000000000000000006,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000004 = {isa = XCConfigurationList; buildConfigurations = (B00000000000000000000007, B00000000000000000000008,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000005 = {isa = XCConfigurationList; buildConfigurations = (B00000000000000000000009, B0000000000000000000000A,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = 500000000000000000000001 /* Project object */;
+}

@@ -1,0 +1,226 @@
+name: Native macOS CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "native-macos/**"
+      - "src/main/menu.ts"
+      - "src/renderer/src/commands.ts"
+      - "src/renderer/src/main.ts"
+      - "src/shared/ipc.ts"
+      - "src/shared/i18n.ts"
+      - "docs/NATIVE_MACOS_PARITY.md"
+      - "docs/NATIVE_MACOS_ACCEPTANCE.md"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/build-native-parser-bundle.mjs"
+      - "scripts/generate-native-legacy-language-registry.mjs"
+      - "scripts/test-native-parser-bundle.mjs"
+      - "scripts/test-native-macos-packaging.mjs"
+      - "scripts/check-native-command-parity.mjs"
+      - "scripts/test-release-artifacts.mjs"
+      - "build/icon.icns"
+      - ".github/workflows/native-macos.yml"
+      - ".github/workflows/release.yml"
+      - "scripts/release-artifacts.mjs"
+  pull_request:
+    paths:
+      - "native-macos/**"
+      - "src/main/menu.ts"
+      - "src/renderer/src/commands.ts"
+      - "src/renderer/src/main.ts"
+      - "src/shared/ipc.ts"
+      - "src/shared/i18n.ts"
+      - "docs/NATIVE_MACOS_PARITY.md"
+      - "docs/NATIVE_MACOS_ACCEPTANCE.md"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/build-native-parser-bundle.mjs"
+      - "scripts/generate-native-legacy-language-registry.mjs"
+      - "scripts/test-native-parser-bundle.mjs"
+      - "scripts/test-native-macos-packaging.mjs"
+      - "scripts/check-native-command-parity.mjs"
+      - "scripts/test-release-artifacts.mjs"
+      - "build/icon.icns"
+      - ".github/workflows/native-macos.yml"
+      - ".github/workflows/release.yml"
+      - "scripts/release-artifacts.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Swift package and bundle metadata
+    runs-on: macos-14
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: native-macos
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Verify macOS and Xcode baseline
+        run: |
+          set -euo pipefail
+          macos_major="$(sw_vers -productVersion | cut -d. -f1)"
+          if (( macos_major != 14 )); then
+            echo "Expected a macOS 14 runner, found $(sw_vers -productVersion)." >&2
+            exit 1
+          fi
+
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          xcode_major="${xcode_version%%.*}"
+          xcode_rest="${xcode_version#*.}"
+          xcode_minor="${xcode_rest%%.*}"
+          if (( xcode_major < 15 || (xcode_major == 15 && xcode_minor < 3) )); then
+            echo "Xcode 15.3 or newer is required; found $xcode_version." >&2
+            exit 1
+          fi
+
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Install locked JavaScript dependencies
+        uses: actions/setup-node@1e60f620b9541dca1515402f5c3e3040d8c59e00 # v4.0.4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Verify JavaScript-backed native gates
+        working-directory: ${{ github.workspace }}
+        run: |
+          npm ci
+          npm run check:native-parser
+          npm run check:native-parity
+          npm run test:native-packaging
+          npm run test:release-artifacts
+
+      - name: Verify package, worker, release build, and metadata
+        run: ./scripts/verify.sh
+
+      - name: Cross-compile the other release architecture
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            arm64) other_arch=x86_64 ;;
+            x86_64) other_arch=arm64 ;;
+            *) echo "Unsupported macOS runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          swift build -c release --arch "$other_arch" -Xswiftc -warnings-as-errors
+
+      - name: Build and verify ad-hoc application bundle
+        run: |
+          set -euo pipefail
+          bundle_root="$RUNNER_TEMP/lumen-native-bundle"
+          ./scripts/build-app.sh "$bundle_root"
+          app="$bundle_root/Lumen Editor Native.app"
+          test -d "$app"
+          test -x "$app/Contents/MacOS/LumenEditor"
+          test -x "$app/Contents/MacOS/LumenPluginWorker"
+          test -x "$app/Contents/MacOS/LumenParserWorker"
+          test -s "$app/Contents/Info.plist"
+          test -s "$app/Contents/Resources/AppIcon.icns"
+          test -s "$app/Contents/Resources/CodeMirrorParserBundle.js"
+          cmp -s Sources/LumenEditorApp/Resources/CodeMirrorParserBundle.js \
+            "$app/Contents/Resources/CodeMirrorParserBundle.js"
+          test -s "$app/Contents/Resources/en.lproj/InfoPlist.strings"
+          test -s "$app/Contents/Resources/zh_CN.lproj/InfoPlist.strings"
+          cmp -s Packaging/en.lproj/InfoPlist.strings \
+            "$app/Contents/Resources/en.lproj/InfoPlist.strings"
+          cmp -s Packaging/zh_CN.lproj/InfoPlist.strings \
+            "$app/Contents/Resources/zh_CN.lproj/InfoPlist.strings"
+          cmp -s ../build/icon.icns "$app/Contents/Resources/AppIcon.icns"
+          test "$(plutil -extract CFBundleIconFile raw -o - "$app/Contents/Info.plist")" = AppIcon
+          codesign --verify --strict "$app/Contents/MacOS/LumenPluginWorker"
+          codesign --verify --strict "$app/Contents/MacOS/LumenParserWorker"
+          codesign --verify --deep --strict "$app"
+          helper_entitlements="$(codesign --display --entitlements :- \
+            "$app/Contents/MacOS/LumenPluginWorker" 2>/dev/null)"
+          helper_sandbox="$(plutil -extract com.apple.security.app-sandbox raw -expect bool \
+            -o - - <<<"$helper_entitlements")"
+          helper_inherit="$(plutil -extract com.apple.security.inherit raw -expect bool \
+            -o - - <<<"$helper_entitlements")"
+          test "$helper_sandbox" = true
+          test "$helper_inherit" = true
+          parser_entitlements="$(codesign --display --entitlements :- \
+            "$app/Contents/MacOS/LumenParserWorker" 2>/dev/null)"
+          parser_sandbox="$(plutil -extract com.apple.security.app-sandbox raw -expect bool \
+            -o - - <<<"$parser_entitlements")"
+          parser_inherit="$(plutil -extract com.apple.security.inherit raw -expect bool \
+            -o - - <<<"$parser_entitlements")"
+          test "$parser_sandbox" = true
+          test "$parser_inherit" = true
+          python3 "$GITHUB_WORKSPACE/native-macos/scripts/run-packaged-parser-smoke.py" \
+            "$app/Contents/MacOS/LumenEditor"
+          python3 "$GITHUB_WORKSPACE/native-macos/scripts/run-packaged-window-smoke.py" \
+            "$app" \
+            "$RUNNER_TEMP/native-macos-window-smoke.json"
+
+      - name: Upload packaged window smoke evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-macos-runtime-smoke
+          path: ${{ runner.temp }}/native-macos-window-smoke.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Validate bundle plist
+        run: |
+          set -euo pipefail
+          plist="Packaging/Info.plist"
+          plutil -lint "$plist"
+          plutil -lint Packaging/LumenEditor.entitlements
+          plutil -lint Packaging/LumenPluginWorker.entitlements
+          plutil -lint Packaging/LumenParserWorker.entitlements
+          plutil -lint Packaging/en.lproj/InfoPlist.strings
+          plutil -lint Packaging/zh_CN.lproj/InfoPlist.strings
+
+          expect_value() {
+            local key="$1"
+            local expected="$2"
+            local actual
+            actual="$(plutil -extract "$key" raw -o - "$plist")"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "Expected $key=$expected, found $actual." >&2
+              exit 1
+            fi
+          }
+
+          expect_value CFBundleIdentifier com.lumen.editor.native-preview
+          expect_value CFBundleExecutable LumenEditor
+          expect_value CFBundlePackageType APPL
+          expect_value LSMinimumSystemVersion 14.0
+          expect_value LSMultipleInstancesProhibited true
+
+          expect_entitlement() {
+            local plist="$1"
+            local key="$2"
+            local actual
+            actual="$(plutil -extract "$key" raw -o - "$plist")"
+            if [[ "$actual" != "true" ]]; then
+              echo "Expected $key=true in $plist, found $actual." >&2
+              exit 1
+            fi
+          }
+
+          expect_entitlement Packaging/LumenEditor.entitlements com.apple.security.app-sandbox
+          expect_entitlement Packaging/LumenEditor.entitlements com.apple.security.files.user-selected.read-write
+          expect_entitlement Packaging/LumenEditor.entitlements com.apple.security.files.bookmarks.app-scope
+          expect_entitlement Packaging/LumenEditor.entitlements com.apple.security.network.client
+          expect_entitlement Packaging/LumenPluginWorker.entitlements com.apple.security.app-sandbox
+          expect_entitlement Packaging/LumenPluginWorker.entitlements com.apple.security.inherit
+          expect_entitlement Packaging/LumenParserWorker.entitlements com.apple.security.app-sandbox
+          expect_entitlement Packaging/LumenParserWorker.entitlements com.apple.security.inherit

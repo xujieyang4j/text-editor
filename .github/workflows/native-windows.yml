@@ -1,0 +1,144 @@
+name: Native Windows CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "native-windows/**"
+      - "native-macos/ParserBundle/**"
+      - "native-macos/Sources/LumenEditorApp/Resources/CodeMirrorParserBundle.js"
+      - "electron-builder.yml"
+      - "src/renderer/src/commands.ts"
+      - "src/shared/ipc.ts"
+      - "src/shared/filePolicy.ts"
+      - "src/shared/fileOpenBatch.ts"
+      - "scripts/check-native-windows.mjs"
+      - "scripts/build-native-parser-bundle.mjs"
+      - "scripts/generate-native-legacy-language-registry.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/native-windows.yml"
+  pull_request:
+    paths:
+      - "native-windows/**"
+      - "native-macos/ParserBundle/**"
+      - "native-macos/Sources/LumenEditorApp/Resources/CodeMirrorParserBundle.js"
+      - "electron-builder.yml"
+      - "src/renderer/src/commands.ts"
+      - "src/shared/ipc.ts"
+      - "src/shared/filePolicy.ts"
+      - "src/shared/fileOpenBatch.ts"
+      - "scripts/check-native-windows.mjs"
+      - "scripts/build-native-parser-bundle.mjs"
+      - "scripts/generate-native-legacy-language-registry.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/native-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-core:
+    name: Core and isolated worker (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@1e60f620b9541dca1515402f5c3e3040d8c59e00 # v4.0.4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+      - name: Test Core, isolated worker, and WinUI code-behind
+        run: ./native-windows/scripts/verify-core.sh
+
+  verify:
+    name: WinUI 3 core and packaging metadata
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@1e60f620b9541dca1515402f5c3e3040d8c59e00 # v4.0.4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Install locked JavaScript dependencies
+        run: npm ci
+      - name: Verify Windows native contract
+        run: npm run check:native-windows
+      - name: Verify shared native parser bundle
+        run: npm run check:native-parser
+      - name: Build and test Windows native preview
+        shell: pwsh
+        run: ./native-windows/scripts/verify.ps1
+      - name: Install and exercise a job-signed x64 MSIX window
+        shell: pwsh
+        run: |
+          ./native-windows/scripts/smoke-installed-msix.ps1 `
+            -EvidencePath (Join-Path $env:RUNNER_TEMP 'native-windows-window-smoke.json')
+      - name: Upload installed-window smoke evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-windows-runtime-smoke
+          path: ${{ runner.temp }}/native-windows-window-smoke.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  package:
+    name: Unsigned MSIX ${{ matrix.arch }}
+    needs: [portable-core, verify]
+    runs-on: windows-2022
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build and verify unsigned native MSIX
+        shell: pwsh
+        run: ./native-windows/scripts/package-msix.ps1 -Architecture ${{ matrix.arch }}
+      - name: Summarize preview artifact
+        shell: pwsh
+        run: |
+          $version = [string]((Get-Content package.json -Raw | ConvertFrom-Json).version)
+          $name = "text-editor-xujieyang-$version-native-windows-${{ matrix.arch }}.msix"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "### Native Windows ${{ matrix.arch }} preview"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Package: ``$name``"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Status: unsigned CI validation artifact; not a production installer"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- SHA-256: see ``$name.sha256``"
+      - name: Upload native Windows preview
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-windows-${{ matrix.arch }}-unsigned
+          path: native-windows/artifacts/${{ matrix.arch }}/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

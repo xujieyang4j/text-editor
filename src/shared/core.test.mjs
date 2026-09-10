@@ -9,7 +9,11 @@ import {
   parseEditorConfig,
   resolveEditorConfigIndentation
 } from '../../out-test/shared/editorConfig.js'
-import { maxEditableBytes, isBinaryBuffer } from '../../out-test/shared/filePolicy.js'
+import {
+  maxEditableBytes, isBinaryBuffer, migrateMaximumFileSizeMB
+} from '../../out-test/shared/filePolicy.js'
+import { planFileOpenBatch } from '../../out-test/shared/fileOpenBatch.js'
+import { DEFAULT_SETTINGS } from '../../out-test/shared/ipc.js'
 import { score, fuzzyFilter } from '../../out-test/renderer/src/fuzzy.js'
 import { extractSymbols } from '../../out-test/renderer/src/symbols.js'
 import { incrementalChanges, revertIncrementalChange } from '../../out-test/renderer/src/incrementalDiff.js'
@@ -60,8 +64,24 @@ import {
 assert.equal(maxEditableBytes(1), 1024 * 1024)
 assert.equal(maxEditableBytes(0), 1024 * 1024)
 assert.equal(maxEditableBytes(300), 200 * 1024 * 1024)
+assert.equal(maxEditableBytes(Number.NaN), 200 * 1024 * 1024)
+assert.equal(migrateMaximumFileSizeMB(20, undefined), 200)
+assert.equal(migrateMaximumFileSizeMB(20, 1), 200)
+assert.equal(migrateMaximumFileSizeMB(20, 2), 20)
+assert.equal(migrateMaximumFileSizeMB(64, 1), 64)
+assert.equal(migrateMaximumFileSizeMB(undefined, 1), 200)
+assert.equal(DEFAULT_SETTINGS.formatVersion, 2)
+assert.equal(DEFAULT_SETTINGS.maxFileSizeMB, 200)
 assert.equal(isBinaryBuffer(Buffer.from([0, 1])), true)
 assert.equal(isBinaryBuffer(Buffer.from([0, 1]), true), false)
+assert.deepEqual(
+  planFileOpenBatch(['/repo/a.ts', '/repo/b.ts', '/repo/a.ts', '/repo/c.ts'], 2),
+  { accepted: ['/repo/a.ts', '/repo/b.ts'], rejected: ['/repo/c.ts'] }
+)
+assert.deepEqual(
+  planFileOpenBatch(['/repo/a.ts', '/repo/a.ts'], 0),
+  { accepted: [], rejected: ['/repo/a.ts'] }
+)
 
 const parsedEditorConfig = parseEditorConfig('\uFEFF # BOM\r\nROOT = TRUE\r\n\r\n[*]\r\nindent_style = SPACE\r\nindent_size = 2\r\ntab_width = 8\r\nend_of_line = CRLF\r\nunknown = ignored\r\n\r\n[*.md]\r\nindent_size = unset\r\nend_of_line = lf # not an inline comment\r\nEND_OF_LINE = LF\r\n')
 assert.equal(parsedEditorConfig.valid, true)

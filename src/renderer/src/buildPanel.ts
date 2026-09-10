@@ -1,6 +1,10 @@
 import type { BuildOutput, BuildProblem, UiLocale } from '../../shared/ipc.js'
 import { translate } from '../../shared/i18n.js'
 
+type BuildOutputMessage =
+  | { kind: 'text'; text: string }
+  | { kind: 'exit'; code: number | null | undefined }
+
 export interface BuildPanelCallbacks {
   onRun: (command: string) => void
   onCancel: () => void
@@ -9,6 +13,7 @@ export interface BuildPanelCallbacks {
 
 /** Build output / diagnostic console shared by build commands and future language servers. */
 export class BuildPanel {
+  private static readonly maxOutputChars = 1_000_000
   private readonly root: HTMLDivElement
   private readonly output: HTMLPreElement
   private readonly problems: HTMLUListElement
@@ -22,6 +27,9 @@ export class BuildPanel {
   private previouslyFocused: HTMLElement | null = null
   private locale: UiLocale = 'zh-CN'
   private problemCount: number | null = null
+  private readonly outputMessages: BuildOutputMessage[] = []
+  private earlierOutputDiscarded = false
+  private systemName: string | null = null
 
   constructor(
     initialCommand: string,
@@ -97,28 +105,44 @@ export class BuildPanel {
 
   setLocale(locale: UiLocale): void {
     this.locale = locale
-    this.title.textContent = locale === 'zh-CN' ? '构建输出' : 'Build output'
+    this.updateOutputTitle()
     this.command.placeholder = locale === 'zh-CN' ? '构建命令，例如 npm test' : 'Build command, e.g. npm test'
     this.command.setAttribute('aria-label', locale === 'zh-CN' ? '构建命令' : 'Build command')
     this.run.textContent = translate(locale, 'run')
     this.cancel.textContent = translate(locale, 'stop')
     this.close.title = locale === 'zh-CN' ? '关闭构建面板' : 'Close build panel'
     this.close.setAttribute('aria-label', this.close.title)
-    this.output.setAttribute('aria-label', locale === 'zh-CN' ? '构建输出' : 'Build output')
     this.problems.setAttribute('aria-label', locale === 'zh-CN' ? '构建问题' : 'Build problems')
+    this.trimOutput()
+    this.renderOutput()
     this.updateProblemsSummary()
   }
 
   clear(): void {
+    this.outputMessages.length = 0
+    this.earlierOutputDiscarded = false
+    this.systemName = null
     this.output.textContent = ''
     this.problems.replaceChildren()
     this.problemCount = null
     this.summary.textContent = ''
+    this.updateOutputTitle()
   }
 
   append(message: BuildOutput): void {
-    this.output.textContent += message.text
-    this.output.scrollTop = this.output.scrollHeight
+    if (message.systemName !== undefined) {
+      this.systemName = message.systemName.trim() || null
+      this.updateOutputTitle()
+    }
+    if (message.kind === 'exit') {
+      this.outputMessages.push({ kind: 'exit', code: message.code })
+    } else if (message.text) {
+      const previous = this.outputMessages.at(-1)
+      if (previous?.kind === 'text') previous.text += message.text
+      else this.outputMessages.push({ kind: 'text', text: message.text })
+    }
+    this.trimOutput()
+    this.renderOutput(true)
     this.output.classList.toggle(
       'has-error',
       message.kind === 'stderr' || (message.kind === 'exit' && message.code !== 0)
@@ -165,6 +189,66 @@ export class BuildPanel {
       candidate instanceof HTMLElement && candidate.isConnected && !this.root.contains(candidate) &&
       !candidate.matches(':disabled') && !candidate.closest('.hidden, [hidden], [aria-hidden="true"], [inert]'))
     target?.focus()
+  }
+
+  private updateOutputTitle(): void {
+    const base = this.locale === 'zh-CN' ? '构建输出' : 'Build output'
+    const label = this.systemName ? `${base} — ${this.systemName}` : base
+    this.title.textContent = label
+    this.output.setAttribute('aria-label', label)
+  }
+
+  private renderOutput(scrollToEnd = false): void {
+    const wasAtBottom = this.output.scrollTop + this.output.clientHeight >= this.output.scrollHeight - 1
+    const scrollTop = this.output.scrollTop
+    const content = this.outputMessages.map((message) => this.outputText(message)).join('')
+    this.output.textContent = `${this.earlierOutputDiscarded ? this.discardedOutputText() : ''}${content}`
+    this.output.scrollTop = scrollToEnd || wasAtBottom ? this.output.scrollHeight : scrollTop
+  }
+
+  private outputText(message: BuildOutputMessage): string {
+    if (message.kind === 'text') return message.text
+    if (this.locale === 'zh-CN') {
+      return message.code === 0 ? '构建已成功完成。\n' : `构建已退出（代码 ${message.code ?? '未知'}）。\n`
+    }
+    return message.code === 0
+      ? 'Build completed successfully.\n'
+      : `Build exited with code ${message.code ?? 'unknown'}.\n`
+  }
+
+  private discardedOutputText(): string {
+    return this.locale === 'zh-CN'
+      ? '[较早构建输出已丢弃]\n'
+      : '[Earlier build output discarded]\n'
+  }
+
+  private trimOutput(): void {
+    let excess = this.outputMessages.reduce(
+      (length, message) => length + this.outputText(message).length,
+      0
+    ) - BuildPanel.maxOutputChars
+    if (excess <= 0) return
+
+    this.earlierOutputDiscarded = true
+    while (excess > 0) {
+      const first = this.outputMessages[0]
+      if (!first) return
+      const length = this.outputText(first).length
+      if (length <= excess || first.kind === 'exit') {
+        this.outputMessages.shift()
+        excess -= length
+      } else {
+        let cutAt = excess
+        // Keep UTF-16 surrogate pairs intact when trimming through an emoji.
+        if (cutAt < first.text.length && cutAt > 0 &&
+          first.text.charCodeAt(cutAt) >= 0xdc00 && first.text.charCodeAt(cutAt) <= 0xdfff &&
+          first.text.charCodeAt(cutAt - 1) >= 0xd800 && first.text.charCodeAt(cutAt - 1) <= 0xdbff) {
+          cutAt += 1
+        }
+        first.text = first.text.slice(cutAt)
+        excess = 0
+      }
+    }
   }
 
   private updateProblemsSummary(): void {

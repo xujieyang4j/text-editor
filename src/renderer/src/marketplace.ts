@@ -14,7 +14,9 @@ export async function openMarketplace(
     value: item
   }))
   palette.open({
-    placeholder: 'Browse plugin marketplace…',
+    placeholder: document.documentElement.lang === 'en-US'
+      ? 'Browse plugin marketplace…'
+      : '浏览插件市场…',
     items: rows,
     onAccept: (item) => onInstall(item.value as MarketplaceItem)
   })

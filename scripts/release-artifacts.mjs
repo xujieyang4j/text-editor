@@ -27,7 +27,9 @@ if (typeof version !== 'string' || !STABLE_VERSION.test(version)) {
 const expectedByTarget = {
   'windows-x64': [
     `${prefix}-windows-x64-setup.exe`,
-    `${prefix}-windows-x64-portable.exe`
+    `${prefix}-windows-x64-portable.exe`,
+    `${prefix}-native-windows-x64.msix`,
+    `${prefix}-native-windows-arm64.msix`
   ],
   'linux-x64': [
     `${prefix}-linux-x86_64.AppImage`,
@@ -35,11 +37,15 @@ const expectedByTarget = {
   ],
   'macos-x64': [
     `${prefix}-macos-x64.dmg`,
-    `${prefix}-macos-x64.zip`
+    `${prefix}-macos-x64.zip`,
+    `${prefix}-native-macos-x64.dmg`,
+    `${prefix}-native-macos-x64.zip`
   ],
   'macos-arm64': [
     `${prefix}-macos-arm64.dmg`,
-    `${prefix}-macos-arm64.zip`
+    `${prefix}-macos-arm64.zip`,
+    `${prefix}-native-macos-arm64.dmg`,
+    `${prefix}-native-macos-arm64.zip`
   ]
 }
 

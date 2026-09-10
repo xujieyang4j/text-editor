@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   IPC,
   type OpenedFile,
+  type OpenFilesResult,
   type DroppedPaths,
   type SaveResult,
   type OpenedFolder,
@@ -14,11 +15,17 @@ import {
   type MenuEvent,
   type FileWriteOptions,
   type FileReadOptions,
-  type WorkspaceMatch,
   type WorkspaceSearchRequest,
   type WorkspaceReplaceRequest,
-  type WorkspaceReplaceResult,
-  type WorkspaceReplacePreview,
+  type WorkspaceSearchResult,
+  type WorkspaceReplaceApplyResult,
+  type WorkspaceReplacePreviewResult,
+  type WorkspaceReplaceUndoResult,
+  isWorkspaceSearchResultPayload,
+  isWorkspaceReplaceApplyResultPayload,
+  isWorkspaceReplacePreviewPayload,
+  isWorkspaceReplaceUndoResultPayload,
+  normalizeWorkspaceOperationResult,
   type WorkspaceSymbol,
   type FileChangeEvent,
   type BuildRequest,
@@ -61,8 +68,9 @@ import {
  * This is the ONLY way the renderer can reach the main process.
  */
 const api = {
-  /** Show the open-file dialog. Resolves null if the user cancels. */
-  openFile: (options?: FileReadOptions): Promise<OpenedFile | null> => ipcRenderer.invoke(IPC.fileOpen, options),
+  /** Show the open-file dialog and return every successfully read selection. */
+  openFile: (options?: FileReadOptions): Promise<OpenFilesResult> =>
+    ipcRenderer.invoke(IPC.fileOpen, options),
 
   /** Read a file by absolute path (e.g. from the file tree). */
   openPath: (filePath: string, options?: FileReadOptions): Promise<OpenedFile> =>
@@ -117,6 +125,7 @@ const api = {
   writeSettings: (settings: Settings): Promise<void> =>
     ipcRenderer.invoke(IPC.settingsWrite, settings),
 
+  /** Synchronise this window's native dialogs and its menu while focused. */
   setMenuLocale: (locale: import('../shared/ipc.js').UiLocale): Promise<void> =>
     ipcRenderer.invoke(IPC.menuSetLocale, locale),
 
@@ -150,19 +159,33 @@ const api = {
   /** Open only a validated external http(s)/mailto link in the system browser. */
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke(IPC.openExternal, url),
 
-  /** Search files in the current workspace without exposing Node to the renderer. */
-  searchWorkspace: (request: WorkspaceSearchRequest): Promise<WorkspaceMatch[]> =>
-    ipcRenderer.invoke(IPC.workspaceSearch, request),
+  /** Search files in the current workspace. Security-boundary rejections remain rejected Promises. */
+  searchWorkspace: async (request: WorkspaceSearchRequest): Promise<WorkspaceSearchResult> =>
+    normalizeWorkspaceOperationResult(
+      await ipcRenderer.invoke(IPC.workspaceSearch, request) as unknown,
+      isWorkspaceSearchResultPayload
+    ),
 
-  /** Apply a controlled workspace-wide replacement. */
-  replaceWorkspace: (request: WorkspaceReplaceRequest): Promise<WorkspaceReplaceResult> =>
-    ipcRenderer.invoke(IPC.workspaceReplace, request),
+  /** Apply a controlled replacement. Security-boundary rejections remain rejected Promises. */
+  replaceWorkspace: async (request: WorkspaceReplaceRequest): Promise<WorkspaceReplaceApplyResult> =>
+    normalizeWorkspaceOperationResult(
+      await ipcRenderer.invoke(IPC.workspaceReplace, request) as unknown,
+      isWorkspaceReplaceApplyResultPayload
+    ),
 
-  previewWorkspaceReplace: (request: WorkspaceReplaceRequest): Promise<WorkspaceReplacePreview> =>
-    ipcRenderer.invoke(IPC.workspaceReplacePreview, request),
+  /** Preview replacement; malformed fulfilled responses become typed invalid-response failures. */
+  previewWorkspaceReplace: async (request: WorkspaceReplaceRequest): Promise<WorkspaceReplacePreviewResult> =>
+    normalizeWorkspaceOperationResult(
+      await ipcRenderer.invoke(IPC.workspaceReplacePreview, request) as unknown,
+      isWorkspaceReplacePreviewPayload
+    ),
 
-  undoWorkspaceReplace: (token: string): Promise<WorkspaceReplaceResult> =>
-    ipcRenderer.invoke(IPC.workspaceReplaceUndo, token),
+  /** Undo replacement. Invalid or unauthorised capabilities reject instead of becoming result data. */
+  undoWorkspaceReplace: async (token: string): Promise<WorkspaceReplaceUndoResult> =>
+    normalizeWorkspaceOperationResult(
+      await ipcRenderer.invoke(IPC.workspaceReplaceUndo, token) as unknown,
+      isWorkspaceReplaceUndoResultPayload
+    ),
 
   listWorkspaceSymbols: (root: string): Promise<WorkspaceSymbol[]> =>
     ipcRenderer.invoke(IPC.workspaceSymbols, root),

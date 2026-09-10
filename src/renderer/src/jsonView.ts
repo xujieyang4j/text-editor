@@ -52,6 +52,10 @@ function allowProperty(name: string): boolean {
   return name !== '' && !['__proto__', 'prototype', 'constructor'].includes(name)
 }
 
+type JsonError =
+  | { kind: 'tooLarge' }
+  | { kind: 'parse'; message: string }
+
 /**
  * Read-only by default JSON tree with focused, explicit operations for editing
  * primitive values and collection structure. All mutations are returned as JSON
@@ -63,7 +67,7 @@ export class JsonView {
   private readonly tree: HTMLDivElement
   private value: LosslessJsonValue | null = null
   private locale: UiLocale = 'zh-CN'
-  private parseError = ''
+  private parseError: JsonError | null = null
 
   constructor(private readonly callbacks: JsonViewCallbacks) {
     this.root = document.createElement('aside')
@@ -102,16 +106,16 @@ export class JsonView {
   update(source: string): void {
     if (source.length > 2 * 1024 * 1024) {
       this.value = null
-      this.parseError = this.locale === 'zh-CN' ? 'JSON 超过 2 MB，已停止可视化解析。' : 'JSON exceeds 2 MB; visual parsing is disabled.'
+      this.parseError = { kind: 'tooLarge' }
       this.render()
       return
     }
     try {
       this.value = parseLosslessJson(source)
-      this.parseError = ''
+      this.parseError = null
     } catch (error) {
       this.value = null
-      this.parseError = error instanceof Error ? error.message : String(error)
+      this.parseError = { kind: 'parse', message: error instanceof Error ? error.message : String(error) }
     }
     this.render()
   }
@@ -119,7 +123,9 @@ export class JsonView {
   private render(): void {
     this.tree.replaceChildren()
     if (this.parseError) {
-      this.summary.textContent = this.locale === 'zh-CN' ? `JSON 无法解析：${this.parseError}` : `Invalid JSON: ${this.parseError}`
+      this.summary.textContent = this.parseError.kind === 'tooLarge'
+        ? (this.locale === 'zh-CN' ? 'JSON 超过 2 MB，已停止可视化解析。' : 'JSON exceeds 2 MB; visual parsing is disabled.')
+        : (this.locale === 'zh-CN' ? 'JSON 无法解析。' : `Invalid JSON: ${this.parseError.message}`)
       this.summary.classList.add('error')
       return
     }
@@ -202,7 +208,7 @@ export class JsonView {
         else if (isLosslessJsonObject(parent) && typeof part === 'string') parent[part] = parseInput(raw)
       })
     } catch (error) {
-      this.callbacks.notify(this.locale === 'zh-CN' ? `值无效：${error instanceof Error ? error.message : String(error)}` : `Invalid value: ${error instanceof Error ? error.message : String(error)}`)
+      this.callbacks.notify(this.locale === 'zh-CN' ? '值无效。' : `Invalid value: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -215,12 +221,12 @@ export class JsonView {
     try {
       this.mutate((root) => {
         const target = getContainer(root, path)
-        if (!isLosslessJsonObject(target)) throw new Error('Target is not an object.')
-        if (Object.hasOwn(target, key)) throw new Error('Key already exists.')
+        if (!isLosslessJsonObject(target)) throw new Error(this.locale === 'zh-CN' ? '目标不是对象。' : 'Target is not an object.')
+        if (Object.hasOwn(target, key)) throw new Error(this.locale === 'zh-CN' ? '键已存在。' : 'Key already exists.')
         Object.defineProperty(target, key, { value: parseInput(raw), enumerable: true, configurable: true, writable: true })
       })
     } catch (error) {
-      this.callbacks.notify(this.locale === 'zh-CN' ? `无法添加键：${error instanceof Error ? error.message : String(error)}` : `Could not add key: ${error instanceof Error ? error.message : String(error)}`)
+      this.callbacks.notify(this.locale === 'zh-CN' ? '无法添加键。' : `Could not add key: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -230,11 +236,11 @@ export class JsonView {
     try {
       this.mutate((root) => {
         const target = getContainer(root, path)
-        if (!Array.isArray(target)) throw new Error('Target is not an array.')
+        if (!Array.isArray(target)) throw new Error(this.locale === 'zh-CN' ? '目标不是数组。' : 'Target is not an array.')
         target.push(parseInput(raw))
       })
     } catch (error) {
-      this.callbacks.notify(this.locale === 'zh-CN' ? `无法添加数组项：${error instanceof Error ? error.message : String(error)}` : `Could not add array item: ${error instanceof Error ? error.message : String(error)}`)
+      this.callbacks.notify(this.locale === 'zh-CN' ? '无法添加数组项。' : `Could not add array item: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 

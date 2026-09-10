@@ -6,6 +6,10 @@ export interface TerminalPanelCallbacks {
   onStop: () => void
 }
 
+type TerminalOutputChunk =
+  | { kind: 'text'; text: string }
+  | { kind: 'exit'; code: number | null | undefined }
+
 /** A deliberately small terminal front-end. Process ownership remains in main. */
 export class TerminalPanel {
   private static readonly maxOutputChars = 1_000_000
@@ -19,6 +23,8 @@ export class TerminalPanel {
   private visible = false
   private previouslyFocused: HTMLElement | null = null
   private locale: UiLocale = 'zh-CN'
+  private readonly outputChunks: TerminalOutputChunk[] = []
+  private earlierOutputDiscarded = false
 
   constructor(private readonly callbacks: TerminalPanelCallbacks) {
     this.root = document.createElement('div')
@@ -120,18 +126,27 @@ export class TerminalPanel {
     this.output.setAttribute('aria-label', locale === 'zh-CN' ? '终端输出' : 'Terminal output')
     this.input.setAttribute('aria-label', locale === 'zh-CN' ? '终端命令输入' : 'Terminal command input')
     this.input.placeholder = locale === 'zh-CN' ? '输入命令并按回车（Ctrl+C 可中断）…' : 'Type a command and press Enter (Ctrl+C interrupts)…'
+    this.trimOutput()
+    this.renderOutput(false)
   }
 
   append(output: TerminalOutput): void {
-    const exitText = output.kind !== 'exit' ? output.text : this.exitMessage(output.code)
-    const next = `${this.output.textContent ?? ''}${exitText}`
-    this.output.textContent = next.length > TerminalPanel.maxOutputChars
-      ? `[Earlier terminal output discarded]\n${next.slice(-TerminalPanel.maxOutputChars)}`
-      : next
-    this.output.scrollTop = this.output.scrollHeight
+    if (output.kind === 'exit') {
+      this.outputChunks.push({ kind: 'exit', code: output.code })
+    } else if (output.text) {
+      const previous = this.outputChunks.at(-1)
+      if (previous?.kind === 'text') previous.text += output.text
+      else this.outputChunks.push({ kind: 'text', text: output.text })
+    }
+    this.trimOutput()
+    this.renderOutput(true)
   }
 
-  clear(): void { this.output.textContent = '' }
+  clear(): void {
+    this.outputChunks.length = 0
+    this.earlierOutputDiscarded = false
+    this.output.textContent = ''
+  }
 
   private focusPanel(): void {
     const target = !this.input.disabled ? this.input : !this.start.disabled ? this.start : this.close
@@ -161,5 +176,44 @@ export class TerminalPanel {
   private exitMessage(code: number | null | undefined): string {
     if (this.locale === 'zh-CN') return code === 0 ? '终端已退出。\n' : `终端已退出（代码 ${code ?? '未知'}）。\n`
     return code === 0 ? 'Terminal exited.\n' : `Terminal exited with code ${code ?? 'unknown'}.\n`
+  }
+
+  private discardedOutputMessage(): string {
+    return this.locale === 'zh-CN'
+      ? '[较早的终端输出已丢弃]\n'
+      : '[Earlier terminal output discarded]\n'
+  }
+
+  private outputChunkText(chunk: TerminalOutputChunk): string {
+    return chunk.kind === 'text' ? chunk.text : this.exitMessage(chunk.code)
+  }
+
+  private trimOutput(): void {
+    let excess = this.outputChunks.reduce(
+      (length, chunk) => length + this.outputChunkText(chunk).length,
+      0
+    ) - TerminalPanel.maxOutputChars
+    if (excess <= 0) return
+
+    this.earlierOutputDiscarded = true
+    while (excess > 0) {
+      const first = this.outputChunks[0]
+      if (!first) return
+      const length = this.outputChunkText(first).length
+      if (length <= excess || first.kind === 'exit') {
+        this.outputChunks.shift()
+        excess -= length
+      } else {
+        first.text = first.text.slice(excess)
+        excess = 0
+      }
+    }
+  }
+
+  private renderOutput(scrollToEnd: boolean): void {
+    const scrollTop = this.output.scrollTop
+    const content = this.outputChunks.map((chunk) => this.outputChunkText(chunk)).join('')
+    this.output.textContent = `${this.earlierOutputDiscarded ? this.discardedOutputMessage() : ''}${content}`
+    this.output.scrollTop = scrollToEnd ? this.output.scrollHeight : scrollTop
   }
 }

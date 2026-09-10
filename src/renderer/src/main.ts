@@ -2,7 +2,7 @@ import { Editor, allLanguageNames } from './editor.js'
 import { FileTree } from './fileTree.js'
 import { Palette, type PaletteItem } from './palette.js'
 import { WorkspaceSearchPanel } from './workspaceSearch.js'
-import { FindResultsView } from './findResults.js'
+import { FindResultsView, type FindResultsSubject } from './findResults.js'
 import { GitPanel } from './gitPanel.js'
 import { openMarketplace } from './marketplace.js'
 import { ExtensionHost } from './extensionHost.js'
@@ -21,7 +21,7 @@ import { COMMANDS, localizedCommands } from './commands.js'
 import { extractSymbols } from './symbols.js'
 import { fuzzyFilter } from './fuzzy.js'
 import { NavigationHistory, NavigationIntentEpoch, resolveGotoLine, type NavigationDirection, type NavigationLocation } from './navigationHistory.js'
-import { APP_NAME, makeTranslator, type TranslationKey } from '../../shared/i18n.js'
+import { APP_NAME, makeTranslator, workspaceOperationErrorMessage, type TranslationKey } from '../../shared/i18n.js'
 import {
   createUntitled,
   createFromFile,
@@ -41,6 +41,7 @@ import {
   DEFAULT_SETTINGS,
   MAX_SESSION_OPEN_FILES,
   MAX_SESSION_RECOVERY_BYTES,
+  isWorkspaceOperationError,
   type MenuEvent,
   type Settings,
   type Session,
@@ -51,6 +52,7 @@ import {
   type PluginManifest,
   type LanguageServerResult,
   type WorkspaceMatch,
+  type WorkspaceOperationError,
   type WorkspaceSymbol,
   type LayoutKind,
   type SessionLayout,
@@ -87,6 +89,16 @@ interface PhysicalTextSnapshot {
   encoding: Doc['encoding']
   eol: Doc['eol']
   revision: string | null
+}
+
+interface ExternalToolApproval {
+  kind: 'build-command' | 'build-system' | 'language-server' | 'language-tool'
+  root: string
+  command: string
+  args?: readonly string[]
+  workingDirectory?: string
+  shell?: boolean
+  env?: Record<string, string>
 }
 
 /** Physical file equality includes bytes-affecting metadata, not just editor text. */
@@ -150,6 +162,7 @@ class AppPalette extends Palette {
  * events forwarded from the main process.
  */
 class App {
+  private static readonly maxBuildOutputChars = 1_000_000
   private primaryEditor!: Editor
   private tree: FileTree
   private palette = new AppPalette()
@@ -272,6 +285,40 @@ class App {
 
   private t: (key: TranslationKey) => string = makeTranslator(DEFAULT_SETTINGS.locale)
 
+  /** Small renderer-local helper for copy that has not yet moved into shared i18n. */
+  private l(zh: string, en: string): string {
+    return this.settings.locale === 'zh-CN' ? zh : en
+  }
+
+  /** Canonicalise legacy renderer-generated names before keeping them in memory/session data. */
+  private stableGeneratedDocName(name: string): string {
+    const suffix = /( \((?:recovered|disk version)\)|（(?:已恢复|磁盘版本)）)$/.exec(name)
+    const suffixStart = suffix?.index ?? name.length
+    // A suffix marks a derived copy of a real file. Its base can legitimately
+    // be named "未命名-N", so only canonicalise a bare generated buffer.
+    const rawBase = name.slice(0, suffixStart)
+    const base = suffix ? rawBase : rawBase.replace(/^未命名-(\d+)$/, 'Untitled-$1')
+    const stableSuffix = (suffix?.[0] ?? '')
+      .replaceAll('（已恢复）', ' (recovered)')
+      .replaceAll('（磁盘版本）', ' (disk version)')
+    return `${base}${stableSuffix}`
+  }
+
+  /** Localise only renderer-generated names; real file names stay byte-for-byte unchanged. */
+  private displayDocName(doc: Pick<Doc, 'path' | 'name'>): string {
+    if (doc.path !== null) return doc.name
+    const stableName = this.stableGeneratedDocName(doc.name)
+    if (this.settings.locale !== 'zh-CN') return stableName
+    const suffix = /( \((?:recovered|disk version)\))$/.exec(stableName)
+    const suffixStart = suffix?.index ?? stableName.length
+    const rawBase = stableName.slice(0, suffixStart)
+    const base = suffix ? rawBase : rawBase.replace(/^Untitled-(\d+)$/, '未命名-$1')
+    const localizedSuffix = (suffix?.[0] ?? '')
+      .replaceAll(' (recovered)', '（已恢复）')
+      .replaceAll(' (disk version)', '（磁盘版本）')
+    return `${base}${localizedSuffix}`
+  }
+
   private get editor(): Editor {
     return this.groups[this.activeGroup]?.editor ?? this.primaryEditor
   }
@@ -300,9 +347,9 @@ class App {
       onRename: (path) => { void this.renamePath(path) },
       onMove: (path) => { void this.movePath(path) },
       onDelete: (path) => { void this.deletePath(path) },
-      onReveal: (path) => { void window.editor.revealInFolder(path).catch((error: unknown) => this.showError('Could not reveal the item.', error)) },
+      onReveal: (path) => { void window.editor.revealInFolder(path).catch((error: unknown) => this.showError(this.l('无法在文件夹中显示该项目。', 'Could not reveal the item.'), error)) },
       onCopyPath: (path, relative) => { void this.copyPath(path, relative) },
-      onError: (message, error) => this.showError(message, error),
+      onError: (message, error) => this.showError(this.l('文件操作失败。', message), error),
       isExcluded: (path, isDirectory) => this.isProjectExcluded(path, isDirectory)
     })
     this.searchPanel = new WorkspaceSearchPanel({
@@ -314,7 +361,13 @@ class App {
       openMatch: (match) => {
         void this.openWorkspaceMatch(match)
       },
-      notify: (message, error) => this.showError(message, error),
+      notify: (message, error) => {
+        if (isWorkspaceOperationError(error)) {
+          this.showWorkspaceOperationError(message, error)
+        } else {
+          this.showError(message, error)
+        }
+      },
       afterReplace: () => {
         void this.reloadWorkspaceTree()
         this.renderTabs()
@@ -323,8 +376,8 @@ class App {
       onReplaceComplete: (token, files, replacements) => {
         this.replaceUndoToken = token ?? null
         this.statusSelection.textContent = token
-          ? `Replaced ${replacements} match${replacements === 1 ? '' : 'es'} in ${files} file${files === 1 ? '' : 's'} — undo is available`
-          : `Replaced ${replacements} match${replacements === 1 ? '' : 'es'}`
+          ? this.l(`已在 ${files} 个文件中替换 ${replacements} 处匹配项 — 可撤销`, `Replaced ${replacements} match${replacements === 1 ? '' : 'es'} in ${files} file${files === 1 ? '' : 's'} — undo is available`)
+          : this.l(`已替换 ${replacements} 处匹配项`, `Replaced ${replacements} match${replacements === 1 ? '' : 'es'}`)
       },
       onHistory: (search, replacement) => this.rememberSearchHistory(search, replacement)
     })
@@ -336,10 +389,10 @@ class App {
       onOpenFile: (relativePath) => {
         if (this.folder) void this.openPath(`${this.folder}/${relativePath}`)
       },
-      onDiff: (relativePath) => this.folder ? window.editor.gitDiff(this.folder, relativePath) : Promise.reject(new Error('No workspace open.')),
-      onHunks: (relativePath) => this.folder ? window.editor.gitHunks(this.folder, relativePath) : Promise.reject(new Error('No workspace open.')),
-      onHistory: (relativePath) => this.folder ? window.editor.gitHistory(this.folder, relativePath) : Promise.reject(new Error('No workspace open.')),
-      onBlame: (relativePath) => this.folder ? window.editor.gitBlame(this.folder, relativePath) : Promise.reject(new Error('No workspace open.')),
+      onDiff: (relativePath) => this.folder ? window.editor.gitDiff(this.folder, relativePath) : Promise.reject(new Error(this.l('未打开工作区。', 'No workspace open.'))),
+      onHunks: (relativePath) => this.folder ? window.editor.gitHunks(this.folder, relativePath) : Promise.reject(new Error(this.l('未打开工作区。', 'No workspace open.'))),
+      onHistory: (relativePath) => this.folder ? window.editor.gitHistory(this.folder, relativePath) : Promise.reject(new Error(this.l('未打开工作区。', 'No workspace open.'))),
+      onBlame: (relativePath) => this.folder ? window.editor.gitBlame(this.folder, relativePath) : Promise.reject(new Error(this.l('未打开工作区。', 'No workspace open.'))),
       onAction: (action, paths) => { void this.runGitAction(action, paths) },
       onHunkAction: (action, hunk) => { void this.runGitHunkAction(action, hunk) },
       onCommit: () => { void this.commitGitChanges() },
@@ -414,12 +467,12 @@ class App {
     try {
       await window.editor.registerWindowSession(this.windowSessionId)
     } catch (error) {
-      this.showError('Window session could not be registered.', error)
+      this.showError(this.l('无法注册窗口会话。', 'Window session could not be registered.'), error)
     }
     try {
       this.settings = await window.editor.readSettings()
     } catch (error) {
-      this.showError('Settings could not be read; safe defaults were used.', error)
+      this.showError(this.l('无法读取设置；已使用安全默认值。', 'Settings could not be read; safe defaults were used.'), error)
       this.settings = { ...DEFAULT_SETTINGS }
     }
     document.documentElement.dataset.colorScheme = this.settings.colorScheme
@@ -489,7 +542,7 @@ class App {
       for (const event of this.pendingMenuEvents.splice(0)) this.run(event)
       this.startWorkspacePolling()
     } catch (error) {
-      this.showError('The previous session could not be restored.', error)
+      this.showError(this.l('无法恢复上次会话。', 'The previous session could not be restored.'), error)
       this.docs = [createUntitled()]
       await this.activate(this.docs[0].id)
       this.booted = true
@@ -541,7 +594,10 @@ class App {
           restoredBySessionIndex[sessionIndex] = recovered
           continue
         }
-        const restored = createFromSession(opened?.content ?? '', sf, {
+        const restored = createFromSession(opened?.content ?? '', {
+          ...sf,
+          name: sf.path === null ? this.stableGeneratedDocName(sf.name) : sf.name
+        }, {
           encoding: opened?.encoding ?? 'utf8',
           eol: opened?.eol ?? 'LF',
           revision: opened?.revision ?? null,
@@ -1052,7 +1108,10 @@ class App {
       case 'toggle-spell-check':
         this.settings.spellCheck = !this.settings.spellCheck
         this.applyUserSettings(this.settings)
-        this.statusSelection.textContent = `Spell Check: ${this.settings.spellCheck ? 'on' : 'off'}`
+        this.statusSelection.textContent = this.l(
+          `拼写检查：${this.settings.spellCheck ? '开' : '关'}`,
+          `Spell Check: ${this.settings.spellCheck ? 'on' : 'off'}`
+        )
         break
       case 'format-json':
         this.transformJson(true)
@@ -1307,7 +1366,7 @@ class App {
     this.pendingKeySequence = candidate
     if (this.pendingKeyTimer !== null) window.clearTimeout(this.pendingKeyTimer)
     this.pendingKeyTimer = window.setTimeout(() => this.clearKeySequence(), 1_500)
-    this.statusSelection.textContent = `Key sequence: ${candidate.join(' ')}`
+    this.statusSelection.textContent = this.l(`按键序列：${candidate.join(' ')}`, `Key sequence: ${candidate.join(' ')}`)
     return true
   }
 
@@ -1516,7 +1575,11 @@ class App {
     const root = this.workspaceRootForPath(doc.path)
     if (!root || !doc.path) return
     const config = this.project.languageServers[doc.language]
-    if (!config || !this.confirmExternalTool(config.command, `language server for ${doc.language}`)) return
+    if (!config || !this.confirmExternalTool(
+      { kind: 'language-server', root, command: config.command, args: config.args },
+      [config.command, ...config.args].join(' '),
+      this.l(`${doc.language} 语言服务器`, `language server for ${doc.language}`)
+    )) return
     const version = (this.lspDocumentVersion.get(doc.path) ?? 0) + 1
     this.lspDocumentVersion.set(doc.path, version)
     try {
@@ -1529,7 +1592,7 @@ class App {
         version
       })
     } catch (error) {
-      this.showError('The configured language server could not synchronize.', error)
+      this.showError(this.l('配置的语言服务器无法同步。', 'The configured language server could not synchronize.'), error)
     }
   }
 
@@ -1537,15 +1600,19 @@ class App {
     const doc = this.active
     const root = this.workspaceRootForPath(doc?.path ?? null)
     if (!root || !doc?.path) {
-      this.showError('Open a saved file in a workspace before using this language feature.')
+      this.showError(this.l('请先在工作区中打开已保存的文件，再使用此语言功能。', 'Open a saved file in a workspace before using this language feature.'))
       return null
     }
     const config = this.project.languageServers[doc.language]
     if (!config) {
-      this.showError(`No language server is configured for ${doc.language}.`)
+      this.showError(this.l(`尚未为 ${doc.language} 配置语言服务器。`, `No language server is configured for ${doc.language}.`))
       return null
     }
-    if (!this.confirmExternalTool(config.command, `language server for ${doc.language}`)) return null
+    if (!this.confirmExternalTool(
+      { kind: 'language-server', root, command: config.command, args: config.args },
+      [config.command, ...config.args].join(' '),
+      this.l(`${doc.language} 语言服务器`, `language server for ${doc.language}`)
+    )) return null
     const selection = this.editor.view.state.selection.main
     const line = this.editor.view.state.doc.lineAt(selection.head)
     try {
@@ -1561,7 +1628,7 @@ class App {
         ...(newName ? { newName } : {})
       })
     } catch (error) {
-      this.showError(`Language server ${method} request failed.`, error)
+      this.showError(this.l(`语言服务器 ${method} 请求失败。`, `Language server ${method} request failed.`), error)
       return null
     }
   }
@@ -1601,7 +1668,7 @@ class App {
     if (words.size < 300) addWords(context.state.doc.toString())
     if (this.workspaceWords.length === 0 || Date.now() - this.workspaceWordIndexAt > 60_000) void this.ensureWorkspaceWords()
     const ordered = [...words].sort((a, b) => a.localeCompare(b)).slice(0, 100)
-    return ordered.length > 0 ? ordered.map((label) => ({ label, type: 'text', detail: 'workspace word' })) : null
+    return ordered.length > 0 ? ordered.map((label) => ({ label, type: 'text', detail: this.l('工作区词语', 'workspace word') })) : null
   }
 
   private async ensureWorkspaceWords(): Promise<void> {
@@ -1624,7 +1691,11 @@ class App {
     const root = this.workspaceRootForPath(doc?.path ?? null)
     if (!root || !doc?.path) return null
     const config = this.project.languageServers[doc.language]
-    if (!config || !this.confirmExternalTool(config.command, `language server for ${doc.language}`)) return null
+    if (!config || !this.confirmExternalTool(
+      { kind: 'language-server', root, command: config.command, args: config.args },
+      [config.command, ...config.args].join(' '),
+      this.l(`${doc.language} 语言服务器`, `language server for ${doc.language}`)
+    )) return null
     try {
       return await window.editor.requestLanguageServer({
         root,
@@ -1638,7 +1709,7 @@ class App {
         ...(newName ? { newName } : {})
       })
     } catch (error) {
-      this.showError(`Language server ${method} request failed.`, error)
+      this.showError(this.l(`语言服务器 ${method} 请求失败。`, `Language server ${method} request failed.`), error)
       return null
     }
   }
@@ -1647,7 +1718,7 @@ class App {
     const result = await this.requestLsp('hover')
     const text = result?.hover?.text?.trim()
     if (!text) {
-      this.statusSelection.textContent = 'No hover information'
+      this.statusSelection.textContent = this.l('没有悬停信息', 'No hover information')
       return
     }
     window.alert(text)
@@ -1663,7 +1734,9 @@ class App {
     const result = await this.requestLsp(method)
     const locations = result?.locations ?? []
     if (locations.length === 0) {
-      this.statusSelection.textContent = method === 'definition' ? 'No definition found' : 'No references found'
+      this.statusSelection.textContent = method === 'definition'
+        ? this.l('未找到定义', 'No definition found')
+        : this.l('未找到引用', 'No references found')
       return
     }
     if (method === 'definition' && locations.length === 1) {
@@ -1681,17 +1754,19 @@ class App {
       path: location.filePath,
       line: location.line + 1,
       column: location.character + 1,
-      lineText: method === 'definition' ? 'Definition' : 'Reference',
+      lineText: '',
       matchText: method
     }))
-    this.showFindResults(method === 'definition' ? 'Definitions' : 'References', matches)
+    this.showFindResults(method === 'definition'
+      ? { kind: 'definitions', generatedLineText: 'definition' }
+      : { kind: 'references', generatedLineText: 'reference' }, matches)
   }
 
   /** Fast symbol-index fallback for projects that do not run an LSP server. */
   private async runIndexedLocations(method: 'definition' | 'references'): Promise<void> {
     const doc = this.active
     if (!doc?.path || this.folders.length === 0) {
-      this.showError('Open a saved file in a project before using symbol navigation.')
+      this.showError(this.l('请先在项目中打开已保存的文件，再使用符号导航。', 'Open a saved file in a project before using symbol navigation.'))
       return
     }
     const selection = this.editor.view.state.selection.main
@@ -1700,7 +1775,7 @@ class App {
     const right = source.slice(selection.head)
     const word = /[A-Za-z_$][\w$]*$/.exec(left)?.[0] ?? /^[A-Za-z_$][\w$]*/.exec(right)?.[0]
     if (!word) {
-      this.statusSelection.textContent = 'Place the cursor on a symbol name'
+      this.statusSelection.textContent = this.l('请将光标置于符号名称上', 'Place the cursor on a symbol name')
       return
     }
     try {
@@ -1714,13 +1789,13 @@ class App {
         }
         const target = exact[0]
         if (!target) {
-          this.statusSelection.textContent = `No indexed definition found for ${word}`
+          this.statusSelection.textContent = this.l(`未找到 ${word} 的索引定义`, `No indexed definition found for ${word}`)
           return
         }
         await this.openWorkspaceMatch({ path: target.path, line: target.line, column: target.column, lineText: '', matchText: word })
         return
       }
-      const matches = await window.editor.searchWorkspace({
+      const search = await window.editor.searchWorkspace({
         root: this.folder!,
         roots: this.folders,
         query: word,
@@ -1730,26 +1805,38 @@ class App {
         exclude: this.project.exclude.join(','),
         maxResults: 5_000
       })
-      if (matches.length === 0) {
-        this.statusSelection.textContent = `No references found for ${word}`
+      if (!search.ok) {
+        this.showWorkspaceOperationError(
+          this.l('无法查询项目符号索引。', 'Project symbol index could not be queried.'),
+          search.error
+        )
         return
       }
-      this.showFindResults(`References: ${word}`, matches)
+      const matches = search.value
+      if (matches.length === 0) {
+        this.statusSelection.textContent = this.l(`未找到 ${word} 的引用`, `No references found for ${word}`)
+        return
+      }
+      this.showFindResults({ kind: 'references', query: word }, matches)
     } catch (error) {
-      this.showError('Project symbol index could not be queried.', error)
+      this.showError(this.l('无法查询项目符号索引。', 'Project symbol index could not be queried.'), error)
     }
   }
 
   private async renameLspSymbol(): Promise<void> {
-    const name = window.prompt('New symbol name:')?.trim()
+    const name = window.prompt(this.l('新符号名称：', 'New symbol name:'))?.trim()
     if (!name) return
     const result = await this.requestLsp('rename', name)
     const edits = result?.renameEdits ?? []
     if (edits.length === 0) {
-      this.statusSelection.textContent = 'No rename edits returned'
+      this.statusSelection.textContent = this.l('语言服务器未返回重命名编辑', 'No rename edits returned')
       return
     }
-    if (!window.confirm(`Apply ${edits.length} rename edit${edits.length === 1 ? '' : 's'} across ${new Set(edits.map((edit) => edit.filePath)).size} file${new Set(edits.map((edit) => edit.filePath)).size === 1 ? '' : 's'}?`)) return
+    const fileCount = new Set(edits.map((edit) => edit.filePath)).size
+    if (!window.confirm(this.l(
+      `要在 ${fileCount} 个文件中应用 ${edits.length} 项重命名编辑吗？`,
+      `Apply ${edits.length} rename edit${edits.length === 1 ? '' : 's'} across ${fileCount} file${fileCount === 1 ? '' : 's'}?`
+    ))) return
     await this.applyLspRenameEdits(edits)
   }
 
@@ -1759,10 +1846,16 @@ class App {
     for (const [filePath, fileEdits] of grouped) {
       const doc = this.docs.find((candidate) => candidate.path === filePath)
       if (doc?.externalChange) {
-        throw new Error(`Resolve the external change for ${baseName(filePath)} before renaming.`)
+        throw new Error(this.l(
+          `请先解决 ${baseName(filePath)} 的外部更改，再重命名。`,
+          `Resolve the external change for ${baseName(filePath)} before renaming.`
+        ))
       }
       if (doc?.encodingIssue !== undefined) {
-        throw new Error(`Reopen ${baseName(filePath)} with the correct encoding before renaming.`)
+        throw new Error(this.l(
+          `请先使用正确编码重新打开 ${baseName(filePath)}，再重命名。`,
+          `Reopen ${baseName(filePath)} with the correct encoding before renaming.`
+        ))
       }
       let content: string
       let encoding: Doc['encoding'] = 'utf8'
@@ -1777,7 +1870,10 @@ class App {
       } else {
         const opened = await window.editor.openPath(filePath)
         if (opened.isBinary || opened.isTooLarge || opened.encodingIssue !== undefined) {
-          throw new Error(`Cannot rename inside ${baseName(filePath)} until it is opened with the correct encoding.`)
+          throw new Error(this.l(
+            `必须先使用正确编码打开 ${baseName(filePath)}，才能重命名其中的符号。`,
+            `Cannot rename inside ${baseName(filePath)} until it is opened with the correct encoding.`
+          ))
         }
         content = opened.content
         encoding = opened.encoding
@@ -1825,8 +1921,8 @@ class App {
           )
         }
         throw new Error(result.reason === 'hardlink'
-          ? `Could not safely replace hard-linked file ${baseName(filePath)}. Use Save As.`
-          : `Could not write ${baseName(filePath)} because it changed on disk.`)
+          ? this.l(`无法安全替换硬链接文件 ${baseName(filePath)}，请使用“另存为”。`, `Could not safely replace hard-linked file ${baseName(filePath)}. Use Save As.`)
+          : this.l(`${baseName(filePath)} 已在磁盘上更改，无法写入。`, `Could not write ${baseName(filePath)} because it changed on disk.`))
       }
       this.invalidateExternalChangeRead(filePath)
       if (doc) {
@@ -1840,7 +1936,10 @@ class App {
       }
     }
     this.renderTabs()
-    this.statusSelection.textContent = `Renamed symbol in ${grouped.size} file${grouped.size === 1 ? '' : 's'}`
+    this.statusSelection.textContent = this.l(
+      `已在 ${grouped.size} 个文件中重命名符号`,
+      `Renamed symbol in ${grouped.size} file${grouped.size === 1 ? '' : 's'}`
+    )
   }
 
   private applyLanguageServerDiagnostics(event: LanguageServerDiagnosticEvent): void {
@@ -1850,7 +1949,7 @@ class App {
     if (this.activeId === doc.id) {
       this.editor.setDiagnostics(event.diagnostics.map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
       this.statusSelection.textContent = event.diagnostics.length
-        ? `${event.diagnostics.length} diagnostic${event.diagnostics.length === 1 ? '' : 's'}`
+        ? this.l(`${event.diagnostics.length} 条诊断`, `${event.diagnostics.length} diagnostic${event.diagnostics.length === 1 ? '' : 's'}`)
         : ''
     }
   }
@@ -2148,22 +2247,25 @@ class App {
   private navigateIncrementalChange(direction: 1 | -1): void {
     const doc = this.active
     if (!doc?.path) {
-      this.statusSelection.textContent = 'Save the file before navigating changes'
+      this.statusSelection.textContent = this.l('请先保存文件，再浏览更改', 'Save the file before navigating changes')
       return
     }
     this.beginNavigationIntent()
     const source = this.currentLocation()
     const change = this.editor.nextIncrementalChange(direction)
     this.navigationHistory.recordSuccessfulJump(source, this.currentLocation())
+    const kind = change?.kind === 'added' ? this.l('新增', 'added')
+      : change?.kind === 'deleted' ? this.l('删除', 'deleted')
+        : this.l('修改', change?.kind ?? 'change')
     this.statusSelection.textContent = change
-      ? `${change.kind} change at line ${change.line}`
-      : 'No unsaved changes'
+      ? this.l(`第 ${change.line} 行附近有${kind}更改`, `${kind} change at line ${change.line}`)
+      : this.l('没有未保存的更改', 'No unsaved changes')
   }
 
   private revertCurrentIncrementalChange(): void {
     const doc = this.active
     if (!doc?.path) {
-      this.showError('Save the file before reverting an incremental change.')
+      this.showError(this.l('请先保存文件，再还原增量更改。', 'Save the file before reverting an incremental change.'))
       return
     }
     const changes = this.refreshIncrementalDiff(doc)
@@ -2171,10 +2273,13 @@ class App {
     const change = changes.find((candidate) => line >= candidate.line && line < candidate.line + Math.max(1, candidate.lineCount))
       ?? [...changes].reverse().find((candidate) => candidate.line <= line)
     if (!change) {
-      this.statusSelection.textContent = 'No change at the cursor'
+      this.statusSelection.textContent = this.l('光标处没有更改', 'No change at the cursor')
       return
     }
-    if (!window.confirm(`Revert this ${change.kind} change near line ${change.line}?`)) return
+    if (!window.confirm(this.l(
+      `要还原第 ${change.line} 行附近的更改吗？`,
+      `Revert this ${change.kind} change near line ${change.line}?`
+    ))) return
     this.editor.replaceContent(revertIncrementalChange(doc.content, change))
   }
 
@@ -2190,18 +2295,19 @@ class App {
     bar.className = 'external-conflict-bar hidden'
     const message = document.createElement('span')
     message.className = 'external-conflict-message'
-    const addAction = (label: string, action: () => void): void => {
+    const addAction = (kind: 'compare' | 'reload' | 'keep' | 'save-as', label: string, action: () => void): void => {
       const button = document.createElement('button')
       button.className = 'panel-button'
+      button.dataset.conflictAction = kind
       button.textContent = label
       button.addEventListener('click', action)
       bar.appendChild(button)
     }
     bar.appendChild(message)
-    addAction('Compare', () => this.compareExternalChange())
-    addAction('Reload Disk', () => this.reloadExternalChange())
-    addAction('Keep Local', () => this.keepLocalExternalChange())
-    addAction('Save Local As…', () => { void this.saveExternalConflictAs() })
+    addAction('compare', this.l('比较', 'Compare'), () => this.compareExternalChange())
+    addAction('reload', this.l('重新加载磁盘版本', 'Reload Disk'), () => this.reloadExternalChange())
+    addAction('keep', this.l('保留本地版本', 'Keep Local'), () => this.keepLocalExternalChange())
+    addAction('save-as', this.l('本地版本另存为…', 'Save Local As…'), () => { void this.saveExternalConflictAs() })
     this.editorArea.parentElement?.insertBefore(bar, this.editorArea)
     this.conflictBar = bar
   }
@@ -2209,14 +2315,18 @@ class App {
   private showExternalConflict(doc: Doc): void {
     if (!doc.externalChange || !this.conflictBar) return
     this.conflictDocId = doc.id
+    const name = this.displayDocName(doc)
     const message = this.conflictBar.querySelector<HTMLElement>('.external-conflict-message')
     if (message) message.textContent = doc.externalChange.unavailable === 'missing'
-      ? `“${doc.name}” was deleted on disk while you have unsaved edits.`
+      ? this.l(`“${name}”已从磁盘删除，但你还有未保存的编辑。`, `“${name}” was deleted on disk while you have unsaved edits.`)
       : doc.externalChange.unavailable === 'hardlink'
-        ? `“${doc.name}” has multiple hard links and cannot be replaced safely. Use Save Local As.`
+        ? this.l(`“${name}”有多个硬链接，无法安全替换。请使用“本地版本另存为”。`, `“${name}” has multiple hard links and cannot be replaced safely. Use Save Local As.`)
       : doc.externalChange.unavailable
-        ? `“${doc.name}” changed to a ${doc.externalChange.unavailable === 'binary' ? 'binary' : 'large'} file while you have unsaved edits.`
-        : `“${doc.name}” changed on disk while you have unsaved edits.`
+        ? this.l(
+            `“${name}”已在磁盘上变为${doc.externalChange.unavailable === 'binary' ? '二进制' : '过大'}文件，但你还有未保存的编辑。`,
+            `“${name}” changed to a ${doc.externalChange.unavailable === 'binary' ? 'binary' : 'large'} file while you have unsaved edits.`
+          )
+        : this.l(`“${name}”已在磁盘上更改，但你还有未保存的编辑。`, `“${name}” changed on disk while you have unsaved edits.`)
     this.conflictBar.classList.remove('hidden')
   }
 
@@ -2274,7 +2384,7 @@ class App {
     const doc = this.conflictDoc
     if (!doc?.externalChange) return
     if (doc.externalChange.unavailable) {
-      this.notify('The current disk version cannot be opened for comparison.')
+      this.notify(this.l('当前磁盘版本无法打开以进行比较。', 'The current disk version cannot be opened for comparison.'))
       return
     }
     const comparison = createUntitled()
@@ -2296,7 +2406,7 @@ class App {
     const doc = this.conflictDoc
     if (!doc?.externalChange) return
     if (doc.externalChange.unavailable) {
-      this.notify('The current disk version cannot be reloaded as text.')
+      this.notify(this.l('当前磁盘版本无法作为文本重新加载。', 'The current disk version cannot be reloaded as text.'))
       return
     }
     doc.content = doc.externalChange.content
@@ -2331,7 +2441,7 @@ class App {
     const doc = this.conflictDoc
     if (!doc?.externalChange) return
     if (doc.externalChange.unavailable) {
-      this.notify('Save the local version to a new path before resolving this conflict.')
+      this.notify(this.l('请先将本地版本保存到新路径，再解决此冲突。', 'Save the local version to a new path before resolving this conflict.'))
       return
     }
     if (doc.encodingIssue || doc.externalChange.encodingIssue) {
@@ -2403,7 +2513,7 @@ class App {
     this.outlinePanel.toggle(this.settings.showOutline)
     const doc = this.active
     const cursor = this.editor?.view.state.selection.main.head ?? 0
-    this.outlinePanel.setDocument(doc?.name ?? '', doc?.content ?? '', cursor, immediate)
+    this.outlinePanel.setDocument(doc ? this.displayDocName(doc) : '', doc?.content ?? '', cursor, immediate)
   }
 
   /** Run a code-folding command and keep unsuccessful requests visible to the user. */
@@ -2450,11 +2560,10 @@ class App {
     if (!this.isMarkdownDoc(doc)) {
       // Only meaningful for markdown; give a hint rather than showing blank.
       if (!this.preview.isVisible) {
-        this.showError(
-          'Markdown preview is only available for Markdown files.\n' +
-            'Save the file with a .md extension, or set the syntax to Markdown ' +
-            '(click the language in the status bar).'
-        )
+        this.showError(this.l(
+          'Markdown 预览仅适用于 Markdown 文件。\n请以 .md 扩展名保存文件，或将语法设置为 Markdown（点击状态栏中的语言）。',
+          'Markdown preview is only available for Markdown files.\nSave the file with a .md extension, or set the syntax to Markdown (click the language in the status bar).'
+        ))
         return
       }
     }
@@ -2480,15 +2589,30 @@ class App {
         dirty: isDirty(doc)
       })
     } catch (error) {
-      this.showError('The browser preview could not be opened.', error)
+      this.showError(this.l('无法打开浏览器预览。', 'The browser preview could not be opened.'), error)
     }
   }
 
   /** Open a file chosen from the native dialog. */
   private async openViaDialog(encoding?: TextEncoding): Promise<void> {
     try {
-      const file = await window.editor.openFile(encoding ? { encoding } : undefined)
-      if (file) await this.openLoadedFile(file)
+      const result = await window.editor.openFile(encoding ? { encoding } : undefined)
+      const generation = this.beginNavigationIntent()
+      for (const file of result.files) {
+        await this.openLoadedFile(file, generation)
+      }
+      if (result.failures.length > 0) {
+        const names = result.failures
+          .slice(0, 5)
+          .map((failure) => baseName(failure.path))
+          .join(', ')
+        const remaining = result.failures.length - Math.min(result.failures.length, 5)
+        const suffix = remaining > 0 ? ` +${remaining}` : ''
+        this.showError(this.l(
+          `有 ${result.failures.length} 个所选文件无法打开：${names}${suffix}`,
+          `${result.failures.length} selected file${result.failures.length === 1 ? '' : 's'} could not be opened: ${names}${suffix}`
+        ), result.failures[0]?.message)
+      }
     } catch (error) {
       this.showError(this.settings.locale === 'zh-CN' ? '无法打开所选文件。' : 'The selected file could not be opened.', error)
     }
@@ -2519,7 +2643,7 @@ class App {
       if (generation !== this.navigationGeneration) return null
       return await this.openLoadedFile(file, generation)
     } catch (error) {
-      this.showError(`Could not open “${baseName(path)}”.`, error)
+      this.showError(this.l(`无法打开“${baseName(path)}”。`, `Could not open “${baseName(path)}”.`), error)
       return null
     }
   }
@@ -2718,19 +2842,29 @@ class App {
 
   private async undoReplaceInFiles(): Promise<void> {
     if (!this.replaceUndoToken) {
-      this.showError('There is no recent workspace replace to undo.')
+      this.showError(this.l('没有可撤销的近期工作区替换。', 'There is no recent workspace replace to undo.'))
       return
     }
     try {
       const result = await window.editor.undoWorkspaceReplace(this.replaceUndoToken)
+      if (!result.ok) {
+        this.showWorkspaceOperationError(
+          this.l('无法撤销工作区替换。', 'Workspace replace could not be undone.'),
+          result.error
+        )
+        return
+      }
       this.replaceUndoToken = null
-      this.statusSelection.textContent = `Restored ${result.files} file${result.files === 1 ? '' : 's'}`
+      this.statusSelection.textContent = this.l(
+        `已恢复 ${result.value.files} 个文件`,
+        `Restored ${result.value.files} file${result.value.files === 1 ? '' : 's'}`
+      )
       for (const doc of this.docs) {
         if (doc.path && !isDirty(doc)) await this.handleExternalFileChange(doc.path)
       }
       await this.reloadWorkspaceTree()
     } catch (error) {
-      this.showError('Workspace replace could not be undone.', error)
+      this.showError(this.l('无法撤销工作区替换。', 'Workspace replace could not be undone.'), error)
     }
   }
 
@@ -2741,7 +2875,7 @@ class App {
     this.persistSettings()
   }
 
-  private showFindResults(query: string, matches: WorkspaceMatch[], focus = true): void {
+  private showFindResults(query: string | FindResultsSubject, matches: WorkspaceMatch[], focus = true): void {
     this.focusGroup(0)
     this.findResults.setResults(query, matches)
     this.findResults.show(focus)
@@ -2755,18 +2889,18 @@ class App {
 
   private async openProjectSymbol(): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a folder before searching project symbols.')
+      this.showError(this.l('请先打开文件夹，再搜索项目符号。', 'Open a folder before searching project symbols.'))
       return
     }
     try {
       await this.ensureProjectSymbols()
     } catch (error) {
-      this.showError('Project symbols could not be indexed.', error)
+      this.showError(this.l('无法建立项目符号索引。', 'Project symbols could not be indexed.'), error)
       return
     }
     const symbols = this.projectSymbols
     this.palette.open({
-      placeholder: 'Goto Symbol in Project',
+      placeholder: this.l('跳转到项目符号', 'Goto Symbol in Project'),
       onQuery: (query) => {
         const source = query ? fuzzyFilter(query, symbols, (symbol) => `${symbol.label} ${symbol.path}`) : symbols.map((symbol) => ({ item: symbol }))
         return source.slice(0, 500).map(({ item }) => ({
@@ -2825,12 +2959,18 @@ class App {
   private async openLoadedFile(file: OpenedFile, generation = this.beginNavigationIntent()): Promise<Doc | null> {
     if (generation !== this.navigationGeneration) return null
     if (file.isBinary) {
-      this.showError(`“${baseName(file.path)}” looks like a binary file and was not opened.`)
+      this.showError(this.l(
+        `“${baseName(file.path)}”似乎是二进制文件，因此未打开。`,
+        `“${baseName(file.path)}” looks like a binary file and was not opened.`
+      ))
       return null
     }
     if (file.isTooLarge) {
       const mb = (file.byteLength / 1024 / 1024).toFixed(1)
-      this.showError(`“${baseName(file.path)}” is ${mb} MB and exceeds the safe editor limit.`)
+      this.showError(this.l(
+        `“${baseName(file.path)}”大小为 ${mb} MB，超过当前 ${this.settings.maxFileSizeMB} MB 的编辑上限。请在“设置”中调整后重新打开。`,
+        `“${baseName(file.path)}” is ${mb} MB and exceeds the current ${this.settings.maxFileSizeMB} MB editor limit. Adjust it in Settings, then reopen the file.`
+      ))
       return null
     }
     const opened = await this.openLoaded(
@@ -2922,7 +3062,7 @@ class App {
       if (!folder) return
       await this.replaceWorkspaceFolders(folder.root)
     } catch (error) {
-      this.showError('The selected folder could not be opened.', error)
+      this.showError(this.l('无法打开所选文件夹。', 'The selected folder could not be opened.'), error)
     }
   }
 
@@ -3010,13 +3150,15 @@ class App {
         if (this.project.buildSystems.length === 0 && this.project.exclude.length === 0) await this.loadProject(root)
       }
       this.folders.push(root)
-      this.workspaceName.textContent = this.folders.length === 1 ? baseName(root).toUpperCase() : `${this.folders.length} FOLDERS`
+      this.workspaceName.textContent = this.folders.length === 1
+        ? baseName(root).toUpperCase()
+        : this.l(`${this.folders.length} 个文件夹`, `${this.folders.length} FOLDERS`)
       await this.renderProjectRoots()
       void window.editor.watchWorkspace(root)
       void window.editor.addRecentProject(root)
       this.refreshEditorConfigs(root)
     } catch (error) {
-      this.showError(`Could not add folder “${baseName(root)}”.`, error)
+      this.showError(this.l(`无法添加文件夹“${baseName(root)}”。`, `Could not add folder “${baseName(root)}”.`), error)
     }
   }
 
@@ -3036,7 +3178,7 @@ class App {
       else this.tree.render(roots.map((root) => ({ name: root.name, path: root.path, isDirectory: true, children: root.children })), true)
       this.tree.setActivePath(this.workspaceRootForPath(this.active?.path ?? null) ? this.active?.path ?? null : null)
     } catch (error) {
-      this.showError('Project folders could not be rendered.', error)
+      this.showError(this.l('无法显示项目文件夹。', 'Project folders could not be rendered.'), error)
     }
   }
 
@@ -3100,7 +3242,9 @@ class App {
       }
 
       if (this.folder) {
-        this.workspaceName.textContent = this.folders.length === 1 ? baseName(this.folder).toUpperCase() : `${this.folders.length} FOLDERS`
+        this.workspaceName.textContent = this.folders.length === 1
+          ? baseName(this.folder).toUpperCase()
+          : this.l(`${this.folders.length} 个文件夹`, `${this.folders.length} FOLDERS`)
         await this.renderProjectRoots()
       } else {
         this.workspaceName.textContent = this.t('noFolder')
@@ -3122,7 +3266,10 @@ class App {
       const imported = await window.editor.importSublimeProject()
       if (!imported) return
       const names = imported.roots.map((root) => baseName(root)).join(', ')
-      if (!window.confirm(`Import Sublime project roots: ${names}?\n\nThis converts folders, exclude patterns, and Build Systems only. It will not execute Sublime Python plugins.`)) return
+      if (!window.confirm(this.l(
+        `要导入 Sublime 项目根目录 ${names} 吗？\n\n仅转换文件夹、排除模式和构建系统，不会执行 Sublime Python 插件。`,
+        `Import Sublime project roots: ${names}?\n\nThis converts folders, exclude patterns, and Build Systems only. It will not execute Sublime Python plugins.`
+      ))) return
       const folders = await window.editor.acceptSublimeProjectImport(imported.token)
       for (const previousRoot of [...this.folders]) await this.releaseWorkspaceResources(previousRoot)
       this.folder = null
@@ -3137,9 +3284,12 @@ class App {
       this.buildPanel.setCommand(this.project.buildCommand)
       await this.renderProjectRoots()
       this.scheduleSessionSave()
-      this.statusSelection.textContent = `Imported Sublime project: ${baseName(imported.sourcePath)}`
+      this.statusSelection.textContent = this.l(
+        `已导入 Sublime 项目：${baseName(imported.sourcePath)}`,
+        `Imported Sublime project: ${baseName(imported.sourcePath)}`
+      )
     } catch (error) {
-      this.showError('Sublime project could not be imported.', error)
+      this.showError(this.l('无法导入 Sublime 项目。', 'Sublime project could not be imported.'), error)
     }
   }
 
@@ -3147,11 +3297,14 @@ class App {
     try {
       const settings = await window.editor.importSublimeSettings()
       if (!settings) return
-      if (!window.confirm(`Apply the imported Sublime settings to this ${APP_NAME} window?`)) return
+      if (!window.confirm(this.l(
+        `要将导入的 Sublime 设置应用到此 ${APP_NAME} 窗口吗？`,
+        `Apply the imported Sublime settings to this ${APP_NAME} window?`
+      ))) return
       this.applyUserSettings(settings)
-      this.statusSelection.textContent = 'Imported Sublime settings'
+      this.statusSelection.textContent = this.l('已导入 Sublime 设置', 'Imported Sublime settings')
     } catch (error) {
-      this.showError('Sublime settings could not be imported.', error)
+      this.showError(this.l('无法导入 Sublime 设置。', 'Sublime settings could not be imported.'), error)
     }
   }
 
@@ -3159,6 +3312,9 @@ class App {
   private applyUserSettings(settings: Settings): void {
     const previousLocale = this.settings.locale
     this.settings = { ...settings, rulers: [...settings.rulers], searchHistory: [...settings.searchHistory], replaceHistory: [...settings.replaceHistory] }
+    // Palette options are snapshots of the locale in which they were opened.
+    // Use its normal close path so focus returns to the control that opened it.
+    if (previousLocale !== this.settings.locale && this.palette.isOpen) this.palette.close()
     document.documentElement.dataset.colorScheme = this.settings.colorScheme
     for (const group of this.groups) group.editor.applySettings(this.settings)
     for (const group of this.groups) {
@@ -3184,42 +3340,51 @@ class App {
 
   private async importSublimeSnippet(): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a project before importing a Sublime snippet.')
+      this.showError(this.l('请先打开项目，再导入 Sublime 代码片段。', 'Open a project before importing a Sublime snippet.'))
       return
     }
     try {
       const imported = await window.editor.importSublimeSnippet()
       if (!imported) return
-      const detail = `${imported.snippet.label}${imported.snippet.trigger ? ` (trigger: ${imported.snippet.trigger})` : ''}`
-      if (!window.confirm(`Import Sublime snippet: ${detail}?\n\nOnly the snippet text, trigger and scope are imported.`)) return
+      const detail = `${imported.snippet.label}${imported.snippet.trigger ? this.l(`（触发词：${imported.snippet.trigger}）`, ` (trigger: ${imported.snippet.trigger})`) : ''}`
+      if (!window.confirm(this.l(
+        `要导入 Sublime 代码片段 ${detail} 吗？\n\n仅导入代码片段文本、触发词和作用域。`,
+        `Import Sublime snippet: ${detail}?\n\nOnly the snippet text, trigger and scope are imported.`
+      ))) return
       this.project.snippets = [imported.snippet, ...(this.project.snippets ?? []).filter((snippet) => snippet.label !== imported.snippet.label)].slice(0, 500)
       await this.saveProject()
-      this.statusSelection.textContent = `Imported Sublime snippet: ${imported.snippet.label}`
+      this.statusSelection.textContent = this.l(`已导入 Sublime 代码片段：${imported.snippet.label}`, `Imported Sublime snippet: ${imported.snippet.label}`)
     } catch (error) {
-      this.showError('Sublime snippet could not be imported.', error)
+      this.showError(this.l('无法导入 Sublime 代码片段。', 'Sublime snippet could not be imported.'), error)
     }
   }
 
   private async importSublimeKeymap(): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a project before importing a Sublime keymap.')
+      this.showError(this.l('请先打开项目，再导入 Sublime 键位映射。', 'Open a project before importing a Sublime keymap.'))
       return
     }
     try {
       const imported = await window.editor.importSublimeKeymap()
       if (!imported) return
       if (imported.rules.length === 0) {
-        this.showError(`No supported bindings were found. ${imported.skipped} entries were skipped.`)
+        this.showError(this.l(
+          `未找到支持的键位绑定，已跳过 ${imported.skipped} 项。`,
+          `No supported bindings were found. ${imported.skipped} entries were skipped.`
+        ))
         return
       }
-      if (!window.confirm(`Import ${imported.rules.length} supported key binding${imported.rules.length === 1 ? '' : 's'}?\n\n${imported.skipped} unsupported or parameterized entries will be skipped.`)) return
+      if (!window.confirm(this.l(
+        `要导入 ${imported.rules.length} 项支持的键位绑定吗？\n\n将跳过 ${imported.skipped} 项不支持或带参数的绑定。`,
+        `Import ${imported.rules.length} supported key binding${imported.rules.length === 1 ? '' : 's'}?\n\n${imported.skipped} unsupported or parameterized entries will be skipped.`
+      ))) return
       const keyFor = (rule: import('../../shared/ipc.js').KeyBindingRule): string => `${Array.isArray(rule.keys) ? rule.keys.join(' ') : rule.keys}\0${rule.command}`
       const incoming = new Set(imported.rules.map(keyFor))
       this.project.keyBindingRules = [...imported.rules, ...this.project.keyBindingRules.filter((rule) => !incoming.has(keyFor(rule)))].slice(0, 200)
       await this.saveProject()
-      this.statusSelection.textContent = `Imported ${imported.rules.length} Sublime key bindings`
+      this.statusSelection.textContent = this.l(`已导入 ${imported.rules.length} 项 Sublime 键位绑定`, `Imported ${imported.rules.length} Sublime key bindings`)
     } catch (error) {
-      this.showError('Sublime keymap could not be imported.', error)
+      this.showError(this.l('无法导入 Sublime 键位映射。', 'Sublime keymap could not be imported.'), error)
     }
   }
 
@@ -3230,7 +3395,7 @@ class App {
       return
     }
     this.palette.open({
-      placeholder: 'Open Recent Project',
+      placeholder: this.l('打开最近项目', 'Open Recent Project'),
       items: projects.map((project) => ({ label: baseName(project.path), detail: project.path, value: project.path })),
       onAccept: (item) => { void this.openRecentProjectPath(item.value as string) }
     })
@@ -3244,14 +3409,14 @@ class App {
         return
       }
       this.palette.open({
-        placeholder: 'Open Recent File',
+        placeholder: this.l('打开最近文件', 'Open Recent File'),
         items: files.map((file) => ({ label: baseName(file.path), detail: file.path, value: file.path })),
         onAccept: (item) => {
-          void window.editor.openRecentFile(item.value as string).then((file) => this.openLoadedFile(file)).catch((error: unknown) => this.showError('The recent file could not be opened.', error))
+          void window.editor.openRecentFile(item.value as string).then((file) => this.openLoadedFile(file)).catch((error: unknown) => this.showError(this.l('无法打开最近文件。', 'The recent file could not be opened.'), error))
         }
       })
     } catch (error) {
-      this.showError('Recent files could not be loaded.', error)
+      this.showError(this.l('无法加载最近文件。', 'Recent files could not be loaded.'), error)
     }
   }
 
@@ -3260,7 +3425,7 @@ class App {
       const folder = await window.editor.openRecentProject(root)
       await this.replaceWorkspaceFolders(folder.root)
     } catch (error) {
-      this.showError('The recent project could not be opened.', error)
+      this.showError(this.l('无法打开最近项目。', 'The recent project could not be opened.'), error)
     }
   }
 
@@ -3274,7 +3439,7 @@ class App {
       await this.loadExtensionWorkers(root)
       void this.refreshGit()
     } catch (error) {
-      this.showError('Project settings could not be read.', error)
+      this.showError(this.l('无法读取项目设置。', 'Project settings could not be read.'), error)
     }
   }
 
@@ -3286,7 +3451,10 @@ class App {
       const granted = this.project.pluginPermissions[plugin.id] ?? []
       const missing = required.filter((permission) => !granted.includes(permission))
       if (missing.length > 0) {
-        const ok = window.confirm(`Allow plugin “${plugin.name}” to use: ${missing.join(', ')}?\n\nIt runs in a sandboxed Web Worker without filesystem, network, Node, or process access.`)
+        const ok = window.confirm(this.l(
+          `允许插件“${plugin.name}”使用以下权限吗：${missing.join(', ')}？\n\n插件运行在沙箱 Web Worker 中，不能访问文件系统、网络、Node 或进程。`,
+          `Allow plugin “${plugin.name}” to use: ${missing.join(', ')}?\n\nIt runs in a sandboxed Web Worker without filesystem, network, Node, or process access.`
+        ))
         if (!ok) continue
         this.project.pluginPermissions[plugin.id] = [...new Set([...granted, ...missing])]
         void this.saveProject()
@@ -3309,22 +3477,22 @@ class App {
     try {
       await window.editor.writeProject(this.folder, this.project)
     } catch (error) {
-      this.showError('Project settings could not be saved.', error)
+      this.showError(this.l('无法保存项目设置。', 'Project settings could not be saved.'), error)
     }
   }
 
   /** Minimal project editor: filters, build command, keyboard overrides and enabled plugin IDs. */
   private configureProject(): void {
     if (!this.folder) {
-      this.showError('Open a folder before configuring a project.')
+      this.showError(this.l('请先打开文件夹，再配置项目。', 'Open a folder before configuring a project.'))
       return
     }
     const current = JSON.stringify(this.project, null, 2)
-    const next = window.prompt('Edit project JSON (.lumen-project.json):', current)
+    const next = window.prompt(this.l('编辑项目 JSON（.lumen-project.json）：', 'Edit project JSON (.lumen-project.json):'), current)
     if (next === null) return
     try {
       const parsed = JSON.parse(next) as ProjectSettings
-      if (!parsed || typeof parsed !== 'object') throw new Error('Project settings must be a JSON object.')
+      if (!parsed || typeof parsed !== 'object') throw new Error(this.l('项目设置必须是 JSON 对象。', 'Project settings must be a JSON object.'))
       this.project = {
         exclude: Array.isArray(parsed.exclude) ? parsed.exclude.filter((item): item is string => typeof item === 'string') : [],
         buildCommand: typeof parsed.buildCommand === 'string' ? parsed.buildCommand : '',
@@ -3341,7 +3509,7 @@ class App {
       this.buildPanel.setCommand(this.project.buildCommand)
       void this.saveProject()
     } catch (error) {
-      this.showError('Project settings are not valid JSON.', error)
+      this.showError(this.l('项目设置不是有效的 JSON。', 'Project settings are not valid JSON.'), error)
     }
   }
 
@@ -3353,7 +3521,10 @@ class App {
   private configureLanguageTool(): void {
     const language = this.active?.language ?? 'Plain Text'
     const current = this.project.languageTools[language]?.command ?? ''
-    const command = window.prompt(`Language tool for ${language} (reads document from stdin, writes result to stdout):`, current)
+    const command = window.prompt(this.l(
+      `${language} 的语言工具（从 stdin 读取文档，将结果写入 stdout）：`,
+      `Language tool for ${language} (reads document from stdin, writes result to stdout):`
+    ), current)
     if (command === null) return
     if (command.trim()) this.project.languageTools[language] = { command: command.trim(), args: [] }
     else delete this.project.languageTools[language]
@@ -3362,13 +3533,13 @@ class App {
 
   private selectColorScheme(): void {
     const schemes: Array<{ label: string; value: Settings['colorScheme']; detail: string }> = [
-      { label: 'Dark', value: 'dark', detail: 'Default dark UI and One Dark editor' },
-      { label: 'Light', value: 'light', detail: 'Light UI and editor' },
-      { label: 'Solarized Dark', value: 'solarized-dark', detail: 'Low-contrast Solarized palette' },
-      { label: 'Dracula', value: 'dracula', detail: 'Purple Dracula palette' }
+      { label: this.l('深色', 'Dark'), value: 'dark', detail: this.l('默认深色界面和 One Dark 编辑器', 'Default dark UI and One Dark editor') },
+      { label: this.l('浅色', 'Light'), value: 'light', detail: this.l('浅色界面和编辑器', 'Light UI and editor') },
+      { label: this.l('Solarized 深色', 'Solarized Dark'), value: 'solarized-dark', detail: this.l('低对比度 Solarized 配色', 'Low-contrast Solarized palette') },
+      { label: 'Dracula', value: 'dracula', detail: this.l('紫色 Dracula 配色', 'Purple Dracula palette') }
     ]
     this.palette.open({
-      placeholder: 'Select color scheme…',
+      placeholder: this.l('选择配色方案…', 'Select color scheme…'),
       items: schemes.map((scheme) => ({ label: scheme.label, detail: scheme.detail, value: scheme.value })),
       onAccept: (item) => {
         const scheme = item.value as Settings['colorScheme']
@@ -3384,7 +3555,7 @@ class App {
     try {
       this.gitPanel.setStatus(await window.editor.gitStatus(this.folder))
     } catch (error) {
-      this.showError('Git status could not be loaded.', error)
+      this.showError(this.l('无法加载 Git 状态。', 'Git status could not be loaded.'), error)
     }
   }
 
@@ -3393,7 +3564,7 @@ class App {
     try {
       const conflicts = await window.editor.gitConflicts(this.folder)
       if (conflicts.length === 0) {
-        this.statusSelection.textContent = 'No merge conflicts detected'
+        this.statusSelection.textContent = this.l('未检测到合并冲突', 'No merge conflicts detected')
         return
       }
       if (this.groups.length < 2) this.setLayout('columns2')
@@ -3408,9 +3579,9 @@ class App {
         }
       }
       this.renderTabs()
-      this.statusSelection.textContent = `Opened ${conflicts.length} conflicted file${conflicts.length === 1 ? '' : 's'}`
+      this.statusSelection.textContent = this.l(`已打开 ${conflicts.length} 个冲突文件`, `Opened ${conflicts.length} conflicted file${conflicts.length === 1 ? '' : 's'}`)
     } catch (error) {
-      this.showError('Git conflicts could not be opened.', error)
+      this.showError(this.l('无法打开 Git 冲突文件。', 'Git conflicts could not be opened.'), error)
     }
   }
 
@@ -3418,146 +3589,160 @@ class App {
     try {
       const update = await window.editor.checkForUpdate()
       if (!update.available || !update.latestVersion) {
-        this.statusSelection.textContent = `${APP_NAME} ${update.currentVersion} is up to date`
+        this.statusSelection.textContent = this.l(`${APP_NAME} ${update.currentVersion} 已是最新版本`, `${APP_NAME} ${update.currentVersion} is up to date`)
         return
       }
-      const message = `${APP_NAME} ${update.latestVersion} is available (current: ${update.currentVersion}).`
-      if (update.releaseUrl && window.confirm(`${message}\n\nOpen the release page to download the signed installer?`)) {
+      const message = this.l(
+        `${APP_NAME} ${update.latestVersion} 已发布（当前版本：${update.currentVersion}）。`,
+        `${APP_NAME} ${update.latestVersion} is available (current: ${update.currentVersion}).`
+      )
+      if (update.releaseUrl && window.confirm(`${message}\n\n${this.l('要打开发布页面并下载签名安装包吗？', 'Open the release page to download the signed installer?')}`)) {
         await window.editor.openExternal(update.releaseUrl)
       } else {
         this.statusSelection.textContent = message
       }
     } catch (error) {
-      this.showError('Update check failed.', error)
+      this.showError(this.l('检查更新失败。', 'Update check failed.'), error)
     }
   }
 
   private async runGitAction(action: GitAction, paths: string[] = []): Promise<void> {
     if (!this.folder) return
     if (paths.length === 0) {
-      this.showError('Select one or more files with Ctrl/Cmd-click in the Git panel.')
+      this.showError(this.l('请在 Git 面板中按住 Ctrl/Cmd 单击，选择一个或多个文件。', 'Select one or more files with Ctrl/Cmd-click in the Git panel.'))
       return
     }
-    const actionLabel = action === 'stage' ? 'Stage' : action === 'unstage' ? 'Unstage' : 'Discard local changes for'
-    if (!window.confirm(`${actionLabel} ${paths.length} selected file${paths.length === 1 ? '' : 's'}?`)) return
+    const actionLabel = action === 'stage' ? this.l('暂存', 'Stage') : action === 'unstage' ? this.l('取消暂存', 'Unstage') : this.l('丢弃本地更改', 'Discard local changes for')
+    if (!window.confirm(this.l(
+      `要对选中的 ${paths.length} 个文件执行“${actionLabel}”吗？`,
+      `${actionLabel} ${paths.length} selected file${paths.length === 1 ? '' : 's'}?`
+    ))) return
     try {
       this.gitPanel.setStatus(await window.editor.gitAction({ root: this.folder, action, paths }))
       await this.reloadWorkspaceTree()
     } catch (error) {
-      this.showError(`Git ${action} failed.`, error)
+      this.showError(this.l(`Git ${action} 操作失败。`, `Git ${action} failed.`), error)
     }
   }
 
   private async runGitHunkAction(action: 'stage-hunk' | 'discard-hunk', hunk: import('../../shared/ipc.js').GitHunk): Promise<void> {
     if (!this.folder) return
-    const label = action === 'stage-hunk' ? 'Stage' : 'Discard'
-    if (!window.confirm(`${label} selected hunk in “${hunk.path}”?`)) return
+    const label = action === 'stage-hunk' ? this.l('暂存', 'Stage') : this.l('丢弃', 'Discard')
+    if (!window.confirm(this.l(`要${label}“${hunk.path}”中选中的更改块吗？`, `${label} selected hunk in “${hunk.path}”?`))) return
     try {
       this.gitPanel.setStatus(await window.editor.gitAction({ root: this.folder, action, paths: [hunk.path], patch: hunk.patch }))
       await this.reloadWorkspaceTree()
-      this.statusSelection.textContent = `${label}d selected hunk`
+      this.statusSelection.textContent = action === 'stage-hunk'
+        ? this.l('已暂存选中的更改块', 'Staged selected hunk')
+        : this.l('已丢弃选中的更改块', 'Discarded selected hunk')
     } catch (error) {
-      this.showError(`Git ${action} failed.`, error)
+      this.showError(this.l(`Git ${action} 操作失败。`, `Git ${action} failed.`), error)
     }
   }
 
   private async commitGitChanges(): Promise<void> {
     if (!this.folder) return
-    const message = window.prompt('Commit message:')?.trim()
-    if (!message || !window.confirm(`Create commit with message:\n\n${message}`)) return
+    const message = window.prompt(this.l('提交消息：', 'Commit message:'))?.trim()
+    if (!message || !window.confirm(this.l(`要使用以下消息创建提交吗：\n\n${message}`, `Create commit with message:\n\n${message}`))) return
     try {
       this.gitPanel.setStatus(await window.editor.gitAction({ root: this.folder, action: 'commit', message }))
     } catch (error) {
-      this.showError('Git commit failed.', error)
+      this.showError(this.l('Git 提交失败。', 'Git commit failed.'), error)
     }
   }
 
   private async switchGitBranch(create: boolean): Promise<void> {
     if (!this.folder) return
-    const branch = window.prompt(create ? 'New branch name:' : 'Existing branch name:')?.trim()
-    if (!branch || !window.confirm(`${create ? 'Create and switch to' : 'Switch to'} branch “${branch}”?`)) return
+    const branch = window.prompt(create ? this.l('新分支名称：', 'New branch name:') : this.l('现有分支名称：', 'Existing branch name:'))?.trim()
+    if (!branch || !window.confirm(this.l(
+      `${create ? '要创建并切换到' : '要切换到'}分支“${branch}”吗？`,
+      `${create ? 'Create and switch to' : 'Switch to'} branch “${branch}”?`
+    ))) return
     try {
       this.gitPanel.setStatus(await window.editor.gitAction({ root: this.folder, action: create ? 'create-branch' : 'checkout-branch', branch }))
       await this.reloadWorkspaceTree()
     } catch (error) {
-      this.showError('Git branch action failed.', error)
+      this.showError(this.l('Git 分支操作失败。', 'Git branch action failed.'), error)
     }
   }
 
   private async openMarketplace(): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a folder before browsing plugins.')
+      this.showError(this.l('请先打开文件夹，再浏览插件。', 'Open a folder before browsing plugins.'))
       return
     }
     if (this.project.marketplaceUrls.length === 0) {
-      this.showError('Add one or more HTTPS marketplaceUrls to .lumen-project.json first.')
+      this.showError(this.l('请先在 .lumen-project.json 中添加一个或多个 HTTPS marketplaceUrls。', 'Add one or more HTTPS marketplaceUrls to .lumen-project.json first.'))
       return
     }
     try {
       const items = await window.editor.listMarketplace(this.folder)
       if (items.length === 0) {
-        this.showError('No plugins were returned by the configured marketplaces.')
+        this.showError(this.l('配置的插件市场未返回任何插件。', 'No plugins were returned by the configured marketplaces.'))
         return
       }
       await openMarketplace(this.palette, items, (item) => { void this.installMarketplaceItem(item) })
     } catch (error) {
-      this.showError('Plugin marketplace could not be loaded.', error)
+      this.showError(this.l('无法加载插件市场。', 'Plugin marketplace could not be loaded.'), error)
     }
   }
 
   private async installMarketplaceItem(item: MarketplaceItem): Promise<void> {
     if (!this.folder) return
-    const prompt = `Install declarative plugin “${item.name}” (${item.version}) from:\n\n${item.manifestUrl}\n\nOnly its manifest, snippets, and text commands will be stored.`
+    const prompt = this.l(
+      `要从以下地址安装声明式插件“${item.name}”(${item.version}) 吗？\n\n${item.manifestUrl}\n\n仅会存储其清单、代码片段和文本命令。`,
+      `Install declarative plugin “${item.name}” (${item.version}) from:\n\n${item.manifestUrl}\n\nOnly its manifest, snippets, and text commands will be stored.`
+    )
     if (!window.confirm(prompt)) return
     try {
       const plugin = await window.editor.installMarketplacePlugin({ root: this.folder, manifestUrl: item.manifestUrl })
       if (!this.project.plugins.includes(plugin.id)) this.project.plugins.push(plugin.id)
       await this.saveProject()
       await this.loadProject(this.folder)
-      this.statusSelection.textContent = `Installed plugin: ${plugin.name}`
+      this.statusSelection.textContent = this.l(`已安装插件：${plugin.name}`, `Installed plugin: ${plugin.name}`)
     } catch (error) {
-      this.showError('The marketplace plugin could not be installed.', error)
+      this.showError(this.l('无法安装插件市场中的插件。', 'The marketplace plugin could not be installed.'), error)
     }
   }
 
   private async installPlugin(): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a folder before installing a plugin.')
+      this.showError(this.l('请先打开文件夹，再安装插件。', 'Open a folder before installing a plugin.'))
       return
     }
-    const source = window.prompt('Absolute path to a local plugin folder (must contain plugin.json):')?.trim()
+    const source = window.prompt(this.l('本地插件文件夹的绝对路径（必须包含 plugin.json）：', 'Absolute path to a local plugin folder (must contain plugin.json):'))?.trim()
     if (!source) return
     try {
       const plugin = await window.editor.installPlugin({ root: this.folder, source })
       if (!this.project.plugins.includes(plugin.id)) this.project.plugins.push(plugin.id)
       await this.saveProject()
       await this.loadProject(this.folder)
-      this.statusSelection.textContent = `Installed plugin: ${plugin.name}`
+      this.statusSelection.textContent = this.l(`已安装插件：${plugin.name}`, `Installed plugin: ${plugin.name}`)
     } catch (error) {
-      this.showError('The plugin could not be installed.', error)
+      this.showError(this.l('无法安装插件。', 'The plugin could not be installed.'), error)
     }
   }
 
   private async managePlugins(): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a folder before managing plugins.')
+      this.showError(this.l('请先打开文件夹，再管理插件。', 'Open a folder before managing plugins.'))
       return
     }
     if (this.plugins.length === 0) {
-      this.showError('No enabled plugins are installed for this project.')
+      this.showError(this.l('此项目未安装任何已启用的插件。', 'No enabled plugins are installed for this project.'))
       return
     }
     const choices = this.plugins.map((plugin) => `${plugin.id} — ${plugin.name}`).join('\n')
-    const id = window.prompt(`Enter a plugin ID to remove:\n\n${choices}`)?.trim()
+    const id = window.prompt(this.l(`输入要移除的插件 ID：\n\n${choices}`, `Enter a plugin ID to remove:\n\n${choices}`))?.trim()
     if (!id) return
-    if (!window.confirm(`Move plugin “${id}” to the system trash?`)) return
+    if (!window.confirm(this.l(`要将插件“${id}”移到系统废纸篓吗？`, `Move plugin “${id}” to the system trash?`))) return
     try {
       await window.editor.removePlugin(this.folder, id)
       this.project.plugins = this.project.plugins.filter((pluginId) => pluginId !== id)
       await this.saveProject()
       await this.loadProject(this.folder)
     } catch (error) {
-      this.showError('The plugin could not be removed.', error)
+      this.showError(this.l('无法移除插件。', 'The plugin could not be removed.'), error)
     }
   }
 
@@ -3663,10 +3848,12 @@ class App {
   }
 
   private async createPath(parent: string, isDirectory: boolean): Promise<void> {
-    const name = window.prompt(isDirectory ? 'New folder name:' : 'New file name:')?.trim()
+    const name = window.prompt(isDirectory
+      ? this.l('新文件夹名称：', 'New folder name:')
+      : this.l('新文件名称：', 'New file name:'))?.trim()
     if (!name) return
     if (name.includes('/') || name.includes('\\') || name === '.' || name === '..') {
-      this.showError('Use a simple file or folder name.')
+      this.showError(this.l('请使用不含路径分隔符的简单文件或文件夹名称。', 'Use a simple file or folder name.'))
       return
     }
     try {
@@ -3674,15 +3861,15 @@ class App {
       await this.reloadWorkspaceTree()
       if (!entry.isDirectory) await this.openPath(entry.path)
     } catch (error) {
-      this.showError('The new item could not be created.', error)
+      this.showError(this.l('无法创建新项目。', 'The new item could not be created.'), error)
     }
   }
 
   private async renamePath(source: string): Promise<void> {
-    const nextName = window.prompt('Rename to:', baseName(source))?.trim()
+    const nextName = window.prompt(this.l('重命名为：', 'Rename to:'), baseName(source))?.trim()
     if (!nextName || nextName === baseName(source)) return
     if (nextName.includes('/') || nextName.includes('\\') || nextName === '.' || nextName === '..') {
-      this.showError('Use a simple file or folder name.')
+      this.showError(this.l('请使用不含路径分隔符的简单文件或文件夹名称。', 'Use a simple file or folder name.'))
       return
     }
     const target = `${source.slice(0, source.length - baseName(source).length)}${nextName}`
@@ -3708,12 +3895,15 @@ class App {
       this.renderTabs()
       await this.reloadWorkspaceTree()
     } catch (error) {
-      this.showError('The item could not be renamed.', error)
+      this.showError(this.l('无法重命名该项目。', 'The item could not be renamed.'), error)
     }
   }
 
   private async movePath(source: string): Promise<void> {
-    if (!window.confirm(`Choose a destination folder for “${baseName(source)}”?`)) return
+    if (!window.confirm(this.l(
+      `要为“${baseName(source)}”选择目标文件夹吗？`,
+      `Choose a destination folder for “${baseName(source)}”?`
+    ))) return
     this.beginNavigationIntent()
     try {
       const target = await window.editor.movePath(source)
@@ -3733,9 +3923,9 @@ class App {
       }
       await this.reloadWorkspaceTree()
       this.renderTabs()
-      this.statusSelection.textContent = `Moved to ${target}`
+      this.statusSelection.textContent = this.l(`已移动到 ${target}`, `Moved to ${target}`)
     } catch (error) {
-      this.showError('The item could not be moved.', error)
+      this.showError(this.l('无法移动该项目。', 'The item could not be moved.'), error)
     }
   }
 
@@ -3744,9 +3934,15 @@ class App {
       (doc.path === target || doc.path.startsWith(`${target}/`) || doc.path.startsWith(`${target}${String.fromCharCode(92)}`)))
     const dirtyCount = affectedBeforeDelete.filter((doc) => isDirty(doc)).length
     const warning = dirtyCount > 0
-      ? ` ${dirtyCount} open file${dirtyCount === 1 ? ' has' : 's have'} unsaved changes and will also be closed.`
+      ? this.l(
+          ` ${dirtyCount} 个已打开文件有未保存的更改，也将被关闭。`,
+          ` ${dirtyCount} open file${dirtyCount === 1 ? ' has' : 's have'} unsaved changes and will also be closed.`
+        )
       : ''
-    if (!window.confirm(`Move “${baseName(target)}” to the system trash?${warning}`)) return
+    if (!window.confirm(this.l(
+      `要将“${baseName(target)}”移到系统废纸篓吗？${warning}`,
+      `Move “${baseName(target)}” to the system trash?${warning}`
+    ))) return
     this.beginNavigationIntent()
     try {
       await window.editor.deletePath(target)
@@ -3763,7 +3959,7 @@ class App {
       }
       await this.reloadWorkspaceTree()
     } catch (error) {
-      this.showError('The item could not be moved to the trash.', error)
+      this.showError(this.l('无法将该项目移到废纸篓。', 'The item could not be moved to the trash.'), error)
     }
   }
 
@@ -3788,6 +3984,7 @@ class App {
 
   private async saveDocument(doc: Doc, forceDialog: boolean): Promise<void> {
     const originalPath = doc.path
+    const displayName = this.displayDocName(doc)
     const savedSnapshot = this.editor.getContent()
     const savedEncodingSnapshot = doc.encoding
     const eolOverrideSnapshot = doc.eolOverride
@@ -3816,25 +4013,25 @@ class App {
     let result
     try {
       result = forceDialog
-        ? await window.editor.saveAs(savedSnapshot, doc.name, writeOptions)
+        ? await window.editor.saveAs(savedSnapshot, displayName, writeOptions)
         : await window.editor.save(doc.path, savedSnapshot, {
             ...writeOptions,
             ...(doc.path ? { expectedRevision: doc.diskRevision } : {})
           })
     } catch (error) {
-      this.showError(`Could not save “${doc.name}”.`, error)
+      this.showError(this.l(`无法保存“${displayName}”。`, `Could not save “${displayName}”.`), error)
       return
     }
 
     if (!result.saved || !result.path) {
       if (result.reason === 'hardlink' && promptedForDestination) {
-        this.showError('The selected destination has multiple hard links. Choose a different path.')
+        this.showError(this.l('所选目标有多个硬链接，请选择其他路径。', 'The selected destination has multiple hard links. Choose a different path.'))
       } else if (result.reason === 'protected-source') {
         this.showError(this.settings.locale === 'zh-CN'
           ? '当前解码存在风险，不能通过“另存为”覆盖原文件或它的链接。请选择不同的新文件。'
           : 'This decode is unsafe, so Save As cannot overwrite the source file or one of its aliases. Choose a different new file.')
       } else if (result.reason === 'conflict' && promptedForDestination) {
-        this.showError('The selected destination changed before it could be saved. Review it and try Save As again.')
+        this.showError(this.l('所选目标在保存前已发生变化。请检查后再次尝试“另存为”。', 'The selected destination changed before it could be saved. Review it and try Save As again.'))
       } else if ((result.reason === 'conflict' || result.reason === 'hardlink') &&
         isCurrentDocumentSaveConflict(promptedForDestination, originalPath, doc.path, result.path)) {
         this.handleSaveConflict(
@@ -3875,7 +4072,8 @@ class App {
       try {
         doc.language = await this.editor.setLanguageForFile(doc.name)
       } catch (error) {
-        this.showError(`Syntax support for “${doc.name}” could not be loaded.`, error)
+        const name = this.displayDocName(doc)
+        this.showError(this.l(`无法加载“${name}”的语法支持。`, `Syntax support for “${name}” could not be loaded.`), error)
       }
     }
     void this.refreshEditorConfig(doc)
@@ -3900,7 +4098,7 @@ class App {
   private async saveAll(): Promise<void> {
     const dirty = this.docs.filter((doc) => isDirty(doc))
     if (dirty.length === 0) {
-      this.statusSelection.textContent = 'All files are saved'
+      this.statusSelection.textContent = this.l('所有文件均已保存', 'All files are saved')
       return
     }
     for (const doc of dirty) {
@@ -3912,11 +4110,11 @@ class App {
       await this.save(false)
       if (previousId && this.docs.some((item) => item.id === previousId)) await this.activate(previousId, previousGroup)
       if (isDirty(doc)) {
-        this.statusSelection.textContent = 'Save All stopped before an unsaved file'
+        this.statusSelection.textContent = this.l('“全部保存”在一个未保存文件前停止', 'Save All stopped before an unsaved file')
         return
       }
     }
-    this.statusSelection.textContent = `Saved ${dirty.length} file${dirty.length === 1 ? '' : 's'}`
+    this.statusSelection.textContent = this.l(`已保存 ${dirty.length} 个文件`, `Saved ${dirty.length} file${dirty.length === 1 ? '' : 's'}`)
   }
 
   private cycleAutoSave(): void {
@@ -3983,7 +4181,8 @@ class App {
           )
         }
       } catch (error) {
-        this.showError(`Auto Save could not save “${doc.name}”.`, error)
+        const name = this.displayDocName(doc)
+        this.showError(this.l(`自动保存无法保存“${name}”。`, `Auto Save could not save “${name}”.`), error)
       } finally {
         this.autoSaveInFlight.delete(doc.id)
         // A new text/encoding/EOL edit may have landed while this snapshot was
@@ -4010,8 +4209,13 @@ class App {
       return
     }
     const dirty = ids.map((id) => this.docs.find((doc) => doc.id === id)).filter((doc): doc is Doc => !!doc && isDirty(doc))
-    const detail = dirty.length > 0 ? ` ${dirty.length} have unsaved changes.` : ''
-    if (!window.confirm(`Close ${ids.length} tab${ids.length === 1 ? '' : 's'}?${detail}`)) return
+    const detail = dirty.length > 0
+      ? this.l(` 其中 ${dirty.length} 个有未保存的更改。`, ` ${dirty.length} have unsaved changes.`)
+      : ''
+    if (!window.confirm(this.l(
+      `要关闭 ${ids.length} 个标签页吗？${detail}`,
+      `Close ${ids.length} tab${ids.length === 1 ? '' : 's'}?${detail}`
+    ))) return
     for (const id of ids) this.closeDocFromGroup(id, group.id, false)
     if (skippedPinned > 0) this.statusSelection.textContent = this.settings.locale === 'zh-CN'
       ? `已保留 ${skippedPinned} 个固定标签`
@@ -4022,7 +4226,11 @@ class App {
     const doc = this.docs.find((candidate) => candidate.id === id)
     const group = this.groups[groupIndex]
     if (!doc || !group) return
-    if (confirmClose && isDirty(doc) && !confirm(`"${doc.name}" has unsaved changes. Close anyway?`)) return
+    const displayName = this.displayDocName(doc)
+    if (confirmClose && isDirty(doc) && !confirm(this.l(
+      `“${displayName}”有未保存的更改，仍要关闭吗？`,
+      `"${displayName}" has unsaved changes. Close anyway?`
+    ))) return
     this.beginNavigationIntent()
     const wasActive = group.activeId === id
     const wasRendered = group.renderedDocId === id
@@ -4077,7 +4285,7 @@ class App {
       await this.openLoadedFile(file)
       if (this.docs.length > before || this.docs.some((doc) => doc.path === closed.path)) this.closedStack.pop()
     } catch (error) {
-      this.showError(`Could not reopen “${baseName(closed.path)}”.`, error)
+      this.showError(this.l(`无法重新打开“${baseName(closed.path)}”。`, `Could not reopen “${baseName(closed.path)}”.`), error)
     }
   }
 
@@ -4089,9 +4297,10 @@ class App {
     this.organizePinnedTabs()
     this.renderTabs()
     this.scheduleSessionSave()
+    const name = this.displayDocName(doc)
     this.statusSelection.textContent = this.settings.locale === 'zh-CN'
-      ? `${doc.pinned ? '已固定' : '已取消固定'}“${doc.name}”`
-      : `${doc.pinned ? 'Pinned' : 'Unpinned'} “${doc.name}”`
+      ? `${doc.pinned ? '已固定' : '已取消固定'}“${name}”`
+      : `${doc.pinned ? 'Pinned' : 'Unpinned'} “${name}”`
   }
 
   /** Preserve each group's local order while always showing pinned documents first. */
@@ -4156,7 +4365,9 @@ class App {
     if (index >= 0) doc.bookmarks.splice(index, 1)
     else doc.bookmarks.push(line)
     doc.bookmarks.sort((a, b) => a - b)
-    this.statusSelection.textContent = doc.bookmarks.includes(line) ? `Bookmark: line ${line}` : 'Bookmark removed'
+    this.statusSelection.textContent = doc.bookmarks.includes(line)
+      ? this.l(`书签：第 ${line} 行`, `Bookmark: line ${line}`)
+      : this.l('书签已移除', 'Bookmark removed')
   }
 
   private gotoBookmark(delta: number): void {
@@ -4178,16 +4389,16 @@ class App {
       this.lastMacro = []
       this.recordedTextEdits = []
       this.macroSteps = []
-      this.statusSelection.textContent = 'Recording macro…'
+      this.statusSelection.textContent = this.l('正在录制宏…', 'Recording macro…')
     } else {
       const steps = this.lastMacro.length + this.recordedTextEdits.length
-      this.statusSelection.textContent = `${steps} macro step${steps === 1 ? '' : 's'} recorded`
+      this.statusSelection.textContent = this.l(`已录制 ${steps} 个宏步骤`, `${steps} macro step${steps === 1 ? '' : 's'} recorded`)
     }
   }
 
   private runMacro(): void {
     if (this.macroSteps.length === 0 && this.lastMacro.length === 0) {
-      this.showError('No recorded macro is available.')
+      this.showError(this.l('没有可用的已录制宏。', 'No recorded macro is available.'))
       return
     }
     this.isReplayingMacro = true
@@ -4203,10 +4414,10 @@ class App {
 
   private async saveMacro(): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a project before saving a macro.')
+      this.showError(this.l('请先打开项目，再保存宏。', 'Open a project before saving a macro.'))
       return
     }
-    const name = window.prompt('Macro name:')?.trim()
+    const name = window.prompt(this.l('宏名称：', 'Macro name:'))?.trim()
     if (!name) return
     try {
       await window.editor.writeMacro(this.folder, {
@@ -4215,26 +4426,30 @@ class App {
         ...(this.macroSteps.length > 0 ? { steps: this.macroSteps } : {}),
         ...(this.recordedTextEdits.length > 0 ? { edits: this.recordedTextEdits } : {})
       })
-      this.statusSelection.textContent = `Saved macro: ${name}`
+      this.statusSelection.textContent = this.l(`已保存宏：${name}`, `Saved macro: ${name}`)
     } catch (error) {
-      this.showError('Macro could not be saved.', error)
+      this.showError(this.l('无法保存宏。', 'Macro could not be saved.'), error)
     }
   }
 
   private async runSavedMacro(): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a project before running a saved macro.')
+      this.showError(this.l('请先打开项目，再运行已保存的宏。', 'Open a project before running a saved macro.'))
       return
     }
     try {
       const macros = await window.editor.listMacros(this.folder)
       if (macros.length === 0) {
-        this.showError('No saved macros are available for this project.')
+        this.showError(this.l('此项目没有可用的已保存宏。', 'No saved macros are available for this project.'))
         return
       }
       this.palette.open({
-        placeholder: 'Run saved macro…',
-        items: macros.map((macro) => ({ label: macro.name, detail: `${macro.commands.length} command step${macro.commands.length === 1 ? '' : 's'}`, value: macro })),
+        placeholder: this.l('运行已保存的宏…', 'Run saved macro…'),
+        items: macros.map((macro) => ({
+          label: macro.name,
+          detail: this.l(`${macro.commands.length} 个命令步骤`, `${macro.commands.length} command step${macro.commands.length === 1 ? '' : 's'}`),
+          value: macro
+        })),
         onAccept: (item) => {
           const macro = item.value as import('../../shared/ipc.js').SavedMacro
           this.isReplayingMacro = true
@@ -4251,7 +4466,7 @@ class App {
         }
       })
     } catch (error) {
-      this.showError('Saved macros could not be loaded.', error)
+      this.showError(this.l('无法加载已保存的宏。', 'Saved macros could not be loaded.'), error)
     }
   }
 
@@ -4289,18 +4504,18 @@ class App {
 
   private insertSnippet(): void {
     const snippets = [
-      { label: 'Console log', value: 'console.log(${1:value})' },
-      { label: 'Function', value: 'function ${1:name}(${2:args}) {\n  ${0}\n}' },
-      { label: 'Try / catch', value: 'try {\n  ${1}\n} catch (error) {\n  ${2}\n}' }
+      { label: this.l('控制台日志', 'Console log'), value: 'console.log(${1:value})' },
+      { label: this.l('函数', 'Function'), value: 'function ${1:name}(${2:args}) {\n  ${0}\n}' },
+      { label: this.l('异常处理（try / catch）', 'Try / catch'), value: 'try {\n  ${1}\n} catch (error) {\n  ${2}\n}' }
     ]
     for (const plugin of this.plugins) {
       for (const snippet of plugin.snippets) {
         snippets.push({ label: `${plugin.name}: ${snippet.label}`, value: snippet.text })
       }
     }
-    for (const snippet of this.project.snippets ?? []) snippets.push({ label: `Project: ${snippet.label}`, value: snippet.text })
+    for (const snippet of this.project.snippets ?? []) snippets.push({ label: `${this.l('项目', 'Project')}: ${snippet.label}`, value: snippet.text })
     this.palette.open({
-      placeholder: 'Insert snippet…',
+      placeholder: this.l('插入代码片段…', 'Insert snippet…'),
       items: snippets,
       onAccept: (item) => this.editor.insertSnippet(String(item.value))
     })
@@ -4404,9 +4619,10 @@ class App {
     doc.content = this.editor.getContent()
     const destructive = isDirty(doc) || doc.externalChange !== undefined
     if (destructive) {
+      const name = this.displayDocName(doc)
       const question = this.settings.locale === 'zh-CN'
-        ? `使用${selectedLabel}从磁盘重新打开“${doc.name}”？所有未保存文本及待保存的编码/换行符选择都将丢失。`
-        : `Reopen “${doc.name}” from disk using ${selectedLabel}? All unsaved text and pending encoding/line-ending choices will be lost.`
+        ? `使用${selectedLabel}从磁盘重新打开“${name}”？所有未保存文本及待保存的编码/换行符选择都将丢失。`
+        : `Reopen “${name}” from disk using ${selectedLabel}? All unsaved text and pending encoding/line-ending choices will be lost.`
       if (!window.confirm(question)) return
     }
 
@@ -4424,7 +4640,8 @@ class App {
         ? await window.editor.reopenWithEncoding(requestedPath, { encoding })
         : await window.editor.openPath(requestedPath)
     } catch (error) {
-      this.showError(this.settings.locale === 'zh-CN' ? `无法使用${selectedLabel}重新打开“${doc.name}”。` : `Could not reopen “${doc.name}” using ${selectedLabel}.`, error)
+      const name = this.displayDocName(doc)
+      this.showError(this.settings.locale === 'zh-CN' ? `无法使用${selectedLabel}重新打开“${name}”。` : `Could not reopen “${name}” using ${selectedLabel}.`, error)
     } finally {
       this.encodingReopenInFlight.delete(doc.id)
     }
@@ -4477,13 +4694,14 @@ class App {
     this.updateStatus()
     this.scheduleSessionSave()
     this.scheduleLanguageServerSync(current)
+    const currentName = this.displayDocName(current)
     this.notify(opened.encodingIssue === 'invalid-bytes'
       ? (this.settings.locale === 'zh-CN'
           ? `已使用${selectedLabel}打开，但检测到不能无损往返的字节；保存已禁用。`
           : `Reopened using ${selectedLabel}, but some bytes cannot round-trip; saving is disabled.`)
       : (this.settings.locale === 'zh-CN'
-          ? `已使用${selectedLabel}重新打开“${current.name}”（${encodingLabel(opened.encoding)}）。`
-          : `Reopened “${current.name}” using ${selectedLabel} (${encodingLabel(opened.encoding)}).`))
+          ? `已使用${selectedLabel}重新打开“${currentName}”（${encodingLabel(opened.encoding)}）。`
+          : `Reopened “${currentName}” using ${selectedLabel} (${encodingLabel(opened.encoding)}).`))
   }
 
   private expandSnippetTrigger(): boolean {
@@ -4536,16 +4754,20 @@ class App {
   /** Execute the configured build command inside the active project directory. */
   private async runBuild(command: string): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a folder before running a build.')
+      this.showError(this.l('请先打开文件夹，再运行构建。', 'Open a folder before running a build.'))
       return
     }
     if (!command) {
       this.languageServerPanel.toggle(false)
       this.buildPanel.toggle(true)
-      this.showError('Enter a build command, such as “npm test”.')
+      this.showError(this.l('请输入构建命令，例如“npm test”。', 'Enter a build command, such as “npm test”.'))
       return
     }
-    if (!this.confirmExternalTool(command, 'build command')) return
+    if (!this.confirmExternalTool(
+      { kind: 'build-command', root: this.folder, command, args: [], shell: true },
+      command,
+      this.l('构建命令', 'build command')
+    )) return
     this.settings.buildCommand = command
     this.project.buildCommand = command
     this.persistSettings()
@@ -4558,14 +4780,14 @@ class App {
     try {
       await window.editor.runBuild({ root: this.folder, command, shell: true })
     } catch (error) {
-      this.showError('The build could not be started.', error)
+      this.showError(this.l('无法启动构建。', 'The build could not be started.'), error)
     }
   }
 
   private selectBuildSystem(): void {
     const systems = this.project.buildSystems
     if (systems.length === 0) {
-      this.showError('Add buildSystems to .lumen-project.json first.')
+      this.showError(this.l('请先在 .lumen-project.json 中添加 buildSystems。', 'Add buildSystems to .lumen-project.json first.'))
       return
     }
     const items: PaletteItem[] = []
@@ -4589,7 +4811,7 @@ class App {
       }
     }
     this.palette.open({
-      placeholder: 'Select Build System',
+      placeholder: this.l('选择构建系统', 'Select Build System'),
       items,
       onAccept: (item) => {
         this.activeBuildSystem = (item.value as { system: BuildSystem }).system
@@ -4601,31 +4823,53 @@ class App {
 
   private async importSublimeBuild(): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a project before importing a Sublime build system.')
+      this.showError(this.l('请先打开项目，再导入 Sublime 构建系统。', 'Open a project before importing a Sublime build system.'))
       return
     }
     try {
       const imported = await window.editor.importSublimeBuild()
       if (!imported) return
       const detail = `${imported.system.name}\n${imported.system.command} ${imported.system.args.join(' ')}`.trim()
-      if (!window.confirm(`Import Sublime build system?\n\n${detail}\n\nThe command will still require per-session approval before it runs.`)) return
+      if (!window.confirm(this.l(
+        `要导入 Sublime 构建系统吗？\n\n${detail}\n\n命令运行前仍需在每个会话中单独批准。`,
+        `Import Sublime build system?\n\n${detail}\n\nThe command will still require per-session approval before it runs.`
+      ))) return
       this.project.buildSystems = [imported.system, ...this.project.buildSystems.filter((system) => system.name !== imported.system.name)].slice(0, 30)
       await this.saveProject()
       this.activeBuildSystem = imported.system
       this.buildPanel.setCommand(imported.system.command)
-      this.statusSelection.textContent = `Imported Sublime build system: ${imported.system.name}`
+      this.statusSelection.textContent = this.l(`已导入 Sublime 构建系统：${imported.system.name}`, `Imported Sublime build system: ${imported.system.name}`)
     } catch (error) {
-      this.showError('Sublime build system could not be imported.', error)
+      this.showError(this.l('无法导入 Sublime 构建系统。', 'Sublime build system could not be imported.'), error)
     }
   }
 
   private async runBuildSystem(system: BuildSystem): Promise<void> {
     if (!this.folder) {
-      this.showError('Open a folder before running a build.')
+      this.showError(this.l('请先打开文件夹，再运行构建。', 'Open a folder before running a build.'))
       return
     }
     if (system.saveBeforeBuild) await this.save(false)
-    if (!this.confirmExternalTool(system.command, `build system “${system.name}”`)) return
+    const active = this.active
+    const variables = this.buildVariables(active)
+    const request = {
+      root: this.folder,
+      name: system.name,
+      command: this.expandBuildVariables(system.command, variables),
+      args: system.args.map((arg) => this.expandBuildVariables(arg, variables)),
+      workingDirectory: system.workingDirectory ? this.expandBuildVariables(system.workingDirectory, variables) : undefined,
+      fileRegex: system.fileRegex,
+      shell: system.shell,
+      env: Object.fromEntries(Object.entries(system.env ?? {}).map(([key, value]) => [key, this.expandBuildVariables(value, variables)]))
+    }
+    if (!this.confirmExternalTool(
+      {
+        kind: 'build-system', root: request.root, command: request.command, args: request.args,
+        workingDirectory: request.workingDirectory, shell: request.shell, env: request.env
+      },
+      [request.command, ...request.args].join(' '),
+      this.l(`构建系统“${system.name}”`, `build system “${system.name}”`)
+    )) return
     this.activeBuildSystem = system
     this.buildPanel.setCommand(system.command)
     this.buildPanel.clear()
@@ -4633,20 +4877,9 @@ class App {
     this.languageServerPanel.toggle(false)
     this.buildPanel.toggle(true)
     try {
-      const active = this.active
-      const variables = this.buildVariables(active)
-      await window.editor.runBuild({
-        root: this.folder,
-        name: system.name,
-        command: this.expandBuildVariables(system.command, variables),
-        args: system.args.map((arg) => this.expandBuildVariables(arg, variables)),
-        workingDirectory: system.workingDirectory ? this.expandBuildVariables(system.workingDirectory, variables) : undefined,
-        fileRegex: system.fileRegex
-        , shell: system.shell
-        , env: Object.fromEntries(Object.entries(system.env ?? {}).map(([key, value]) => [key, this.expandBuildVariables(value, variables)]))
-      })
+      await window.editor.runBuild(request)
     } catch (error) {
-      this.showError('The build system could not be started.', error)
+      this.showError(this.l('无法启动构建系统。', 'The build system could not be started.'), error)
     }
   }
 
@@ -4675,8 +4908,27 @@ class App {
 
   private handleBuildOutput(output: BuildOutput): void {
     this.buildPanel.append(output)
-    if (output.kind === 'stdout' || output.kind === 'stderr') this.buildOutputText += output.text
+    if (output.kind === 'stdout' || output.kind === 'stderr') this.appendBuildOutputText(output.text)
     if (output.kind === 'exit') this.buildPanel.setProblems(this.parseBuildProblems())
+  }
+
+  /** Keep the hidden problem-parser buffer bounded just like the visible build log. */
+  private appendBuildOutputText(text: string): void {
+    this.buildOutputText += text
+    const excess = this.buildOutputText.length - App.maxBuildOutputChars
+    if (excess <= 0) return
+    let cutAt = excess
+    if (cutAt < this.buildOutputText.length && cutAt > 0 &&
+        this.buildOutputText.charCodeAt(cutAt) >= 0xdc00 && this.buildOutputText.charCodeAt(cutAt) <= 0xdfff &&
+        this.buildOutputText.charCodeAt(cutAt - 1) >= 0xd800 && this.buildOutputText.charCodeAt(cutAt - 1) <= 0xdbff) {
+      cutAt += 1
+    }
+    // Prefer dropping the remainder of a partial first line. Otherwise a
+    // truncated path fragment could be mistaken for a real compiler problem.
+    const nextLine = this.buildOutputText.indexOf('\n', cutAt)
+    this.buildOutputText = nextLine >= 0 && nextLine + 1 < this.buildOutputText.length
+      ? this.buildOutputText.slice(nextLine + 1)
+      : ''
   }
 
   /** Open a project-scoped shell only after explicit per-session approval. */
@@ -4837,7 +5089,11 @@ class App {
     const doc = this.active
     const server = doc ? this.project.languageServers[doc.language] : undefined
     if (server && this.folder && doc?.path) {
-      if (!this.confirmExternalTool(server.command, `language server for ${doc.language}`)) return
+      if (!this.confirmExternalTool(
+        { kind: 'language-server', root: this.folder, command: server.command, args: server.args },
+        [server.command, ...server.args].join(' '),
+        this.l(`${doc.language} 语言服务器`, `language server for ${doc.language}`)
+      )) return
       try {
         const result = await window.editor.runLanguageServer({
           root: this.folder,
@@ -4849,17 +5105,22 @@ class App {
         this.applyLanguageServerResult(result)
         return
       } catch (error) {
-        this.showError('The configured language server could not run.', error)
+        this.showError(this.l('配置的语言服务器无法运行。', 'The configured language server could not run.'), error)
         return
       }
     }
     const tool = doc ? this.project.languageTools[doc.language] : undefined
     if (tool && this.folder) {
-      if (!this.confirmExternalTool(tool.command, 'language tool')) return
+      const toolCommand = [tool.command, ...tool.args].join(' ')
+      if (!this.confirmExternalTool(
+        { kind: 'language-tool', root: this.folder, command: tool.command, args: tool.args, shell: true },
+        toolCommand,
+        this.l('语言工具', 'language tool')
+      )) return
       try {
         const result = await window.editor.runLanguageTool({
           root: this.folder,
-          command: [tool.command, ...tool.args].join(' '),
+          command: toolCommand,
           content,
           filePath: this.active?.path ?? null
         })
@@ -4867,11 +5128,11 @@ class App {
         if (doc) doc.diagnostics = result.diagnostics
         this.editor.setDiagnostics(result.diagnostics.map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
         this.statusSelection.textContent = result.diagnostics.length
-          ? `${result.diagnostics.length} diagnostic${result.diagnostics.length === 1 ? '' : 's'}`
-          : 'Language tool completed'
+          ? this.l(`${result.diagnostics.length} 条诊断`, `${result.diagnostics.length} diagnostic${result.diagnostics.length === 1 ? '' : 's'}`)
+          : this.l('语言工具已完成', 'Language tool completed')
         return
       } catch (error) {
-        this.showError('The configured language tool could not run.', error)
+        this.showError(this.l('配置的语言工具无法运行。', 'The configured language tool could not run.'), error)
         return
       }
     }
@@ -4904,8 +5165,8 @@ class App {
     if (doc) doc.diagnostics = result.diagnostics
     this.editor.setDiagnostics(result.diagnostics.map((diagnostic) => this.toCodeMirrorDiagnostic(diagnostic)))
     this.statusSelection.textContent = result.diagnostics.length
-      ? `${result.diagnostics.length} diagnostic${result.diagnostics.length === 1 ? '' : 's'}`
-      : 'Language server completed'
+      ? this.l(`${result.diagnostics.length} 条诊断`, `${result.diagnostics.length} diagnostic${result.diagnostics.length === 1 ? '' : 's'}`)
+      : this.l('语言服务器已完成', 'Language server completed')
   }
 
   private toCodeMirrorDiagnostic(diagnostic: {
@@ -4924,13 +5185,21 @@ class App {
     return { from, to, severity: diagnostic.severity, message: diagnostic.message, source: 'language-tool' }
   }
 
-  private confirmExternalTool(command: string, label: string): boolean {
-    const key = `${label}\u0000${command}`
+  private confirmExternalTool(identity: ExternalToolApproval, displayCommand: string, label: string): boolean {
+    // Labels are localised presentation. Scope approval to the exact execution
+    // identity so another project or a command with different arguments, cwd,
+    // environment, shell mode, or purpose must be confirmed independently.
+    const key = JSON.stringify({
+      ...identity,
+      root: normalizeWorkspacePath(identity.root),
+      args: [...(identity.args ?? [])],
+      env: Object.fromEntries(Object.entries(identity.env ?? {}).sort(([left], [right]) => left.localeCompare(right)))
+    })
     if (this.approvedExternalTools.has(key)) return true
-    const approved = window.confirm(
-      `Run the configured ${label}?\n\n${command}\n\n` +
-        'This starts a local process from the project configuration. Approval lasts for this app session.'
-    )
+    const approved = window.confirm(this.l(
+      `要运行配置的${label}吗？\n\n${displayCommand}\n\n这会根据项目配置启动本地进程。批准仅在本次应用会话中有效。`,
+      `Run the configured ${label}?\n\n${displayCommand}\n\nThis starts a local process from the project configuration. Approval lasts for this app session.`
+    ))
     if (approved) this.approvedExternalTools.add(key)
     return approved
   }
@@ -5000,7 +5269,9 @@ class App {
     document.getElementById('main')?.setAttribute('aria-label', locale === 'zh-CN' ? '编辑器' : 'Editor')
     document.getElementById('status-bar')?.setAttribute('aria-label', locale === 'zh-CN' ? '文档状态' : 'Document status')
     this.tree?.setLocale(locale)
+    this.extensionHost.setLocale(locale)
     if (!this.folder) this.workspaceName.textContent = this.t('noFolder')
+    else if (this.folders.length > 1) this.workspaceName.textContent = this.l(`${this.folders.length} 个文件夹`, `${this.folders.length} FOLDERS`)
     this.statusLanguage.textContent = this.active?.language === 'Plain Text' || !this.active
       ? this.t('plainText')
       : this.active.language
@@ -5016,10 +5287,31 @@ class App {
     this.jsonFormatBtn.textContent = locale === 'zh-CN' ? '格式化' : 'Format'
     this.jsonCompactBtn.textContent = locale === 'zh-CN' ? '压缩' : 'Compact'
     this.jsonViewBtn.textContent = locale === 'zh-CN' ? '视图' : 'View'
+    const previewTitle = this.l('Markdown 预览（Ctrl/Cmd+Shift+V）', 'Markdown Preview (Ctrl/Cmd+Shift+V)')
+    const previewLabel = this.l('Markdown 预览', 'Markdown Preview')
+    this.previewBtn.title = previewTitle
+    this.previewBtn.setAttribute('aria-label', previewLabel)
+    this.previewBtn.dataset.tooltip = previewLabel
+    const browserTitle = this.l('使用浏览器打开当前 HTML', 'Open Current HTML in Browser')
+    const browserLabel = this.l('使用浏览器打开', 'Open in Browser')
+    this.browserBtn.title = browserTitle
+    this.browserBtn.setAttribute('aria-label', browserTitle)
+    this.browserBtn.dataset.tooltip = browserLabel
     this.jsonFormatBtn.title = this.t('formatJson')
     this.jsonCompactBtn.title = this.t('compactJson')
     this.jsonViewBtn.title = this.t('jsonView')
+    const conflictLabels: Record<string, string> = {
+      compare: this.l('比较', 'Compare'),
+      reload: this.l('重新加载磁盘版本', 'Reload Disk'),
+      keep: this.l('保留本地版本', 'Keep Local'),
+      'save-as': this.l('本地版本另存为…', 'Save Local As…')
+    }
+    for (const button of this.conflictBar?.querySelectorAll<HTMLButtonElement>('[data-conflict-action]') ?? []) {
+      button.textContent = conflictLabels[button.dataset.conflictAction ?? ''] ?? button.textContent
+    }
+    if (this.conflictDoc) this.showExternalConflict(this.conflictDoc)
     if (this.groups.length > 0) {
+      this.renderTabs()
       this.updateStatus()
       this.syncEditorChrome()
       this.syncOutline(true)
@@ -5044,7 +5336,10 @@ class App {
     }
     const root = this.folder
     this.palette.open({
-      placeholder: 'Goto Anything — file, :line[:column], @symbol, #project symbol',
+      placeholder: this.l(
+        '跳转到任意位置 — 文件、:行[:列]、@符号、#项目符号',
+        'Goto Anything — file, :line[:column], @symbol, #project symbol'
+      ),
       onQuery: async (query) => {
         if (query.startsWith('#')) await this.ensureProjectSymbols()
         return this.gotoAnythingItems(query, files, root)
@@ -5105,7 +5400,7 @@ class App {
     if (query.startsWith(':')) {
       const location = this.parseGotoLocation(query.slice(1))
       const suffix = location ? ` ${location.line}${location.column ? `:${location.column}` : ''}` : ' …'
-      return [{ label: `Go to${suffix}`, value: { kind: 'line', line: location?.line ?? Number.NaN, column: location?.column } }]
+      return [{ label: this.l(`跳转到${suffix}`, `Go to${suffix}`), value: { kind: 'line', line: location?.line ?? Number.NaN, column: location?.column } }]
     }
     // "@sym" → symbols in the current file.
     if (query.startsWith('@')) {
@@ -5153,7 +5448,7 @@ class App {
   /** Ctrl/Cmd+R — symbols in the current document. */
   private openGotoSymbol(): void {
     this.palette.open({
-      placeholder: 'Goto Symbol in file',
+      placeholder: this.l('跳转到文件中的符号', 'Goto Symbol in file'),
       onQuery: (query) => this.symbolItems(query),
       onAccept: (item) => this.acceptGoto(item)
     })
@@ -5167,7 +5462,7 @@ class App {
       : symbols
     return source.slice(0, 200).map((s) => ({
       label: s.label,
-      hint: `Ln ${s.line}`,
+      hint: this.l(`第 ${s.line} 行`, `Ln ${s.line}`),
       value: { kind: 'pos', pos: s.pos }
     }))
   }
@@ -5205,7 +5500,7 @@ class App {
       value: name
     }))
     this.palette.open({
-      placeholder: 'Set syntax…',
+      placeholder: this.l('设置语法…', 'Set syntax…'),
       items,
       onAccept: async (item) => {
         const doc = this.active
@@ -5221,7 +5516,7 @@ class App {
           this.editor.setSpellCheck(this.settings.spellCheck && (this.isMarkdownDoc(doc) || language === 'Plain Text'))
           this.updateStatus()
         } catch (error) {
-          this.showError(`Syntax support for “${name}” could not be loaded.`, error)
+          this.showError(this.l(`无法加载“${name}”的语法支持。`, `Syntax support for “${name}” could not be loaded.`), error)
         }
         // Picking "Markdown" (or leaving it) should immediately reveal/hide the
         // preview icon, so refresh the type-dependent editor chrome.
@@ -5235,7 +5530,7 @@ class App {
   /** Persist settings to disk (fire-and-forget). */
   private persistSettings(): void {
     void window.editor.writeSettings(this.settings).catch((error: unknown) =>
-      this.showError('Settings could not be saved.', error)
+      this.showError(this.l('无法保存设置。', 'Settings could not be saved.'), error)
     )
   }
 
@@ -5270,7 +5565,10 @@ class App {
     // intent and must survive hot exit even when the buffer text is empty.
     const persistedDocs = this.docs.filter((doc) => doc.path !== null || doc.content.length > 0 || isDirty(doc))
     if (persistedDocs.length > MAX_SESSION_OPEN_FILES) {
-      this.showError(`Session recovery supports at most ${MAX_SESSION_OPEN_FILES} open files.`)
+      this.showError(this.l(
+        `会话恢复最多支持 ${MAX_SESSION_OPEN_FILES} 个打开的文件。`,
+        `Session recovery supports at most ${MAX_SESSION_OPEN_FILES} open files.`
+      ))
       return false
     }
     const idToIndex = new Map(persistedDocs.map((doc, index) => [doc.id, index]))
@@ -5305,7 +5603,7 @@ class App {
         const remaining = MAX_SESSION_RECOVERY_BYTES - recoveryBytes
         const bytes = jsonStringUtf8ByteLength(text, remaining)
         if (bytes > remaining) {
-          this.showError('Session recovery data exceeds the supported 200 MiB aggregate limit.')
+          this.showError(this.l('会话恢复数据超过支持的 200 MiB 总上限。', 'Session recovery data exceeds the supported 200 MiB aggregate limit.'))
           return false
         }
         recoveryBytes += bytes
@@ -5330,7 +5628,7 @@ class App {
       await window.editor.writeSession(session)
       return true
     } catch (error) {
-      this.showError('Session recovery data could not be saved.', error)
+      this.showError(this.l('无法保存会话恢复数据。', 'Session recovery data could not be saved.'), error)
       return false
     }
   }
@@ -5353,11 +5651,13 @@ class App {
         const dot = document.createElement('span')
         dot.className = 'tab-dirty'
         dot.textContent = doc.externalChange ? '!' : isDirty(doc) ? '●' : ''
-        dot.title = doc.externalChange ? 'Changed on disk' : isDirty(doc) ? 'Unsaved changes' : ''
+        dot.title = doc.externalChange
+          ? this.l('磁盘内容已更改', 'Changed on disk')
+          : isDirty(doc) ? this.l('有未保存的更改', 'Unsaved changes') : ''
 
         const label = document.createElement('span')
         label.className = 'tab-label'
-        label.textContent = doc.name
+        label.textContent = this.displayDocName(doc)
 
         const pin = document.createElement('button')
         pin.type = 'button'
@@ -5539,9 +5839,31 @@ class App {
   /** Keep filesystem failures actionable without exposing low-level stacks in the UI. */
   private showError(message: string, error?: unknown): void {
     console.error(message, error)
-    const detail = error instanceof Error && error.message ? `\n\n${error.message}` : ''
-    this.announce(`${message}${detail}`, true)
-    window.alert(`${message}${detail}`)
+    const rawDetail = error instanceof Error ? error.message.trim() : ''
+    this.presentError(message, rawDetail)
+  }
+
+  private showWorkspaceOperationError(
+    fallbackSummary: string,
+    error: WorkspaceOperationError
+  ): void {
+    console.error(fallbackSummary, error)
+    if (error.kind === 'app') {
+      this.presentError(workspaceOperationErrorMessage(this.settings.locale, error), '')
+    } else {
+      this.presentError(fallbackSummary, error.message)
+    }
+  }
+
+  private presentError(message: string, rawDetail: string): void {
+    // Backend, extension and LSP errors may be English even in a Chinese UI.
+    // Keep the translated summary primary while retaining actionable details.
+    const detail = rawDetail
+      ? this.settings.locale === 'zh-CN' ? `\n\n技术详情：${rawDetail}` : `\n\n${rawDetail}`
+      : ''
+    const visible = `${message}${detail}`
+    this.announce(visible, true)
+    window.alert(visible)
   }
 
   /** Put an infrequent result in an independent screen-reader live region. */

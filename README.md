@@ -5,6 +5,32 @@
 A cross-platform desktop text editor built with **Electron + TypeScript + CodeMirror 6**.
 Runs on **Linux, Windows, and macOS** from a single codebase.
 
+An independent **native macOS preview**, implemented with SwiftUI/AppKit, now lives in
+[`native-macos/`](./native-macos/README.md). It covers the main editing workflow but remains a
+preview until the versioned [parity matrix](./docs/NATIVE_MACOS_PARITY.md) and
+[signed-device acceptance checklist](./docs/NATIVE_MACOS_ACCEPTANCE.md) are complete; use the
+Electron release for important files in the meantime.
+
+A **native Windows release candidate** is being rewritten with WinUI 3 / Windows App SDK in
+[`native-windows/`](./native-windows/). File activation and multi-open, find/replace with history, multi-pane
+editing, workspace search/watch, shell-free Build, deep Git workflows, ConPTY terminal, persistent LSP with
+completion and version-pinned diagnostics, declarative plugins, and all 169 command routes are wired. Its native
+RichEditBox surface supports multi-cursor structural edits, line numbers, bounded decorations/minimap,
+source-preserving folds, four color schemes, and parser-grade CodeMirror/Lezer highlighting, folding, outline,
+and indentation for a locked 143-language catalog, with bounded native fallbacks. Markdown uses a CSP-restricted
+rich WebView2 preview. Parser and plugin code run in a separate self-contained worker executable, and x64/arm64
+MSIX packaging plus architecture/content checks and Windows CI process/install-launch smoke tests are configured.
+The Core gate currently passes 185/185 tests. Real Windows GUI, Explorer, accessibility, IME, upgrade, and
+production-signing acceptance still block replacement, as
+tracked in the [Windows parity plan](./docs/NATIVE_WINDOWS_PARITY.md).
+
+An independent **native iOS/iPadOS 17+ preview** lives in
+[`native-ios/`](./native-ios/README.md). Its SwiftUI shell and UIKit TextKit 2 editor are designed around
+the system Files picker, one focused editor, a document switcher sheet, IME safety, durable recovery drafts,
+and coordinated File Provider writes instead of copying the desktop three-column UI or its local
+Terminal/Build processes. See the [mobile parity matrix](./docs/NATIVE_IOS_PARITY.md) and
+[release acceptance checklist](./docs/NATIVE_IOS_ACCEPTANCE.md) for current scope and device-test blockers.
+
 📖 **Full user guide (bilingual):** [`docs/USER_GUIDE.md`](./docs/USER_GUIDE.md)
 
 ## Features
@@ -141,7 +167,7 @@ the renderer calls `window.editor.*`, which invokes handlers in `src/main/files.
 
 ## Prerequisites
 
-- **Node.js** ≥ 18 (developed on v22)
+- **Node.js** ≥ 20 (developed on v22)
 - Internet access to download the Electron binary on first `npm install`.
   In restricted networks set a mirror, e.g.:
   ```bash
@@ -169,6 +195,11 @@ verifies it, and starts the editor. It only touches
 `node_modules/electron/dist/Electron.app`; it does not disable Gatekeeper or
 change system-wide security settings. `npm run fix:mac` remains available when
 you want to repair without launching.
+
+To build the native preview on macOS 14 with Xcode 15.3 or newer, follow the
+[native build and verification instructions](./native-macos/README.md#构建与测试). The native app
+uses a separate bundle ID and Application Support directory, so it can coexist with the Electron
+application without sharing settings or recovery data.
 
 > ⚠️ **Do NOT run `npm audit fix --force`.** The reported advisories are all in build-time
 > tooling and are never bundled into the app; `--force` upgrades the toolchain to mutually

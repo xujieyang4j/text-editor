@@ -8,18 +8,31 @@ import path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { applyLineEnding, detectLineEnding, isTextEncoding, jsonStringUtf8ByteLength, normalizeLineEndings } from '../shared/text.js'
 import { decodeTextAuto, decodeTextWithEncoding, detectTextEncoding, encodeTextBytes } from './textEncoding.js'
-import { isBinaryBuffer, maxEditableBytes } from '../shared/filePolicy.js'
+import {
+  isBinaryBuffer, maxEditableBytes, migrateMaximumFileSizeMB
+} from '../shared/filePolicy.js'
+import { planFileOpenBatch } from '../shared/fileOpenBatch.js'
 import { extractWorkspaceSymbols } from '../shared/symbolIndex.js'
 import { parseGitRemoteLines, parseGitTracking } from '../shared/git.js'
 import { createLspMessageReader, encodeLspMessage, LspProtocolError } from '../shared/lspProtocol.js'
 import { applyEditorConfigChain, parseEditorConfig } from '../shared/editorConfig.js'
 import {
+  canRetainWorkspaceUndoSnapshot,
+  createWorkspaceUndoToken,
+  isWorkspaceUndoAuthorized
+} from './workspaceUndo.js'
+import {
   IPC,
   MAX_SESSION_OPEN_FILES,
   MAX_SESSION_RECOVERY_BYTES,
+  MAX_WORKSPACE_IPC_STRING_LENGTH,
+  MAX_WORKSPACE_MATCH_STRING_LENGTH,
+  MAX_WORKSPACE_MATCH_TOTAL_STRING_LENGTH,
+  MAX_WORKSPACE_UNDO_TOKEN_LENGTH,
   DEFAULT_SETTINGS,
   EMPTY_SESSION,
   type OpenedFile,
+  type OpenFilesResult,
   type DroppedPaths,
   type SaveResult,
   type OpenedFolder,
@@ -28,6 +41,7 @@ import {
   type ResolvedEditorConfig,
   type BrowserOpenRequest,
   type Settings,
+  type UiLocale,
   type Session,
   type TextEncoding,
   type FileWriteOptions,
@@ -37,6 +51,12 @@ import {
   type WorkspaceReplaceRequest,
   type WorkspaceReplaceResult,
   type WorkspaceReplacePreview,
+  type WorkspaceOperationError,
+  type WorkspaceOperationIpcResponse,
+  compileWorkspaceSearchRegExp,
+  truncateWorkspaceIpcString,
+  verbatimWorkspaceOperationError,
+  workspaceSearchResultLimit,
   type WorkspaceSymbol,
   type BuildRequest,
   type BuildOutput,
@@ -53,6 +73,8 @@ import {
   type LanguageServerInteractiveRequest,
   type LanguageServerInteractiveResult,
   type LanguageServerStatusEvent,
+  type LanguageServerStatusReason,
+  type LanguageServerStatusReasonParams,
   type LanguageServerLogEvent,
   type LanguageLocation,
   type LanguageRenameEdit,
@@ -82,7 +104,8 @@ import {
 } from '../shared/ipc.js'
 
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024
-const MAX_SEARCH_RESULTS = 5_000
+const MAX_WORKSPACE_SEARCH_ROOTS = 12
+const WORKSPACE_UNDO_TTL_MS = 10 * 60_000
 const MAX_SESSION_SERIALIZED_BYTES = MAX_SESSION_RECOVERY_BYTES + 8 * 1024 * 1024
 const MAX_EDITOR_CONFIG_LEVELS = 32
 const MAX_EDITOR_CONFIG_FILE_BYTES = 64 * 1024
@@ -165,6 +188,13 @@ interface LanguageServerDocumentSnapshot {
   languageId: string
   version: number
 }
+interface LanguageServerStatusDetail {
+  /** Raw server/OS detail that must remain verbatim when shown. */
+  message?: string
+  /** Stable application-owned explanation rendered in the receiver's locale. */
+  reason?: LanguageServerStatusReason
+  reasonParams?: LanguageServerStatusReasonParams
+}
 interface LanguageServerRestartDescriptor {
   sender: Electron.WebContents
   root: string
@@ -212,13 +242,89 @@ const LANGUAGE_SERVER_GRACEFUL_TIMEOUT_MS = 500
 const LANGUAGE_SERVER_CLOSE_TIMEOUT_MS = 500
 const execFileAsync = promisify(execFile)
 const windowSessionIds = new Map<number, string>()
-const replaceUndoTransactions = new Map<string, {
+/** Native UI language belongs to a renderer window, not to the process globally. */
+const windowLocales = new WeakMap<Electron.WebContents, UiLocale>()
+interface ReplaceUndoTransaction {
+  ownerId: number
+  roots: ReadonlySet<string>
   expiresAt: number
   files: Map<string, { content: Buffer; expectedRevision: string }>
-}>()
+}
+const replaceUndoTransactions = new Map<string, ReplaceUndoTransaction>()
+const replaceUndoSenderCleanupBound = new WeakSet<Electron.WebContents>()
+/** A mutating workspace operation leases its roots until every write has settled. */
+const activeWorkspaceMutationRoots = new Map<number, ReadonlySet<string>>()
+const deferredGrantCleanup = new Set<number>()
 const pendingSublimeImports = new Map<string, { senderId: number; expiresAt: number; sourcePath: string; roots: string[]; project: Session['project'] }>()
 const grantedFiles = new Map<number, Set<string>>()
 const grantedRoots = new Map<number, Set<string>>()
+
+interface NativeDialogLabels {
+  openFile: string
+  openFolder: string
+  saveFile: string
+  moveTo: string
+  importSublimeSettings: string
+  sublimeSettings: string
+  importSublimeBuild: string
+  sublimeBuild: string
+  importSublimeProject: string
+  sublimeProject: string
+  importSublimeSnippet: string
+  sublimeSnippet: string
+  importSublimeKeymap: string
+  sublimeKeymap: string
+}
+
+const NATIVE_DIALOG_LABELS: Record<UiLocale, NativeDialogLabels> = {
+  'zh-CN': {
+    openFile: '打开文件',
+    openFolder: '打开文件夹',
+    saveFile: '保存文件',
+    moveTo: '移动到',
+    importSublimeSettings: '导入 Sublime 设置',
+    sublimeSettings: 'Sublime 设置',
+    importSublimeBuild: '导入 Sublime 构建系统',
+    sublimeBuild: 'Sublime 构建系统',
+    importSublimeProject: '导入 Sublime 项目',
+    sublimeProject: 'Sublime 项目',
+    importSublimeSnippet: '导入 Sublime 代码片段',
+    sublimeSnippet: 'Sublime 代码片段',
+    importSublimeKeymap: '导入 Sublime 键位映射',
+    sublimeKeymap: 'Sublime 键位映射'
+  },
+  'en-US': {
+    openFile: 'Open File',
+    openFolder: 'Open Folder',
+    saveFile: 'Save File',
+    moveTo: 'Move To',
+    importSublimeSettings: 'Import Sublime Settings',
+    sublimeSettings: 'Sublime Settings',
+    importSublimeBuild: 'Import Sublime Build System',
+    sublimeBuild: 'Sublime Build System',
+    importSublimeProject: 'Import Sublime Project',
+    sublimeProject: 'Sublime Project',
+    importSublimeSnippet: 'Import Sublime Snippet',
+    sublimeSnippet: 'Sublime Snippet',
+    importSublimeKeymap: 'Import Sublime Keymap',
+    sublimeKeymap: 'Sublime Keymap'
+  }
+}
+
+/** Store a validated locale for one renderer. Invalid IPC values use the product default. */
+export function setWindowLocale(contents: Electron.WebContents, locale: unknown): UiLocale {
+  const normalized: UiLocale = locale === 'en-US' ? 'en-US' : 'zh-CN'
+  windowLocales.set(contents, normalized)
+  return normalized
+}
+
+export function getWindowLocale(contents: Electron.WebContents): UiLocale {
+  return windowLocales.get(contents) ?? DEFAULT_SETTINGS.locale
+}
+
+function dialogLabels(contents: Electron.WebContents): NativeDialogLabels {
+  return NATIVE_DIALOG_LABELS[getWindowLocale(contents)]
+}
 
 /** Reject renderer IPC from anything except this app's renderer document. */
 function assertTrustedSender(event: IpcMainInvokeEvent): void {
@@ -264,12 +370,17 @@ function isInside(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
 }
 
-function assertGrantedFile(event: IpcMainInvokeEvent, candidate: string): void {
+function isGrantedFileForSender(senderId: number, candidate: string): boolean {
   const resolved = path.resolve(candidate)
-  const senderId = event.sender.id
   const direct = grantedFiles.get(senderId)?.has(resolved)
   const insideGrantedRoot = [...(grantedRoots.get(senderId) ?? [])].some((root) => isInside(root, resolved))
-  if (!direct && !insideGrantedRoot) throw new Error('This path has not been authorised for the current editor window.')
+  return direct === true || insideGrantedRoot
+}
+
+function assertGrantedFile(event: IpcMainInvokeEvent, candidate: string): void {
+  if (!isGrantedFileForSender(event.sender.id, candidate)) {
+    throw new Error('This path has not been authorised for the current editor window.')
+  }
 }
 
 function assertGrantedRoot(event: IpcMainInvokeEvent, root: string): void {
@@ -454,8 +565,49 @@ function finishLanguageServerRootRelease(sender: Electron.WebContents, root: str
 }
 
 function cleanupGrants(senderId: number): void {
+  if (activeWorkspaceMutationRoots.has(senderId)) {
+    deferredGrantCleanup.add(senderId)
+    return
+  }
   grantedFiles.delete(senderId)
   grantedRoots.delete(senderId)
+}
+
+function cleanupReplaceUndoTransactions(senderId: number): void {
+  for (const [token, transaction] of replaceUndoTransactions) {
+    if (transaction.ownerId === senderId) replaceUndoTransactions.delete(token)
+  }
+}
+
+function cleanupReplaceUndoTransactionsForRoot(senderId: number, root: string): void {
+  for (const [token, transaction] of replaceUndoTransactions) {
+    if (transaction.ownerId === senderId && transaction.roots.has(root)) {
+      replaceUndoTransactions.delete(token)
+    }
+  }
+}
+
+function pruneReplaceUndoTransactions(now = Date.now()): void {
+  for (const [token, transaction] of replaceUndoTransactions) {
+    if (transaction.expiresAt <= now && !activeWorkspaceMutationRoots.has(transaction.ownerId)) {
+      replaceUndoTransactions.delete(token)
+    }
+  }
+}
+
+function endWorkspaceMutationLease(senderId: number): void {
+  activeWorkspaceMutationRoots.delete(senderId)
+  if (deferredGrantCleanup.delete(senderId)) cleanupGrants(senderId)
+}
+
+function bindReplaceUndoSenderCleanup(sender: Electron.WebContents): void {
+  if (replaceUndoSenderCleanupBound.has(sender)) return
+  replaceUndoSenderCleanupBound.add(sender)
+  const senderId = sender.id
+  sender.once('destroyed', () => {
+    cleanupReplaceUndoTransactions(senderId)
+    cleanupGrants(senderId)
+  })
 }
 
 function closeWorkspaceWatchers(senderId: number): void {
@@ -476,6 +628,9 @@ function closeWorkspaceWatcher(senderId: number, root: string): void {
 async function releaseWorkspaceRoot(event: IpcMainInvokeEvent, root: string, retainFiles: unknown): Promise<void> {
   const resolvedRoot = path.resolve(root)
   const senderId = event.sender.id
+  if (activeWorkspaceMutationRoots.get(senderId)?.has(resolvedRoot)) {
+    throw new Error('This workspace is in use by an active undo operation.')
+  }
   const roots = grantedRoots.get(senderId)
   if (!roots?.has(resolvedRoot)) throw new Error('This workspace has not been authorised for the current editor window.')
   if (!Array.isArray(retainFiles) || retainFiles.length > 100) throw new Error('Invalid retained workspace files.')
@@ -501,8 +656,14 @@ async function releaseWorkspaceRoot(event: IpcMainInvokeEvent, root: string, ret
       grantFile(senderId, file)
     }
     closeWorkspaceWatcher(senderId, resolvedRoot)
+    // Undo acquisition rejects roots marked as releasing. Recheck the inverse
+    // immediately before revocation so neither operation can cross the other.
+    if (activeWorkspaceMutationRoots.get(senderId)?.has(resolvedRoot)) {
+      throw new Error('This workspace is in use by an active undo operation.')
+    }
     roots.delete(resolvedRoot)
     if (roots.size === 0) grantedRoots.delete(senderId)
+    cleanupReplaceUndoTransactionsForRoot(senderId, resolvedRoot)
   } finally {
     finishLanguageServerRootRelease(event.sender, resolvedRoot)
   }
@@ -878,6 +1039,11 @@ async function readSettings(): Promise<Settings> {
   return sanitizeSettings(await readJson<unknown>(userDataFile('settings.json'), DEFAULT_SETTINGS))
 }
 
+/** Read the persisted, sanitised UI locale without mutating settings or window state. */
+export async function readPersistedUiLocale(): Promise<UiLocale> {
+  return (await readSettings()).locale
+}
+
 async function readJson<T>(file: string, fallback: T, maxBytes?: number): Promise<T> {
   try {
     if (maxBytes !== undefined && (await fs.stat(file)).size > maxBytes) return fallback
@@ -1045,7 +1211,12 @@ function asFiniteInt(value: unknown, fallback: number, min: number, max: number)
 
 function sanitizeSettings(value: unknown): Settings {
   const raw = value && typeof value === 'object' ? (value as Partial<Settings>) : {}
+  const storedFormatVersion = typeof raw.formatVersion === 'number'
+    && Number.isSafeInteger(raw.formatVersion)
+    ? raw.formatVersion
+    : 1
   return {
+    formatVersion: DEFAULT_SETTINGS.formatVersion,
     locale: raw.locale === 'en-US' ? 'en-US' : 'zh-CN',
     fontSize: asFiniteInt(raw.fontSize, DEFAULT_SETTINGS.fontSize, 8, 40),
     tabSize: asFiniteInt(raw.tabSize, DEFAULT_SETTINGS.tabSize, 1, 16),
@@ -1063,7 +1234,13 @@ function sanitizeSettings(value: unknown): Settings {
     rulers: Array.isArray(raw.rulers)
       ? raw.rulers.filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0 && n <= 500).map(Math.round).slice(0, 10)
       : DEFAULT_SETTINGS.rulers,
-    maxFileSizeMB: asFiniteInt(raw.maxFileSizeMB, DEFAULT_SETTINGS.maxFileSizeMB, 1, 200),
+    // Electron settings did not carry a schema marker before v2. Their stock
+    // 20 MB value was a product default, so migrate that legacy default to the
+    // current 200 MB budget. A v2 native/Electron setting that explicitly uses
+    // 20 MB remains untouched.
+    maxFileSizeMB: migrateMaximumFileSizeMB(
+      raw.maxFileSizeMB, storedFormatVersion
+    ),
     buildCommand: typeof raw.buildCommand === 'string' ? raw.buildCommand.slice(0, 1_000) : '',
     colorScheme: raw.colorScheme === 'light' || raw.colorScheme === 'solarized-dark' || raw.colorScheme === 'dracula'
       ? raw.colorScheme
@@ -1434,16 +1611,40 @@ function sanitizeSession(value: unknown, rejectOversizedText = false): Session {
   }
 }
 
-function makeSearchRegExp(request: WorkspaceSearchRequest): RegExp {
-  const query = request.query.slice(0, 2_000)
-  if (!query) throw new Error('Find in Files needs a search term.')
-  const escaped = request.useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const source = request.wholeWord ? `\\b(?:${escaped})\\b` : escaped
-  try {
-    return new RegExp(source, request.caseSensitive ? 'g' : 'gi')
-  } catch {
-    throw new Error('The search expression is invalid.')
+type WorkspaceAppOperationError = Extract<WorkspaceOperationError, { kind: 'app' }>
+
+class WorkspaceOperationFailure extends Error {
+  constructor(readonly payload: WorkspaceAppOperationError) {
+    super(payload.code)
+    this.name = 'WorkspaceOperationFailure'
   }
+}
+
+function failWorkspaceOperation(payload: WorkspaceAppOperationError): never {
+  throw new WorkspaceOperationFailure(payload)
+}
+
+async function workspaceOperationResult<T>(
+  operation: () => Promise<T>
+): Promise<WorkspaceOperationIpcResponse<T>> {
+  try {
+    // Preserve the legacy success shape. Only typed failures use an envelope.
+    return await operation()
+  } catch (error) {
+    if (error instanceof WorkspaceOperationFailure) {
+      return { ok: false, error: error.payload }
+    }
+    return {
+      ok: false,
+      error: verbatimWorkspaceOperationError(error)
+    }
+  }
+}
+
+function makeSearchRegExp(request: WorkspaceSearchRequest): RegExp {
+  const compiled = compileWorkspaceSearchRegExp(request)
+  if (!compiled.ok) failWorkspaceOperation(compiled.error)
+  return compiled.value
 }
 
 function matchesGlob(file: string, root: string, pattern?: string): boolean {
@@ -1477,7 +1678,13 @@ function globToRegExp(glob: string): RegExp {
 function workspaceRoots(request: WorkspaceSearchRequest): string[] {
   assertAbsolutePath(request.root, 'workspace root')
   const candidates = Array.isArray(request.roots) ? [request.root, ...request.roots] : [request.root]
-  if (candidates.length > 12) throw new Error('Too many workspace roots.')
+  if (candidates.length > MAX_WORKSPACE_SEARCH_ROOTS) {
+    failWorkspaceOperation({
+      kind: 'app',
+      code: 'too-many-roots',
+      params: { maximum: MAX_WORKSPACE_SEARCH_ROOTS }
+    })
+  }
   const roots = candidates.map((root) => {
     assertAbsolutePath(root, 'workspace root')
     return path.resolve(root)
@@ -1487,8 +1694,9 @@ function workspaceRoots(request: WorkspaceSearchRequest): string[] {
 
 async function searchWorkspace(request: WorkspaceSearchRequest, requireCertainEncoding = false): Promise<WorkspaceMatch[]> {
   const re = makeSearchRegExp(request)
-  const limit = Math.max(1, Math.min(request.maxResults ?? MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS))
+  const limit = workspaceSearchResultLimit(request.maxResults)
   const results: WorkspaceMatch[] = []
+  let resultStringLength = 0
 
   for (const root of workspaceRoots(request)) {
     if (results.length >= limit) break
@@ -1499,6 +1707,9 @@ async function searchWorkspace(request: WorkspaceSearchRequest, requireCertainEn
         !matchesGlob(file, root, request.include) ||
         (request.exclude?.trim() ? matchesGlob(file, root, request.exclude) : false)
       ) continue
+      // Never truncate an addressable path: doing so would make a displayed
+      // result refer to a different file. Extremely long paths are omitted.
+      if (file.length > MAX_WORKSPACE_IPC_STRING_LENGTH) continue
       try {
         const stat = await fs.stat(file)
         if (stat.size > MAX_SEARCH_FILE_BYTES) continue
@@ -1514,14 +1725,21 @@ async function searchWorkspace(request: WorkspaceSearchRequest, requireCertainEn
           const line = before.split('\n').length
           const lineStart = before.lastIndexOf('\n') + 1
           const lineEnd = content.indexOf('\n', match.index)
-          const sourceLine = content.slice(lineStart, lineEnd < 0 ? content.length : lineEnd)
+          const sourceLine = truncateWorkspaceIpcString(
+            content.slice(lineStart, lineEnd < 0 ? content.length : lineEnd),
+            MAX_WORKSPACE_MATCH_STRING_LENGTH
+          )
+          const matchText = truncateWorkspaceIpcString(match[0], MAX_WORKSPACE_MATCH_STRING_LENGTH)
+          const nextStringLength = resultStringLength + file.length + sourceLine.length + matchText.length
+          if (nextStringLength > MAX_WORKSPACE_MATCH_TOTAL_STRING_LENGTH) return results
           results.push({
             path: file,
             line,
             column: match.index - lineStart + 1,
             lineText: sourceLine,
-            matchText: match[0]
+            matchText
           })
+          resultStringLength = nextStringLength
           if (match[0].length === 0) re.lastIndex += 1
         }
       } catch {
@@ -1532,13 +1750,24 @@ async function searchWorkspace(request: WorkspaceSearchRequest, requireCertainEn
   return results
 }
 
-async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<WorkspaceReplaceResult> {
+async function replaceWorkspace(
+  request: WorkspaceReplaceRequest,
+  owner: Electron.WebContents
+): Promise<WorkspaceReplaceResult> {
+  bindReplaceUndoSenderCleanup(owner)
+  pruneReplaceUndoTransactions()
   const re = makeSearchRegExp(request)
   let changedFiles = 0
   let replacements = 0
+  let undoBytes = 0
+  let undoAvailable = true
   const undoFiles = new Map<string, { content: Buffer; expectedRevision: string }>()
+  const roots = new Set(workspaceRoots(request))
+  // Only the newest replacement is undoable. Drop the preceding snapshot
+  // before allocating this operation's bounded replacement snapshot.
+  cleanupReplaceUndoTransactions(owner.id)
 
-  for (const root of workspaceRoots(request)) {
+  for (const root of roots) {
     const files = await listFilesRecursive(root)
     for (const file of files) {
       if (
@@ -1565,10 +1794,21 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
         if (count === 0 || opened.revision === null) continue
         const original = await fs.readFile(file)
         if (fileRevision(original) !== opened.revision) continue
+        if (undoAvailable
+            && !canRetainWorkspaceUndoSnapshot(undoBytes, undoFiles.size, original.byteLength)) {
+          // Complete the requested replacement, but stop advertising undo if a
+          // complete snapshot cannot fit in the in-memory capability budget.
+          undoAvailable = false
+          undoBytes = 0
+          undoFiles.clear()
+        }
         const nextBytes = encodeText(next, { encoding: opened.encoding, eol: opened.eol })
         const result = await saveFileBytes(file, nextBytes, opened.revision)
         if (!result.saved || !result.revision) continue
-        undoFiles.set(file, { content: original, expectedRevision: result.revision })
+        if (undoAvailable) {
+          undoFiles.set(file, { content: original, expectedRevision: result.revision })
+          undoBytes += original.byteLength
+        }
         changedFiles += 1
         replacements += count
       } catch {
@@ -1576,9 +1816,27 @@ async function replaceWorkspace(request: WorkspaceReplaceRequest): Promise<Works
       }
     }
   }
-  if (undoFiles.size === 0) return { files: changedFiles, replacements }
-  const undoToken = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  replaceUndoTransactions.set(undoToken, { expiresAt: Date.now() + 10 * 60_000, files: undoFiles })
+  if (!undoAvailable || undoFiles.size === 0) return { files: changedFiles, replacements }
+  // A renderer which disappeared while the replace was running cannot own a
+  // usable capability, and its destroyed event may already have fired.
+  if (owner.isDestroyed()) return { files: changedFiles, replacements }
+  let undoToken: string
+  do { undoToken = createWorkspaceUndoToken() } while (replaceUndoTransactions.has(undoToken))
+  const expiresAt = Date.now() + WORKSPACE_UNDO_TTL_MS
+  replaceUndoTransactions.set(undoToken, {
+    ownerId: owner.id,
+    roots,
+    expiresAt,
+    files: undoFiles
+  })
+  // The callback retains only the small token/timestamp, not the snapshot.
+  // Removing or replacing the transaction before expiry releases its buffers.
+  setTimeout(() => {
+    const current = replaceUndoTransactions.get(undoToken)
+    if (current?.expiresAt === expiresAt && current.expiresAt <= Date.now()) {
+      replaceUndoTransactions.delete(undoToken)
+    }
+  }, WORKSPACE_UNDO_TTL_MS + 1).unref()
   return { files: changedFiles, replacements, undoToken }
 }
 
@@ -1593,17 +1851,19 @@ async function previewWorkspaceReplace(request: WorkspaceReplaceRequest): Promis
   }
 }
 
-async function undoWorkspaceReplace(token: string): Promise<WorkspaceReplaceResult> {
-  const transaction = replaceUndoTransactions.get(token)
-  if (!transaction || transaction.expiresAt < Date.now()) {
-    replaceUndoTransactions.delete(token)
-    throw new Error('The workspace replace undo snapshot has expired.')
-  }
+async function undoWorkspaceReplace(
+  token: string,
+  transaction: ReplaceUndoTransaction
+): Promise<WorkspaceReplaceResult> {
   const total = transaction.files.size
   for (const [file, snapshot] of [...transaction.files]) {
     const result = await saveFileBytes(file, snapshot.content, snapshot.expectedRevision)
     if (!result.saved) {
-      throw new Error(`Cannot undo replacement in ${file} because the file changed afterwards.`)
+      failWorkspaceOperation({
+        kind: 'app',
+        code: 'undo-file-changed',
+        params: { path: truncateWorkspaceIpcString(file) }
+      })
     }
     transaction.files.delete(file)
   }
@@ -2126,6 +2386,16 @@ function languageServerErrorMessage(error: unknown, fallback: string): string {
   return boundedLanguageServerText(message, 2_000)
 }
 
+function languageServerStartFailureDetail(
+  error: unknown,
+  command: string
+): Omit<LanguageServerStatusDetail, 'message'> {
+  const reason: LanguageServerStatusReason = (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+    ? 'command-not-found'
+    : 'start-failed'
+  return { reason, reasonParams: { command: boundedLanguageServerText(command, 2_000) } }
+}
+
 function isLanguageServerObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -2211,7 +2481,7 @@ function sendLanguageServerStatusEvent(
 function sendLanguageServerStatus(
   server: PersistentLanguageServer,
   state: LanguageServerStatusEvent['state'],
-  message?: string
+  detail: LanguageServerStatusDetail = {}
 ): void {
   const event: LanguageServerStatusEvent = {
     key: server.configKey,
@@ -2219,7 +2489,9 @@ function sendLanguageServerStatus(
     command: server.config.command,
     state,
     ...(server.child.pid === undefined ? {} : { pid: server.child.pid }),
-    ...(message ? { message: boundedLanguageServerText(message, 2_000) } : {}),
+    ...(detail.message ? { message: boundedLanguageServerText(detail.message, 2_000) } : {}),
+    ...(detail.reason ? { reason: detail.reason } : {}),
+    ...(detail.reasonParams ? { reasonParams: detail.reasonParams } : {}),
     ...(state === 'running' && server.capabilities !== undefined
       ? { capabilities: server.capabilities }
       : {})
@@ -2384,7 +2656,8 @@ function terminateLanguageServerProcess(server: PersistentLanguageServer, force 
 function cleanupLanguageServer(
   server: PersistentLanguageServer,
   state: 'stopped' | 'error',
-  message?: string
+  detail: LanguageServerStatusDetail = {},
+  pendingMessage?: string
 ): void {
   if (server.cleaned) return
   server.flushStderr()
@@ -2409,9 +2682,11 @@ function cleanupLanguageServer(
     rememberLanguageServerTombstone(server.configKey, languageServerDescriptor(server))
   }
   server.resolveReady()
-  sendLanguageServerStatus(server, state, message)
+  sendLanguageServerStatus(server, state, state === 'stopped' && !detail.reason
+    ? { ...detail, reason: 'stopped' }
+    : detail)
 
-  const stoppedMessage = { error: { message: message ?? 'Language server stopped.' } }
+  const stoppedMessage = { error: { message: pendingMessage ?? detail.message ?? 'Language server stopped.' } }
   const pending = [...server.pending.values()]
   server.pending.clear()
   for (const settle of pending) {
@@ -2424,12 +2699,18 @@ function cleanupLanguageServer(
 function failLanguageServer(
   server: PersistentLanguageServer,
   message: string,
+  detail: Omit<LanguageServerStatusDetail, 'message'> = {},
   log = true
 ): void {
   if (server.cleaned) return
   if (log) sendLanguageServerLog(server, 'server', 'error', message)
   if (server.stopping) cleanupLanguageServer(server, 'stopped')
-  else cleanupLanguageServer(server, 'error', message)
+  else cleanupLanguageServer(
+    server,
+    'error',
+    detail.reason ? detail : { message },
+    message
+  )
   void trackLanguageServerTermination(server).catch(() => undefined)
 }
 
@@ -2451,7 +2732,11 @@ function pumpLanguageServerWriteQueue(server: PersistentLanguageServer): void {
     server.queuedWriteBytes = Math.max(0, server.queuedWriteBytes - frame.byteLength)
     server.writeInProgress = false
     if (error) {
-      failLanguageServer(server, languageServerErrorMessage(error, 'Could not write to the language server.'))
+      failLanguageServer(
+        server,
+        languageServerErrorMessage(error, 'Could not write to the language server.'),
+        { reason: 'write-failed' }
+      )
       return
     }
     pumpLanguageServerWriteQueue(server)
@@ -2484,18 +2769,26 @@ function writeLanguageServerMessage(
   payload: Record<string, unknown>
 ): boolean {
   if (server.cleaned || !server.child.stdin.writable || server.child.stdin.destroyed) {
-    failLanguageServer(server, 'Language server input is no longer writable.')
+    failLanguageServer(server, 'Language server input is no longer writable.', { reason: 'input-not-writable' })
     return false
   }
   let frame: Buffer
   try {
     frame = encodeLspMessage(payload)
   } catch (error) {
-    failLanguageServer(server, languageServerErrorMessage(error, 'Could not encode an LSP message.'))
+    failLanguageServer(
+      server,
+      languageServerErrorMessage(error, 'Could not encode an LSP message.'),
+      { reason: 'encode-failed' }
+    )
     return false
   }
   if (frame.byteLength > MAX_LANGUAGE_SERVER_STDIN_QUEUE_BYTES - server.queuedWriteBytes) {
-    failLanguageServer(server, `Language server input exceeded the ${MAX_LANGUAGE_SERVER_STDIN_QUEUE_BYTES}-byte queue limit.`)
+    failLanguageServer(
+      server,
+      `Language server input exceeded the ${MAX_LANGUAGE_SERVER_STDIN_QUEUE_BYTES}-byte queue limit.`,
+      { reason: 'input-queue-overflow', reasonParams: { limit: MAX_LANGUAGE_SERVER_STDIN_QUEUE_BYTES } }
+    )
     return false
   }
   try {
@@ -2504,7 +2797,11 @@ function writeLanguageServerMessage(
     pumpLanguageServerWriteQueue(server)
     return true
   } catch (error) {
-    failLanguageServer(server, languageServerErrorMessage(error, 'Could not write to the language server.'))
+    failLanguageServer(
+      server,
+      languageServerErrorMessage(error, 'Could not write to the language server.'),
+      { reason: 'write-failed' }
+    )
     return false
   }
 }
@@ -2651,7 +2948,11 @@ function startPersistentLanguageServer(
     sendLanguageServerLogEvent(sender, {
       ...common, stream: 'server', level: 'error', text: message, timestamp: Date.now()
     })
-    sendLanguageServerStatusEvent(sender, { ...common, state: 'error', message })
+    sendLanguageServerStatusEvent(sender, {
+      ...common,
+      state: 'error',
+      ...languageServerStartFailureDetail(error, savedConfig.command)
+    })
     throw error
   }
   const spawnedPid = child.pid
@@ -2727,11 +3028,17 @@ function startPersistentLanguageServer(
   }, (error) => {
     const message = `LSP protocol error: ${error.message}`
     sendLanguageServerLog(server, 'server', 'error', message)
-    if (error instanceof LspProtocolError && error.fatal) failLanguageServer(server, message, false)
+    if (error instanceof LspProtocolError && error.fatal) {
+      failLanguageServer(server, message, { reason: 'protocol-error' }, false)
+    }
   })
   child.stdout.on('data', (chunk: Buffer) => readMessage(chunk))
   child.stdout.on('error', (error) => {
-    failLanguageServer(server, languageServerErrorMessage(error, 'Could not read from the language server.'))
+    failLanguageServer(
+      server,
+      languageServerErrorMessage(error, 'Could not read from the language server.'),
+      { reason: 'stdout-read-failed' }
+    )
   })
   child.stderr.on('data', (chunk: Buffer) => {
     const text = stderrDecoder.write(chunk)
@@ -2742,16 +3049,28 @@ function startPersistentLanguageServer(
     sendLanguageServerLog(server, 'stderr', 'error', languageServerErrorMessage(error, 'Could not read language server stderr.'))
   })
   child.stdin.on('error', (error) => {
-    failLanguageServer(server, languageServerErrorMessage(error, 'Could not write to the language server.'))
+    failLanguageServer(
+      server,
+      languageServerErrorMessage(error, 'Could not write to the language server.'),
+      { reason: 'write-failed' }
+    )
   })
   child.stdin.on('close', () => {
     if (!server.cleaned && !server.stopping &&
         server.child.exitCode === null && server.child.signalCode === null) {
-      failLanguageServer(server, 'Language server input closed unexpectedly.')
+      failLanguageServer(
+        server,
+        'Language server input closed unexpectedly.',
+        { reason: 'input-closed-unexpectedly' }
+      )
     }
   })
   child.on('error', (error) => {
-    failLanguageServer(server, languageServerErrorMessage(error, 'Could not start the language server.'))
+    failLanguageServer(
+      server,
+      languageServerErrorMessage(error, 'Could not start the language server.'),
+      languageServerStartFailureDetail(error, server.config.command)
+    )
   })
   child.on('close', (code, signal) => {
     server.flushStderr()
@@ -2770,7 +3089,11 @@ function startPersistentLanguageServer(
         ? 'Language server exited unexpectedly.'
         : `Language server exited unexpectedly with code ${code}.`
     sendLanguageServerLog(server, 'server', 'error', message)
-    cleanupLanguageServer(server, 'error', message)
+    cleanupLanguageServer(server, 'error', signal
+      ? { reason: 'unexpected-exit-signal', reasonParams: { signal } }
+      : code === null
+        ? { reason: 'unexpected-exit' }
+        : { reason: 'unexpected-exit-code', reasonParams: { code } }, message)
     // A detached process-group leader may exit while descendants remain.
     void trackLanguageServerTermination(server).catch(() => undefined)
   })
@@ -2786,7 +3109,11 @@ function startPersistentLanguageServer(
       if (message.jsonrpc !== '2.0' || Object.hasOwn(message, 'result') ||
           !isLanguageServerObject(message.error) || !Number.isInteger(message.error.code) ||
           typeof message.error.message !== 'string') {
-        failLanguageServer(server, 'Language server returned an invalid initialize error response.')
+        failLanguageServer(
+          server,
+          'Language server returned an invalid initialize error response.',
+          { reason: 'invalid-initialize-error-response' }
+        )
         return
       }
       failLanguageServer(server, boundedLanguageServerText(message.error.message, 2_000))
@@ -2795,7 +3122,11 @@ function startPersistentLanguageServer(
     if (message.jsonrpc !== '2.0' || !Object.hasOwn(message, 'result') ||
         !isLanguageServerObject(message.result) ||
         !isLanguageServerObject(message.result.capabilities)) {
-      failLanguageServer(server, 'Language server returned an invalid initialize response.')
+      failLanguageServer(
+        server,
+        'Language server returned an invalid initialize response.',
+        { reason: 'invalid-initialize-response' }
+      )
       return
     }
     server.capabilities = summarizeLanguageServerCapabilities(message.result.capabilities)
@@ -2806,7 +3137,11 @@ function startPersistentLanguageServer(
   })
   server.initializeTimer = setTimeout(() => {
     server.initializeTimer = null
-    failLanguageServer(server, 'Language server initialization timed out.')
+    failLanguageServer(
+      server,
+      'Language server initialization timed out.',
+      { reason: 'initialize-timeout' }
+    )
   }, LANGUAGE_SERVER_INITIALIZE_TIMEOUT_MS)
   server.initializeTimer.unref?.()
   writeLanguageServerMessage(server, {
@@ -3335,7 +3670,7 @@ async function interactiveLanguageServerRequest(
 
 /** Register all file-system IPC handlers. Every handler validates its caller and input. */
 export function registerFileHandlers(): void {
-  ipcMain.handle(IPC.fileOpen, async (event, options?: unknown): Promise<OpenedFile | null> => {
+  ipcMain.handle(IPC.fileOpen, async (event, options?: unknown): Promise<OpenFilesResult> => {
     assertTrustedSender(event)
     if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options))) {
       throw new Error('Invalid file read options.')
@@ -3344,11 +3679,40 @@ export function registerFileHandlers(): void {
     if (requestedEncoding !== undefined && !isTextEncoding(requestedEncoding)) throw new Error('Unsupported text encoding.')
     if (requestedEncoding === undefined && options !== undefined) throw new Error('Invalid file read options.')
     const win = BrowserWindow.fromWebContents(event.sender)
-    const result = await dialog.showOpenDialog(win!, { properties: ['openFile'], title: 'Open File' })
-    if (result.canceled || result.filePaths.length === 0) return null
-    grantFile(event.sender.id, result.filePaths[0])
-    await rememberRecentFile(result.filePaths[0])
-    return readFile(result.filePaths[0], requestedEncoding)
+    const result = await dialog.showOpenDialog(win!, {
+      properties: ['openFile', 'multiSelections'],
+      title: dialogLabels(event.sender).openFile
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { files: [], failures: [] }
+    }
+
+    const batch = planFileOpenBatch(
+      result.filePaths.map((selectedPath) => path.resolve(selectedPath)),
+      MAX_SESSION_OPEN_FILES
+    )
+    const files: OpenedFile[] = []
+    const failures: OpenFilesResult['failures'] = []
+    for (const filePath of batch.rejected) {
+      failures.push({
+        path: filePath,
+        message: `Opening is limited to ${MAX_SESSION_OPEN_FILES} files at a time.`
+      })
+    }
+    for (const filePath of batch.accepted) {
+      try {
+        grantFile(event.sender.id, filePath)
+        const file = await readFile(filePath, requestedEncoding)
+        files.push(file)
+        await rememberRecentFile(filePath)
+      } catch (error) {
+        failures.push({
+          path: filePath,
+          message: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+    return { files, failures }
   })
 
   ipcMain.handle(IPC.fileOpenPath, async (event, filePath: unknown, options?: unknown): Promise<OpenedFile> => {
@@ -3412,7 +3776,7 @@ export function registerFileHandlers(): void {
   ipcMain.handle(IPC.folderOpen, async (event): Promise<OpenedFolder | null> => {
     assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
-    const result = await dialog.showOpenDialog(win!, { properties: ['openDirectory'], title: 'Open Folder' })
+    const result = await dialog.showOpenDialog(win!, { properties: ['openDirectory'], title: dialogLabels(event.sender).openFolder })
     if (result.canceled || result.filePaths.length === 0) return null
     const root = result.filePaths[0]
     grantRoot(event.sender.id, root)
@@ -3523,19 +3887,24 @@ export function registerFileHandlers(): void {
 
   ipcMain.handle(IPC.settingsRead, async (event): Promise<Settings> => {
     assertTrustedSender(event)
-    return readSettings()
+    const settings = await readSettings()
+    setWindowLocale(event.sender, settings.locale)
+    return settings
   })
   ipcMain.handle(IPC.settingsWrite, async (event, settings: unknown): Promise<void> => {
     assertTrustedSender(event)
-    await writeJson(userDataFile('settings.json'), sanitizeSettings(settings))
+    const sanitized = sanitizeSettings(settings)
+    setWindowLocale(event.sender, sanitized.locale)
+    await writeJson(userDataFile('settings.json'), sanitized)
   })
   ipcMain.handle(IPC.settingsImportSublime, async (event): Promise<Settings | null> => {
     assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
+    const labels = dialogLabels(event.sender)
     const result = await dialog.showOpenDialog(win!, {
-      title: 'Import Sublime Settings',
+      title: labels.importSublimeSettings,
       properties: ['openFile'],
-      filters: [{ name: 'Sublime Settings', extensions: ['sublime-settings'] }]
+      filters: [{ name: labels.sublimeSettings, extensions: ['sublime-settings'] }]
     })
     if (result.canceled || !result.filePaths[0]) return null
     let raw: unknown
@@ -3632,28 +4001,66 @@ export function registerFileHandlers(): void {
       : []
   })
 
-  ipcMain.handle(IPC.workspaceSearch, async (event, request: WorkspaceSearchRequest): Promise<WorkspaceMatch[]> => {
+  ipcMain.handle(IPC.workspaceSearch, async (event, request: WorkspaceSearchRequest): Promise<WorkspaceOperationIpcResponse<WorkspaceMatch[]>> => {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
     for (const root of request.roots ?? []) assertGrantedRoot(event, root)
-    return searchWorkspace(request)
+    return workspaceOperationResult(() => searchWorkspace(request))
   })
-  ipcMain.handle(IPC.workspaceReplace, async (event, request: WorkspaceReplaceRequest): Promise<WorkspaceReplaceResult> => {
+  ipcMain.handle(IPC.workspaceReplace, async (event, request: WorkspaceReplaceRequest): Promise<WorkspaceOperationIpcResponse<WorkspaceReplaceResult>> => {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
     for (const root of request.roots ?? []) assertGrantedRoot(event, root)
-    return replaceWorkspace(request)
+    const senderId = event.sender.id
+    if (activeWorkspaceMutationRoots.has(senderId)) {
+      throw new Error('A workspace mutation is already in progress.')
+    }
+    const roots = new Set([request.root, ...(request.roots ?? [])].map((root) => path.resolve(root)))
+    if ([...roots].some((root) => isLanguageServerRootReleasing(event.sender, root))) {
+      throw new Error('This workspace is currently being released.')
+    }
+    activeWorkspaceMutationRoots.set(senderId, roots)
+    try {
+      return await workspaceOperationResult(() => replaceWorkspace(request, event.sender))
+    } finally {
+      endWorkspaceMutationLease(senderId)
+    }
   })
-  ipcMain.handle(IPC.workspaceReplacePreview, async (event, request: WorkspaceReplaceRequest): Promise<WorkspaceReplacePreview> => {
+  ipcMain.handle(IPC.workspaceReplacePreview, async (event, request: WorkspaceReplaceRequest): Promise<WorkspaceOperationIpcResponse<WorkspaceReplacePreview>> => {
     assertTrustedSender(event)
     assertGrantedRoot(event, request.root)
     for (const root of request.roots ?? []) assertGrantedRoot(event, root)
-    return previewWorkspaceReplace(request)
+    return workspaceOperationResult(() => previewWorkspaceReplace(request))
   })
-  ipcMain.handle(IPC.workspaceReplaceUndo, async (event, token: unknown): Promise<WorkspaceReplaceResult> => {
+  ipcMain.handle(IPC.workspaceReplaceUndo, async (event, token: unknown): Promise<WorkspaceOperationIpcResponse<WorkspaceReplaceResult>> => {
     assertTrustedSender(event)
-    if (typeof token !== 'string' || token.length > 200) throw new Error('Invalid workspace replace undo token.')
-    return undoWorkspaceReplace(token)
+    pruneReplaceUndoTransactions()
+    const validToken = typeof token === 'string'
+      && token.length <= MAX_WORKSPACE_UNDO_TOKEN_LENGTH
+      && /^[A-Za-z0-9_-]{43}$/.test(token)
+    const transaction = validToken ? replaceUndoTransactions.get(token) : undefined
+    const senderId = event.sender.id
+    const authorized = validToken && isWorkspaceUndoAuthorized(
+      transaction,
+      senderId,
+      grantedRoots.get(senderId),
+      (file) => isGrantedFileForSender(senderId, file)
+    ) && transaction !== undefined
+      && [...transaction.roots].every((root) => !isLanguageServerRootReleasing(event.sender, root))
+      && !event.sender.isDestroyed()
+      && !activeWorkspaceMutationRoots.has(senderId)
+    // Capability ownership and current filesystem grants are security checks,
+    // not application failures. Keep their indistinguishable rejection outside
+    // the typed-result wrapper so a forged token cannot become trusted data.
+    if (!authorized || !transaction) {
+      throw new Error('Workspace replace undo capability is unavailable.')
+    }
+    activeWorkspaceMutationRoots.set(senderId, transaction.roots)
+    try {
+      return await workspaceOperationResult(() => undoWorkspaceReplace(token, transaction))
+    } finally {
+      endWorkspaceMutationLease(senderId)
+    }
   })
   ipcMain.handle(IPC.workspaceSymbols, async (event, root: unknown): Promise<WorkspaceSymbol[]> => {
     assertTrustedSender(event)
@@ -3698,7 +4105,7 @@ export function registerFileHandlers(): void {
     assertAbsolutePath(source, 'source path')
     assertGrantedFile(event, source)
     const win = BrowserWindow.fromWebContents(event.sender)
-    const result = await dialog.showOpenDialog(win!, { title: 'Move To', properties: ['openDirectory', 'createDirectory'] })
+    const result = await dialog.showOpenDialog(win!, { title: dialogLabels(event.sender).moveTo, properties: ['openDirectory', 'createDirectory'] })
     if (result.canceled || !result.filePaths[0]) return null
     const target = path.join(result.filePaths[0], path.basename(source))
     if (path.resolve(target) === path.resolve(source)) return source
@@ -3850,7 +4257,8 @@ export function registerFileHandlers(): void {
   ipcMain.handle(IPC.buildImportSublime, async (event): Promise<SublimeBuildImport | null> => {
     assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
-    const result = await dialog.showOpenDialog(win!, { title: 'Import Sublime Build System', properties: ['openFile'], filters: [{ name: 'Sublime Build System', extensions: ['sublime-build'] }] })
+    const labels = dialogLabels(event.sender)
+    const result = await dialog.showOpenDialog(win!, { title: labels.importSublimeBuild, properties: ['openFile'], filters: [{ name: labels.sublimeBuild, extensions: ['sublime-build'] }] })
     if (result.canceled || !result.filePaths[0]) return null
     const sourcePath = result.filePaths[0]
     let raw: unknown
@@ -3878,10 +4286,11 @@ export function registerFileHandlers(): void {
   ipcMain.handle(IPC.projectImportSublime, async (event): Promise<SublimeProjectImport | null> => {
     assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
+    const labels = dialogLabels(event.sender)
     const result = await dialog.showOpenDialog(win!, {
-      title: 'Import Sublime Project',
+      title: labels.importSublimeProject,
       properties: ['openFile'],
-      filters: [{ name: 'Sublime Project', extensions: ['sublime-project'] }]
+      filters: [{ name: labels.sublimeProject, extensions: ['sublime-project'] }]
     })
     if (result.canceled || !result.filePaths[0]) return null
     const sourcePath = result.filePaths[0]
@@ -3918,7 +4327,8 @@ export function registerFileHandlers(): void {
   ipcMain.handle(IPC.projectImportSublimeSnippet, async (event): Promise<SublimeSnippetImport | null> => {
     assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
-    const result = await dialog.showOpenDialog(win!, { title: 'Import Sublime Snippet', properties: ['openFile'], filters: [{ name: 'Sublime Snippet', extensions: ['sublime-snippet'] }] })
+    const labels = dialogLabels(event.sender)
+    const result = await dialog.showOpenDialog(win!, { title: labels.importSublimeSnippet, properties: ['openFile'], filters: [{ name: labels.sublimeSnippet, extensions: ['sublime-snippet'] }] })
     if (result.canceled || !result.filePaths[0]) return null
     const sourcePath = result.filePaths[0]
     return { sourcePath, snippet: parseSublimeSnippet(await fs.readFile(sourcePath, 'utf8'), sourcePath) }
@@ -3927,7 +4337,8 @@ export function registerFileHandlers(): void {
   ipcMain.handle(IPC.projectImportSublimeKeymap, async (event): Promise<SublimeKeymapImport | null> => {
     assertTrustedSender(event)
     const win = BrowserWindow.fromWebContents(event.sender)
-    const result = await dialog.showOpenDialog(win!, { title: 'Import Sublime Keymap', properties: ['openFile'], filters: [{ name: 'Sublime Keymap', extensions: ['sublime-keymap'] }] })
+    const labels = dialogLabels(event.sender)
+    const result = await dialog.showOpenDialog(win!, { title: labels.importSublimeKeymap, properties: ['openFile'], filters: [{ name: labels.sublimeKeymap, extensions: ['sublime-keymap'] }] })
     if (result.canceled || !result.filePaths[0]) return null
     const sourcePath = result.filePaths[0]
     let raw: unknown
@@ -4183,7 +4594,7 @@ async function saveAs(
 ): Promise<SaveResult> {
   const sender = event.sender
   const win = BrowserWindow.fromWebContents(sender)
-  const result = await dialog.showSaveDialog(win!, { title: 'Save File', defaultPath: suggestedName })
+  const result = await dialog.showSaveDialog(win!, { title: dialogLabels(sender).saveFile, defaultPath: suggestedName })
   if (result.canceled || !result.filePath) return { saved: false, reason: 'cancelled' }
   grantFile(sender.id, result.filePath)
   // Freeze the overwrite baseline immediately after the user confirms the

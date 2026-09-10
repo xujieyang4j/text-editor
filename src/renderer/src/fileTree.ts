@@ -2,6 +2,7 @@ import type { DirEntry, UiLocale } from '../../shared/ipc.js'
 
 /** Callback fired when a file (not a folder) is activated in the tree. */
 type FileOpenHandler = (path: string) => void
+type TreeContextAction = 'newFile' | 'newFolder' | 'rename' | 'move' | 'trash' | 'reveal' | 'copyPath' | 'copyRelativePath'
 
 interface AsyncTreeToken {
   renderVersion: number
@@ -82,6 +83,10 @@ export class FileTree {
 
   setLocale(locale: UiLocale): void {
     this.locale = locale
+    const menu = document.querySelector<HTMLElement>('.tree-context-menu')
+    for (const button of menu?.querySelectorAll<HTMLButtonElement>('button[data-tree-action]') ?? []) {
+      button.textContent = this.contextActionLabel(button.dataset.treeAction as TreeContextAction)
+    }
   }
 
   /** Persist the active/current row without expanding or scrolling the tree. */
@@ -200,22 +205,23 @@ export class FileTree {
     menu.style.left = `${x}px`
     menu.style.top = `${y}px`
 
-    const action = (label: string, run: () => void): void => {
+    const action = (key: TreeContextAction, run: () => void): void => {
       const button = document.createElement('button')
-      button.textContent = label
+      button.dataset.treeAction = key
+      button.textContent = this.contextActionLabel(key)
       button.addEventListener('click', () => { menu.remove(); run() })
       menu.appendChild(button)
     }
     if (entry.isDirectory) {
-      action(this.locale === 'zh-CN' ? '新建文件…' : 'New File…', () => this.handlers.onCreate(entry.path, false))
-      action(this.locale === 'zh-CN' ? '新建文件夹…' : 'New Folder…', () => this.handlers.onCreate(entry.path, true))
+      action('newFile', () => this.handlers.onCreate(entry.path, false))
+      action('newFolder', () => this.handlers.onCreate(entry.path, true))
     }
-    action(this.locale === 'zh-CN' ? '重命名…' : 'Rename…', () => this.handlers.onRename(entry.path))
-    action(this.locale === 'zh-CN' ? '移动到…' : 'Move To…', () => this.handlers.onMove(entry.path))
-    action(this.locale === 'zh-CN' ? '移到废纸篓' : 'Move to Trash', () => this.handlers.onDelete(entry.path))
-    action(this.locale === 'zh-CN' ? '在文件管理器中显示' : 'Reveal in Folder', () => this.handlers.onReveal(entry.path))
-    action(this.locale === 'zh-CN' ? '复制路径' : 'Copy Path', () => this.handlers.onCopyPath(entry.path, false))
-    action(this.locale === 'zh-CN' ? '复制相对路径' : 'Copy Relative Path', () => this.handlers.onCopyPath(entry.path, true))
+    action('rename', () => this.handlers.onRename(entry.path))
+    action('move', () => this.handlers.onMove(entry.path))
+    action('trash', () => this.handlers.onDelete(entry.path))
+    action('reveal', () => this.handlers.onReveal(entry.path))
+    action('copyPath', () => this.handlers.onCopyPath(entry.path, false))
+    action('copyRelativePath', () => this.handlers.onCopyPath(entry.path, true))
     document.body.appendChild(menu)
 
     const dismiss = (event: MouseEvent): void => {
@@ -223,6 +229,21 @@ export class FileTree {
       document.removeEventListener('mousedown', dismiss)
     }
     window.setTimeout(() => document.addEventListener('mousedown', dismiss), 0)
+  }
+
+  private contextActionLabel(action: TreeContextAction): string {
+    const zh = this.locale === 'zh-CN'
+    const labels: Record<TreeContextAction, [string, string]> = {
+      newFile: ['新建文件…', 'New File…'],
+      newFolder: ['新建文件夹…', 'New Folder…'],
+      rename: ['重命名…', 'Rename…'],
+      move: ['移动到…', 'Move To…'],
+      trash: ['移到废纸篓', 'Move to Trash'],
+      reveal: ['在文件管理器中显示', 'Reveal in Folder'],
+      copyPath: ['复制路径', 'Copy Path'],
+      copyRelativePath: ['复制相对路径', 'Copy Relative Path']
+    }
+    return labels[action][zh ? 0 : 1]
   }
 
   /** Expand or collapse a directory row, loading children on demand. */
@@ -428,7 +449,10 @@ export class FileTree {
       if (!this.isTokenCurrent(token)) return null
       return this.renderDirectoryChildren(entry, item, twisty, depth, children)
     } catch (error) {
-      if (this.isTokenCurrent(token)) this.handlers.onError(`Could not read “${entry.name}”.`, error)
+      if (this.isTokenCurrent(token)) this.handlers.onError(
+        this.locale === 'zh-CN' ? `无法读取“${entry.name}”。` : `Could not read “${entry.name}”.`,
+        error
+      )
       return null
     }
   }

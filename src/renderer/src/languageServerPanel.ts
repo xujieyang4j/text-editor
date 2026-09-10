@@ -1,5 +1,7 @@
 import type {
   LanguageServerLogEvent,
+  LanguageServerStatusReason,
+  LanguageServerStatusReasonParams,
   LanguageServerStatusEvent,
   UiLocale
 } from '../../shared/ipc.js'
@@ -29,6 +31,24 @@ type StoredStatus = Omit<LanguageServerStatusEvent, 'capabilities'> & {
   /** Bounded display-only summary; never retain the server's raw capability object. */
   capabilities?: string[]
 }
+
+interface RestartError {
+  /** Application-owned failures are rendered again whenever the locale changes. */
+  reason?: RestartErrorReason
+  /** Unrecognised/external details remain verbatim. */
+  message?: string
+}
+
+type RestartErrorReason =
+  | 'not-found'
+  | 'explicitly-stopped'
+  | 'initialization-failed'
+  | 'documents-restore-failed'
+  | 'termination-failed'
+  | 'invalid-key'
+  | 'owner-unavailable'
+  | 'still-terminating'
+  | 'workspace-unavailable'
 
 type LogScrollMode = 'preserve' | 'follow' | 'end'
 
@@ -64,7 +84,7 @@ export class LanguageServerPanel {
   private readonly statuses = new Map<string, StoredStatus>()
   private readonly logs = new Map<string, LogBucket>()
   private readonly lastTouched = new Map<string, number>()
-  private readonly restartErrors = new Map<string, string>()
+  private readonly restartErrors = new Map<string, RestartError>()
   private locale: UiLocale = 'zh-CN'
   private selectedKey: string | null = null
   private previouslyFocused: HTMLElement | null = null
@@ -196,6 +216,8 @@ export class LanguageServerPanel {
       state: metadata.state,
       ...(metadata.pid === undefined ? {} : { pid: metadata.pid }),
       ...(metadata.message === undefined ? {} : { message: metadata.message }),
+      ...(metadata.reason === undefined ? {} : { reason: metadata.reason }),
+      ...(metadata.reasonParams === undefined ? {} : { reasonParams: metadata.reasonParams }),
       capabilities: this.sanitizeCapabilities(capabilities)
     })
     this.touch(status.key)
@@ -371,13 +393,14 @@ export class LanguageServerPanel {
       secondary.className = 'language-server-item-secondary'
       secondary.textContent = status.pid === undefined ? status.root : `${status.root} · PID ${status.pid}`
       item.append(primary, secondary)
-      if (status.message) {
+      const statusMessage = this.statusMessage(status)
+      if (statusMessage) {
         const message = document.createElement('div')
         message.className = 'language-server-item-message'
-        message.textContent = status.message
+        message.textContent = statusMessage
         item.appendChild(message)
       }
-      item.title = [status.command, status.root, this.stateLabel(status.state), status.message].filter(Boolean).join(' — ')
+      item.title = [status.command, status.root, this.stateLabel(status.state), statusMessage].filter(Boolean).join(' — ')
       item.addEventListener('click', () => {
         this.selectService(status.key)
         item.focus()
@@ -431,12 +454,16 @@ export class LanguageServerPanel {
     if (capabilities) {
       this.details.appendChild(this.detailRow(this.locale === 'zh-CN' ? '能力' : 'Capabilities', capabilities))
     }
-    if (status.message) {
-      this.details.appendChild(this.detailRow(this.locale === 'zh-CN' ? '消息' : 'Message', status.message))
+    const statusMessage = this.statusMessage(status)
+    if (statusMessage) {
+      this.details.appendChild(this.detailRow(this.locale === 'zh-CN' ? '消息' : 'Message', statusMessage))
     }
     const restartError = this.restartErrors.get(status.key)
     if (restartError) {
-      const row = this.detailRow(this.locale === 'zh-CN' ? '重启失败' : 'Restart failed', restartError)
+      const row = this.detailRow(
+        this.locale === 'zh-CN' ? '重启失败' : 'Restart failed',
+        this.restartErrorMessage(restartError)
+      )
       row.classList.add('language-server-restart-error')
       row.setAttribute('role', 'alert')
       this.details.appendChild(row)
@@ -544,7 +571,7 @@ export class LanguageServerPanel {
       await this.onRestart(key)
     } catch (error) {
       if (this.restartAttempts.get(key) !== token) return
-      this.restartErrors.set(key, this.errorMessage(error))
+      this.restartErrors.set(key, this.restartError(error))
     } finally {
       if (this.restartAttempts.get(key) !== token) return
       this.restartAttempts.delete(key)
@@ -671,10 +698,109 @@ export class LanguageServerPanel {
     return `${new Intl.NumberFormat(this.locale, { maximumFractionDigits: 1 }).format(value / 1024)} KiB`
   }
 
-  private errorMessage(error: unknown): string {
-    if (error instanceof Error && error.message) return error.message
-    if (typeof error === 'string' && error) return error
-    return this.locale === 'zh-CN' ? '未知错误' : 'Unknown error'
+  private statusMessage(status: StoredStatus): string {
+    // `message` without a reason is server/extension-owned and intentionally
+    // remains verbatim. Application-owned reasons are translated locally.
+    return status.reason
+      ? this.statusReasonMessage(status.reason, status.reasonParams)
+      : status.message ?? ''
+  }
+
+  private statusReasonMessage(
+    reason: LanguageServerStatusReason,
+    params: LanguageServerStatusReasonParams | undefined
+  ): string {
+    const zh = this.locale === 'zh-CN'
+    switch (reason) {
+      case 'command-not-found':
+        return params?.command
+          ? (zh ? `找不到语言服务器命令：${params.command}` : `Language server command not found: ${params.command}`)
+          : (zh ? '找不到语言服务器命令。' : 'Language server command not found.')
+      case 'start-failed':
+        return params?.command
+          ? (zh ? `无法启动语言服务器：${params.command}` : `Could not start language server: ${params.command}`)
+          : (zh ? '无法启动语言服务器。' : 'Could not start the language server.')
+      case 'input-not-writable':
+        return zh ? '语言服务器输入已不可写。' : 'Language server input is no longer writable.'
+      case 'write-failed':
+        return zh ? '无法向语言服务器写入数据。' : 'Could not write to the language server.'
+      case 'encode-failed':
+        return zh ? '无法编码语言服务器协议消息。' : 'Could not encode a language-server protocol message.'
+      case 'input-queue-overflow': {
+        const limit = typeof params?.limit === 'number' && Number.isFinite(params.limit)
+          ? this.formatBytes(Math.max(0, params.limit))
+          : undefined
+        return limit
+          ? (zh ? `语言服务器输入超过队列上限（${limit}）。` : `Language server input exceeded the queue limit (${limit}).`)
+          : (zh ? '语言服务器输入超过队列上限。' : 'Language server input exceeded the queue limit.')
+      }
+      case 'stdout-read-failed':
+        return zh ? '无法读取语言服务器输出。' : 'Could not read from the language server.'
+      case 'protocol-error':
+        return zh ? '语言服务器返回了无效的协议数据。' : 'The language server returned invalid protocol data.'
+      case 'input-closed-unexpectedly':
+        return zh ? '语言服务器输入意外关闭。' : 'Language server input closed unexpectedly.'
+      case 'unexpected-exit':
+        return zh ? '语言服务器意外退出。' : 'Language server exited unexpectedly.'
+      case 'unexpected-exit-code':
+        return typeof params?.code === 'number'
+          ? (zh ? `语言服务器意外退出，退出代码为 ${params.code}。` : `Language server exited unexpectedly with code ${params.code}.`)
+          : (zh ? '语言服务器意外退出。' : 'Language server exited unexpectedly.')
+      case 'unexpected-exit-signal':
+        return params?.signal
+          ? (zh ? `语言服务器因信号 ${params.signal} 意外退出。` : `Language server exited unexpectedly with signal ${params.signal}.`)
+          : (zh ? '语言服务器因信号意外退出。' : 'Language server exited unexpectedly because of a signal.')
+      case 'invalid-initialize-error-response':
+        return zh ? '语言服务器返回了无效的初始化错误响应。' : 'The language server returned an invalid initialize error response.'
+      case 'invalid-initialize-response':
+        return zh ? '语言服务器返回了无效的初始化响应。' : 'The language server returned an invalid initialize response.'
+      case 'initialize-timeout':
+        return zh ? '语言服务器初始化超时。' : 'Language server initialization timed out.'
+      case 'stopped':
+        return zh ? '语言服务器已停止。' : 'Language server stopped.'
+    }
+  }
+
+  private restartError(error: unknown): RestartError {
+    const rawMessage = error instanceof Error && error.message
+      ? error.message
+      : typeof error === 'string' && error
+        ? error
+        : ''
+    // Electron prefixes errors rejected by ipcMain.handle. Strip only that
+    // transport wrapper before matching known application-owned messages.
+    const message = rawMessage.replace(/^Error invoking remote method '[^']+': Error: /, '')
+    const reasons: Record<string, RestartErrorReason> = {
+      'Language server not found.': 'not-found',
+      'Language server was explicitly stopped.': 'explicitly-stopped',
+      'Language server failed to initialize after restart.': 'initialization-failed',
+      'Language server stopped while documents were being restored.': 'documents-restore-failed',
+      'Language server process group did not terminate after SIGKILL.': 'termination-failed',
+      'Language server process tree did not terminate after a forced stop.': 'termination-failed',
+      'Invalid language server key.': 'invalid-key',
+      'The language-server owner is no longer available.': 'owner-unavailable',
+      'The previous language-server process is still terminating.': 'still-terminating',
+      'This workspace has not been authorised for the current editor window.': 'workspace-unavailable',
+      'This workspace is currently being released.': 'workspace-unavailable'
+    }
+    const reason = reasons[message]
+    return reason ? { reason } : message ? { message } : {}
+  }
+
+  private restartErrorMessage(error: RestartError): string {
+    if (!error.reason) return error.message ?? (this.locale === 'zh-CN' ? '未知错误' : 'Unknown error')
+    const labels: Record<RestartErrorReason, [string, string]> = {
+      'not-found': ['找不到该语言服务器。', 'Language server not found.'],
+      'explicitly-stopped': ['语言服务器已被明确停止。', 'Language server was explicitly stopped.'],
+      'initialization-failed': ['语言服务器重启后初始化失败。', 'Language server failed to initialize after restart.'],
+      'documents-restore-failed': ['恢复文档时语言服务器已停止。', 'Language server stopped while documents were being restored.'],
+      'termination-failed': ['无法完全终止原语言服务器进程。', 'Could not fully terminate the previous language-server process.'],
+      'invalid-key': ['语言服务器标识无效。', 'Invalid language server key.'],
+      'owner-unavailable': ['语言服务器所属窗口已不可用。', 'The language-server owner is no longer available.'],
+      'still-terminating': ['原语言服务器进程仍在终止中。', 'The previous language-server process is still terminating.'],
+      'workspace-unavailable': ['该工作区已不可用。', 'This workspace is no longer available.']
+    }
+    return labels[error.reason][this.locale === 'zh-CN' ? 0 : 1]
   }
 
   private navigateServices(event: KeyboardEvent): void {
